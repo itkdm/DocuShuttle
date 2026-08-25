@@ -1,0 +1,33 @@
+# dependencies and builds
+node_modules/
+.next/
+out/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# environment and credentials
+.env
+.env.*
+!.env.example
+*私密测试配置*
+
+# local tools and audits
+.docx-audit/
+.remote-audit/
+.research/
+app-scaffold/
+research/**/out/
+.vercel/
+.DS_Store
+Thumbs.db
+
+# private or unsanitized source documents
+fixtures/docx-private/
+/*.doc
+/*.docx
+
+# local superseded source documents (canonical copies live under docs/)
+/纸上鸭｜产品需求文档 PRD（V0.1）.md
+/纸上鸭｜技术目标与实施约束文档 V1.md

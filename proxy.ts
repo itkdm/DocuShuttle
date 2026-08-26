@@ -4,6 +4,9 @@ import { type NextRequest, NextResponse } from "next/server";
 import { getSupabasePublicEnvironment } from "@/infrastructure/supabase/environment";
 
 export async function proxy(request: NextRequest) {
+  if (request.nextUrl.pathname === "/favicon.ico") {
+    return NextResponse.rewrite(new URL("/icon.svg", request.url));
+  }
   const configured = process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
   if (!configured) return NextResponse.next({ request });
 

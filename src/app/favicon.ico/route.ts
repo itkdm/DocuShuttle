@@ -1,5 +1,0 @@
-const favicon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#f2b928"/><path d="M18 20h28v24H18z" fill="#fffdf3" stroke="#272923" stroke-width="3"/><path d="M24 28h16M24 35h12" stroke="#272923" stroke-width="3" stroke-linecap="round"/><circle cx="44" cy="18" r="7" fill="#272923"/><circle cx="42" cy="17" r="1.5" fill="#fffdf3"/></svg>`;
-
-export function GET() {
-  return new Response(favicon, { headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=3600" } });
-}

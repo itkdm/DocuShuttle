@@ -22,7 +22,7 @@ export function OutlinePanel({ assets, onCollapse, onUpload, documentReady = fal
           const title = kind === "template" ? "空白模板" : "完成示例";
           return (
             <label className={`source-file ${asset ? "is-ready" : ""}`} key={kind}>
-              <input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => onUpload(kind, event.target.files?.[0])} />
+              <input id={`outline-${kind}-docx`} name="docx" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => onUpload(kind, event.target.files?.[0])} />
               <span className="source-icon">{asset ? <FileCheck2 size={17} /> : <FileText size={17} />}</span>
               <span className="source-copy"><strong>{title}</strong><small>{asset ? asset.name : "选择 .docx"}</small></span>
               <span className="source-action">{asset ? "替换" : "+"}</span>

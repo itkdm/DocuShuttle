@@ -1,26 +1,32 @@
 # Agent 运行时
 
-## 状态机
+PaperDuck 使用模型驱动的、可恢复的 Tool Loop。模型每一轮都可以直接回复、调用一个或多个工具，或请求用户补充/批准；下一步不由文档业务状态表预先决定。
 
 ```text
-queued → analyzing → awaiting_scope_confirmation
-                      │ approved
-                      ▼
- generating → applying → validating → awaiting_review → completed
-      │           │          │               │
-      └───────────┴──────────┴───────────────┴→ failed / cancelled
+用户消息 → checkpoint → OpenAI-compatible model
+                         ├─ assistant message → 继续或完成
+                         ├─ tool call → schema/权限/预算校验 → tool result → 下一轮
+                         └─ ask/approval → 持久化 interrupt → 用户恢复
 ```
 
-失败 Run 可从最近 checkpoint 恢复，同一 `run_id` 和 cursor 继续；已经成功的 step 不重复副作用。等待确认时 Run 不占用持续连接或长函数执行时间。
+## 边界
 
-## Step 合约
+- `AgentModelPort` 只负责把消息和工具描述交给模型并解析模型决策，不拥有 Supabase、Storage 或 DOCX 写权限。
+- `AgentTool` 是 provider-neutral 能力，参数必须由 Zod schema 校验；工具执行由应用层注入 `runId`、用户身份和当前文档 revision。
+- 所有写工具都必须经过文档引擎、临时对象、结构校验和 revision CAS；模型不能直接修改数据库或对象存储。
+- `AgentLoopCheckpoint` 持久化消息、工具结果、迭代次数、待审批调用和终态，支持故障恢复、重试和前端刷新。
+- 迭代次数、时间、token 和工具调用数量都有安全预算；工具错误作为结果返回模型，使 Agent 可以解释、重试或向用户提问。
 
-每一步记录输入/输出引用、状态、尝试次数、幂等键、开始/结束时间、错误分类和 redacted diagnostics。写步骤必须：校验 base revision、建立预写检查点、在临时对象上应用、验证输出、上传派生版本、原子推进 current version、发布事件。
+## 文档工具
 
-## HITL
+第一批能力包括 `inspect_document`、`list_document_regions`、`read_document_region`、`search_document`、`generate_text_candidate`、`generate_image_candidates`、`apply_text_mutation`、`apply_image_candidate`、`list_document_versions`、`restore_document_version` 和 `export_document`。`apply_*` 均为需要确认的副作用工具。
 
-低风险单区域修改可生成内联建议；高风险/多区域任务生成只读计划。确认操作冻结 Decision，并从持久化 cursor 恢复。文档 revision 已变化时返回 409/conflict，重新定位和分析，不静默 rebase。
+旧的 `analyze/generate/apply/validate` 仍可作为兼容生命周期和事务执行器，但不能决定 Agent 的语义流程；它们会逐步收敛为上述工具的实现。
 
-## 流式传输
+## 模型配置
 
-Token 或进度事件只用于展示。前端刷新后从数据库状态和事件游标恢复。文档画布只在一个原子版本提交成功后更新，避免半写入 DOCX。
+文本模型统一使用 OpenAI-compatible Chat Completions 接口。服务端通过 `DEEPSEEK_API_KEY`（或 `OPENAI_API_KEY`）、`DEEPSEEK_BASE_URL`（或 `OPENAI_BASE_URL`）和 `DEEPSEEK_MODEL`（或 `OPENAI_MODEL`）配置，不在代码中写死供应商或模型别名。当前适配器基于 Vercel AI SDK 的 `@ai-sdk/openai`，因此 DeepSeek、OpenAI 或自托管兼容网关都能复用同一端口；不使用 Anthropic API。
+
+## HITL、版本与流式展示
+
+工具需要批准时只保存 interrupt，不占用长连接；批准/拒绝后从 checkpoint 恢复。Token、assistant 消息、工具状态和错误仅用于实时展示，刷新后由持久化事件重放。文档画布只在一次原子版本提交成功后更新，避免半写入 DOCX。

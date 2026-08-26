@@ -47,6 +47,7 @@ Auth/DB   private files  text/reasoning GPT Image 2
 
 - 自研 OOXML Preservation Kernel 已通过工作区 4 份真实 DOCX 的 no-op、两轮单元格修改、重开和结构诊断回归。
 - Agent 已支持多区域原子生成；派生对象在 validate 重新打开通过后才晋级 current；拒绝提案会创建可审计恢复版本。
+- 图片候选已通过 APIMart 生成并保存到私有 Storage；用户确认后可按稳定图片 `nodeId` 生成经过重开校验的 Working Document 新版本。
 - Supabase production 已应用至 `example_seed_semantics`、`agent_validation_promotion_and_review_rollback` 迁移。
 - 远程 `main`/`master` 已同步到最新提交；Vercel 已创建生产部署，但当前仍受团队 Deployment Protection 保护，尚未绑定最终自定义域名。
 

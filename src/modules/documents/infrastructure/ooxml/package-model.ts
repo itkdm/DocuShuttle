@@ -131,7 +131,27 @@ function validateRelationships(
         continue;
       }
       ids.add(attrs.Id);
-      if (attrs.TargetMode === "External") continue;
+      // External targets are valid OPC, but they are not package parts and
+      // must never be silently treated as local data.  We preserve them in
+      // the immutable source while surfacing them to callers so the UI and
+      // upload policy can make an explicit decision (for example, external
+      // hyperlinks are normally safe to preserve, whereas external template
+      // relationships may not be).
+      if (attrs.TargetMode?.toLowerCase() === "external") {
+        diagnostics.push({
+          severity: "warning",
+          code: "RELATIONSHIP_EXTERNAL_TARGET",
+          message: `Relationship ${attrs.Id} targets an external resource and is not fetched by PaperDuck.`,
+          entry: path,
+          details: {
+            relationshipId: attrs.Id,
+            target: attrs.Target,
+            type: attrs.Type,
+            source: source ?? "package",
+          },
+        });
+        continue;
+      }
       const target = resolveRelationshipTarget(path, attrs.Target);
       if (!target || !entries.has(target)) {
         diagnostics.push({
@@ -158,6 +178,59 @@ function validateRelationships(
       message: "Root relationships do not identify word/document.xml as the office document.",
       entry: "_rels/.rels",
     });
+  }
+  return diagnostics;
+}
+
+/**
+ * Macro-enabled OOXML is deliberately outside the V1 product scope.  Detect
+ * it from both package parts and declarations/relationships: relying only on
+ * the filename or MIME type would allow a renamed .docm (or a hand-crafted
+ * package) to reach the editor.
+ */
+function detectMacroDiagnostics(
+  entries: ReadonlyMap<string, Uint8Array>,
+  texts: ReadonlyMap<string, string>,
+): DocumentDiagnostic[] {
+  const diagnostics: DocumentDiagnostic[] = [];
+  for (const path of entries.keys()) {
+    if (/(^|\/)vba(?:project|data)\.bin$/i.test(path)) {
+      diagnostics.push({
+        severity: "error",
+        code: "MACRO_CONTENT_UNSUPPORTED",
+        message: "Macro/VBA content is not accepted by the V1 DOCX editor.",
+        entry: path,
+      });
+    }
+  }
+
+  const contentTypes = texts.get("[Content_Types].xml") ?? "";
+  if (/macroEnabled|vbaProject/i.test(contentTypes)) {
+    diagnostics.push({
+      severity: "error",
+      code: "MACRO_CONTENT_UNSUPPORTED",
+      message: "The package declares macro-enabled OOXML content, which V1 does not execute or preserve.",
+      entry: "[Content_Types].xml",
+    });
+  }
+
+  for (const [path, xml] of texts) {
+    if (!path.endsWith(".rels")) continue;
+    for (const match of xml.matchAll(/<(?:\w+:)?Relationship\b[^>]*\/?\s*>/g)) {
+      const attrs = attributes(match[0]);
+      if (/\/vbaProject$/i.test(attrs.Type ?? "")) {
+        diagnostics.push({
+          severity: "error",
+          code: "MACRO_CONTENT_UNSUPPORTED",
+          message: "The package contains a VBA project relationship, which V1 does not execute or preserve.",
+          entry: path,
+          details: {
+            relationshipId: attrs.Id ?? "unknown",
+            target: attrs.Target ?? "unknown",
+          },
+        });
+      }
+    }
   }
   return diagnostics;
 }
@@ -227,6 +300,7 @@ export async function loadPackage(bytes: Uint8Array): Promise<LoadedPackage> {
   }
 
   diagnostics.push(...validateRelationships(entries, texts));
+  diagnostics.push(...detectMacroDiagnostics(entries, texts));
   const contentTypes = parseContentTypes(texts.get("[Content_Types].xml") ?? "");
   for (const path of entries.keys()) {
     if (path === "[Content_Types].xml") continue;

@@ -32,6 +32,17 @@ POC 与机器可读报告位于 `research/document-engine/poc-superdoc`；包含
 - **Exporter**：只 patch 明确 XML/media entry；未知和未触及 entry 的解压后字节必须保持不变。
 - **Validator**：检查 ZIP、XML、content types、relationship targets、媒体、未触及 entry hash、目标语义差异和二次重开。
 
+### V1 安全边界（2026-08-26）
+
+- `TargetMode="External"` relationship 不会被解析、下载或跟随；检查结果以
+  `RELATIONSHIP_EXTERNAL_TARGET` warning 暴露目标、类型和来源部件，原始关系只在
+  immutable package 中保留。后续应用层可以按关系类型决定是否允许导出。
+- 含 `vbaProject.bin`/`vbaData.bin`、VBA relationship，或 macro-enabled/VBA content
+  type 的包统一返回 `MACRO_CONTENT_UNSUPPORTED` error。上传完成和任何 mutation 都拒绝
+  这类包；V1 不执行、不重写，也不承诺保留宏。
+- 该策略同时检查 package part、`[Content_Types].xml` 和 `.rels`，因此不能通过把
+  `.docm` 改名为 `.docx` 或只删除一个声明来绕过。
+
 HITL 使用应用层 Proposal/Decision 与不可变版本实现，不依赖 Word tracked changes。
 
 ## 库策略与许可

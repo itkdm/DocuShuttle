@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { DocumentKernelError } from "../../../domain/types";
 import { OoxmlPreservationKernel } from "../ooxml-preservation-kernel";
 import {
+  contentTypes,
   createDocx,
   documentRelationships,
   documentXml,
@@ -299,6 +300,71 @@ describe("OoxmlPreservationKernel", () => {
     expect((await kernel.inspect(duplicated)).diagnostics).toContainEqual(
       expect.objectContaining({ code: "RELATIONSHIP_ID_DUPLICATE", severity: "error" }),
     );
+  });
+
+  it("surfaces external relationship targets without fetching them", async () => {
+    const bytes = await createDocx({
+      "word/_rels/document.xml.rels": documentRelationships.replace(
+        "</Relationships>",
+        '<Relationship Id="rIdLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid/reference" TargetMode="External"/></Relationships>',
+      ),
+    });
+    const kernel = new OoxmlPreservationKernel();
+    const inspected = await kernel.inspect(bytes);
+
+    expect(inspected.diagnostics).toContainEqual(expect.objectContaining({
+      code: "RELATIONSHIP_EXTERNAL_TARGET",
+      severity: "warning",
+      entry: "word/_rels/document.xml.rels",
+      details: expect.objectContaining({ target: "https://example.invalid/reference" }),
+    }));
+    // External hyperlinks are preserved as source metadata but never fetched;
+    // an unrelated text edit must remain valid and local-only.
+    const result = await kernel.mutate(bytes, {
+      expectedRevision: inspected.manifest.revision,
+      operations: [{
+        kind: "replace-text",
+        address: inspected.paragraphs[0].address,
+        expectedText: "duck",
+        replacement: "PaperDuck",
+      }],
+    });
+    expect((await kernel.validate(result.bytes)).diagnostics).toContainEqual(
+      expect.objectContaining({ code: "RELATIONSHIP_EXTERNAL_TARGET" }),
+    );
+  });
+
+  it("detects macro/VBA parts, declarations, and relationships and refuses mutation", async () => {
+    const macroContentTypes = contentTypes.replace(
+      "</Types>",
+      '<Override PartName="/word/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/></Types>',
+    );
+    const macroRelationships = documentRelationships.replace(
+      "</Relationships>",
+      '<Relationship Id="rIdVba" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/></Relationships>',
+    );
+    const bytes = await createDocx({
+      "[Content_Types].xml": macroContentTypes,
+      "word/_rels/document.xml.rels": macroRelationships,
+      "word/vbaProject.bin": Uint8Array.from([0x44, 0x43, 0x46]),
+    });
+    const kernel = new OoxmlPreservationKernel();
+    const inspected = await kernel.inspect(bytes);
+
+    expect(inspected.diagnostics).toContainEqual(expect.objectContaining({
+      code: "MACRO_CONTENT_UNSUPPORTED",
+      severity: "error",
+      entry: "word/vbaProject.bin",
+    }));
+    expect(inspected.diagnostics).toContainEqual(expect.objectContaining({
+      code: "MACRO_CONTENT_UNSUPPORTED",
+      severity: "error",
+      entry: "[Content_Types].xml",
+    }));
+    await expect(kernel.mutate(bytes, {
+      expectedRevision: inspected.manifest.revision,
+      operations: [],
+    })).rejects.toMatchObject({ code: "SOURCE_PACKAGE_INVALID" });
   });
 
   it("validates image signatures and plain-text control policy", async () => {

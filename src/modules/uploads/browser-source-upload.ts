@@ -17,6 +17,12 @@ const sha256 = async (bytes: ArrayBuffer) => {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 };
 
+const proxyUpload = async (input: { file: File; taskId: string; role: SourceRole; originalName: string }) => {
+  const form = new FormData();
+  form.set("taskId", input.taskId); form.set("role", input.role); form.set("originalName", input.originalName); form.set("file", input.file);
+  return requestJson<{ sourceFileId: string; workingDocumentId?: string; versionId?: string }>("/api/uploads/source/proxy", { method: "POST", body: form });
+};
+
 export const productionPersistenceConfigured = () => Boolean(
   process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
 );
@@ -44,8 +50,14 @@ export async function persistSourceFile(input: {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ taskId, role: input.role, originalName: input.file.name, byteLength: input.file.size }),
   });
-  const uploaded = await fetch(signed.upload.url, { method: "PUT", headers: signed.upload.headers, body: input.bytes.slice(0) });
-  if (!uploaded.ok) throw new Error(`STORAGE_UPLOAD_${uploaded.status}`);
+  const uploadAbort = new AbortController();
+  const timer = window.setTimeout(() => uploadAbort.abort(), 15_000);
+  let directUploadFailed = false;
+  try {
+    const uploaded = await fetch(signed.upload.url, { method: "PUT", headers: signed.upload.headers, body: input.bytes.slice(0), signal: uploadAbort.signal });
+    directUploadFailed = !uploaded.ok;
+  } catch { directUploadFailed = true; } finally { window.clearTimeout(timer); }
+  if (directUploadFailed) return { taskId, ...(await proxyUpload({ file: input.file, taskId, role: input.role, originalName: input.file.name })) };
 
   const completed = await requestJson<{ sourceFileId: string; workingDocumentId?: string; versionId?: string }>("/api/uploads/source/complete", {
     method: "POST",

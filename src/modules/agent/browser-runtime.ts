@@ -33,6 +33,7 @@ export type BrowserAgentLoopResult = {
     finalText?: string;
     iterations: number;
     pendingApproval?: { callId: string; name: string; input: unknown };
+    messages: ReadonlyArray<{ role: "system" | "user" | "assistant" | "tool"; content: string }>;
   };
   events: ReadonlyArray<{ type: string; text?: string; name?: string; error?: string; [key: string]: unknown }>;
 };

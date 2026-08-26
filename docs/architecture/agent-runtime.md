@@ -19,7 +19,7 @@ PaperDuck 使用模型驱动的、可恢复的 Tool Loop。模型每一轮都可
 
 ## 文档工具
 
-第一批能力包括 `inspect_document`、`list_document_regions`、`read_document_region`、`search_document`、`generate_text_candidate`、`generate_image_candidates`、`apply_text_mutation`、`apply_image_candidate`、`list_document_versions`、`restore_document_version` 和 `export_document`。`apply_*` 均为需要确认的副作用工具。
+当前 Loop 已接入 `inspect_document`、`list_document_regions`、`read_document_region`、`apply_text_change`、`list_source_documents`、`read_source_document`、`list_document_versions`、`restore_document_version` 和 `export_document`。其中来源资料保持 template/example/auxiliary 语义隔离；`apply_text_change` 与 `restore_document_version` 是需要确认的副作用工具，导出只记录 immutable version 并返回短期下载地址。
 
 旧的 `analyze/generate/apply/validate` 仍可作为兼容生命周期和事务执行器，但不能决定 Agent 的语义流程；它们会逐步收敛为上述工具的实现。
 

@@ -61,7 +61,13 @@ export function Workbench() {
         if (saved.runId) {
           const resumed = await loadBrowserAgentRun(saved.runId);
           setRun(resumed); setProposalSummary(resumed.proposal?.summary);
-          try { setLoopResult(await loadBrowserAgentLoop(saved.runId)); } catch { setLoopResult(undefined); }
+          try {
+            const resumedLoop = await loadBrowserAgentLoop(saved.runId);
+            setLoopResult(resumedLoop);
+            setConversation(resumedLoop.checkpoint.messages
+              .filter((message) => (message.role === "user" || message.role === "assistant") && message.content.trim())
+              .map((message) => ({ role: message.role === "user" ? "user" as const : "agent" as const, text: message.content })));
+          } catch { setLoopResult(undefined); }
           setAwaitingFinalReview(resumed.status === "awaiting_review");
           setStage(resumed.status === "awaiting_scope_confirmation" || resumed.status === "awaiting_review" ? "awaiting" : resumed.status === "completed" ? "complete" : "idle");
         }
@@ -136,9 +142,9 @@ export function Workbench() {
     setAwaitingFinalReview(false);
     setProposalSummary(undefined);
     try {
-      const created = await createBrowserAgentRun(taskId, prompt);
-      setRun(created);
-      const result = await runBrowserAgentLoop(created.id, prompt);
+      const activeRun = run ?? await createBrowserAgentRun(taskId, prompt);
+      setRun(activeRun);
+      const result = await runBrowserAgentLoop(activeRun.id, prompt);
       setLoopResult(result);
       const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
       if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
@@ -191,6 +197,7 @@ export function Workbench() {
     try {
       const bytes = await readDocxFile(file);
       setLoopResult(undefined);
+      if (maySeedWorkingDocument) setRun(undefined);
       const next = { kind, name: file.name, size: formatFileSize(file.size) };
       setAssets((items) => [...items.filter((item) => item.kind !== kind), next]);
       if (maySeedWorkingDocument && !productionPersistenceConfigured()) {

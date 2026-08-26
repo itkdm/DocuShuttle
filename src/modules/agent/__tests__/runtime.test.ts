@@ -104,6 +104,25 @@ class MemoryDocuments implements DocumentVersionCommitPort {
     this.commits.set(input.idempotencyKey, result);
     return result;
   }
+
+  async rollbackRejectedVersion(input: {
+    runId: string;
+    documentId: string;
+    expectedRevision: string;
+    idempotencyKey: string;
+  }) {
+    const prior = this.commits.get(input.idempotencyKey);
+    if (prior && prior.kind === "committed") {
+      return { kind: "rolled-back" as const, versionRef: prior.versionRef, revision: "revision-1" };
+    }
+    if (this.currentRevision !== input.expectedRevision) {
+      return { kind: "revision-conflict" as const, actualRevision: this.currentRevision };
+    }
+    this.currentRevision = "revision-1";
+    const result = { kind: "rolled-back" as const, versionRef: `restore://${input.runId}`, revision: this.currentRevision };
+    this.commits.set(input.idempotencyKey, { kind: "committed", versionRef: result.versionRef });
+    return result;
+  }
 }
 
 class RecordingReconciler implements CancelledEffectReconciler {
@@ -286,6 +305,7 @@ describe("AgentRuntime durable execution", () => {
     const harness = setup();
     await analyzeAndApprove(harness);
     await harness.runtime.advance("run-1");
+    await harness.runtime.advance("run-1");
     harness.documents.beforeCommit = () => {
       harness.documents.currentRevision = "revision-concurrent";
     };
@@ -380,6 +400,21 @@ describe("AgentRuntime HITL commands", () => {
       reviewedRevision: "derived-0",
     })).rejects.toBeInstanceOf(StaleDocumentRevisionError);
     expect(harness.store.peek().status).toBe("awaiting_review");
+  });
+
+  it("rolls back the derived version when final review rejects it", async () => {
+    const harness = setup();
+    await reachReview(harness);
+    const rejected = await harness.runtime.completeReview("run-1", {
+      commandId: "command-review-reject",
+      decisionId: "review-reject",
+      choice: "rejected",
+      decidedBy: "reviewer-1",
+      reviewedRevision: "derived-0",
+    });
+    expect(rejected.status).toBe("cancelled");
+    expect(harness.documents.currentRevision).toBe("revision-1");
+    expect(rejected.reviewDecision).toMatchObject({ choice: "rejected", frozen: true });
   });
 
   it("retries only retryable failed work with an idempotent retry command", async () => {

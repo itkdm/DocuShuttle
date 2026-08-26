@@ -101,7 +101,7 @@ export class AgentRuntime {
       return { kind: "paused", run };
     }
 
-    if (run.status === "applying") {
+    if (run.status === "applying" || run.status === "validating") {
       const actualRevision = await this.documents.getCurrentRevision(run.documentId);
       if (actualRevision !== run.baseRevision) {
         await this.persistRevisionConflict(run, actualRevision);
@@ -265,6 +265,18 @@ export class AgentRuntime {
       throw new StaleDocumentRevisionError(run.workingRevision ?? run.baseRevision, currentRevision);
     }
     const now = this.clock.now();
+    if (input.choice === "rejected") {
+      const rollback = await this.documents.rollbackRejectedVersion({
+        runId,
+        documentId: run.documentId,
+        expectedRevision: run.workingRevision,
+        idempotencyKey: `${input.commandId}:rollback`,
+      });
+      if (rollback.kind === "revision-conflict") {
+        await this.persistReviewConflict(run, rollback.actualRevision);
+        throw new StaleDocumentRevisionError(run.workingRevision, rollback.actualRevision);
+      }
+    }
     const decided = this.recordCommand(recordReviewDecision(run, {
       id: input.decisionId,
       choice: input.choice,
@@ -296,27 +308,30 @@ export class AgentRuntime {
         "Durable effect receipt does not belong to the active step.",
       );
     }
-    if (step.kind === "apply") {
+    // The apply step only creates an immutable temporary artifact. Promotion is
+    // deliberately deferred until the validate step has reopened that artifact
+    // and passed structural checks.
+    if (step.kind === "validate") {
       if (!receipt.derivedRevision) {
-        throw new InvalidRunOperationError(
-          "APPLY_DERIVED_REVISION_MISSING",
-          "The durable apply receipt has no derived revision.",
-        );
+        const applyReceipt = run.receipts.find((candidate) => candidate.effect === "apply");
+        if (!applyReceipt?.derivedRevision) {
+          throw new InvalidRunOperationError("APPLY_DERIVED_REVISION_MISSING", "The durable apply receipt has no derived revision.");
+        }
+        const commit = await this.documents.commitDerivedVersion({
+          runId: run.id,
+          expectedRunVersion: run.version,
+          documentId: run.documentId,
+          expectedRevision: run.baseRevision,
+          derivedRevision: applyReceipt.derivedRevision,
+          outputRef: applyReceipt.outputRef,
+          idempotencyKey: `${applyReceipt.idempotencyKey}:commit`,
+        });
+        if (commit.kind === "revision-conflict") {
+          await this.persistRevisionConflict(run, commit.actualRevision);
+          throw new StaleDocumentRevisionError(run.baseRevision, commit.actualRevision);
+        }
+        if (commit.kind === "run-cancelled") return this.reconcileIfCancelled(run.id, applyReceipt);
       }
-      const commit = await this.documents.commitDerivedVersion({
-        runId: run.id,
-        expectedRunVersion: run.version,
-        documentId: run.documentId,
-        expectedRevision: run.baseRevision,
-        derivedRevision: receipt.derivedRevision,
-        outputRef: receipt.outputRef,
-        idempotencyKey: `${receipt.idempotencyKey}:commit`,
-      });
-      if (commit.kind === "revision-conflict") {
-        await this.persistRevisionConflict(run, commit.actualRevision);
-        throw new StaleDocumentRevisionError(run.baseRevision, commit.actualRevision);
-      }
-      if (commit.kind === "run-cancelled") return this.reconcileIfCancelled(run.id, receipt);
     }
 
     const now = this.clock.now();
@@ -487,7 +502,9 @@ export class AgentRuntime {
     return {
       ...updated,
       receipts,
-      ...(step.kind === "apply" ? { workingRevision: receipt.derivedRevision } : {}),
+      ...(step.kind === "validate"
+        ? { workingRevision: run.receipts.find((item) => item.effect === "apply")?.derivedRevision }
+        : {}),
       checkpoint: {
         cursor: Math.max(
           updated.checkpoint.cursor,

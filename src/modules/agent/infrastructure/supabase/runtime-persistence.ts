@@ -9,6 +9,7 @@ import type {
   CommitDerivedVersionInput,
   CommitDerivedVersionResult,
   DocumentVersionCommitPort,
+  RollbackRejectedVersionResult,
   EffectReceiptStore,
 } from "../../application/ports";
 import { ConcurrentRunUpdateError } from "../../domain/errors";
@@ -123,6 +124,22 @@ export class SupabaseDocumentVersionCommit implements DocumentVersionCommitPort 
     });
     fail("Unable to commit document version", result.error);
     return result.data as CommitDerivedVersionResult;
+  }
+
+  async rollbackRejectedVersion(input: {
+    runId: string;
+    documentId: string;
+    expectedRevision: string;
+    idempotencyKey: string;
+  }): Promise<RollbackRejectedVersionResult> {
+    const result = await this.client.rpc("rollback_rejected_document_version", {
+      p_run_id: input.runId,
+      p_document_id: input.documentId,
+      p_expected_revision: input.expectedRevision,
+      p_idempotency_key: input.idempotencyKey,
+    });
+    fail("Unable to rollback rejected document version", result.error);
+    return result.data as RollbackRejectedVersionResult;
   }
 }
 

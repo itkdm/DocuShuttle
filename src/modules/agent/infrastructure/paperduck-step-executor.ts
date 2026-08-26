@@ -29,7 +29,7 @@ type AnalysisOutput = {
 
 type GenerationOutput = {
   taskId: string;
-  operation: DocumentMutation;
+  operations: DocumentMutation[];
   rationale: string;
 };
 
@@ -114,33 +114,43 @@ export class PaperDuckStepExecutor implements AgentStepExecutor {
 
   private async generate(context: StepExecutionContext): Promise<StepExecutionResult> {
     const analysis = parseReceipt<AnalysisOutput>(context.run.receipts, "analyze");
-    const desired = analysis.plan.regions.find(({ intent, nodeId }) =>
-      (intent === "regenerate" || intent === "uncertain") && analysis.regions.some((region) => region.nodeId === nodeId),
-    );
-    const target = analysis.regions.find(({ nodeId }) => nodeId === desired?.nodeId)
-      ?? analysis.regions.find(({ kind }) => kind === "tableCell")
-      ?? analysis.regions[0];
-    const generated = await this.reasoning.generateRegionText({
-      goal: analysis.goal,
-      currentText: target.text,
-      regionKind: target.kind,
-      instruction: desired?.instruction,
-    });
-    const operation: DocumentMutation = target.kind === "tableCell"
-      ? {
-          kind: "set-cell-text",
-          address: target.address as Extract<StableDocumentAddress, { kind: "table-cell" }>,
-          expectedText: target.text,
-          expectedHash: target.address.fingerprint,
-          text: generated.replacement,
-        }
-      : {
-          kind: "replace-text",
-          address: target.address as Extract<StableDocumentAddress, { kind: "paragraph" }>,
-          expectedText: target.text,
-          replacement: generated.replacement,
-        };
-    const output: GenerationOutput = { taskId: analysis.taskId, operation, rationale: generated.rationale };
+    const targets = analysis.plan.regions
+      .filter(({ intent, nodeId }) =>
+        (intent === "regenerate" || intent === "uncertain") && analysis.regions.some((region) => region.nodeId === nodeId),
+      )
+      .slice(0, 40);
+    if (!targets.length) {
+      throw new StepExecutionError("NO_GENERATION_TARGET", "The approved plan contains no regeneratable region.", false);
+    }
+    const operations: DocumentMutation[] = [];
+    const rationales: string[] = [];
+    for (const desired of targets) {
+      const target = analysis.regions.find(({ nodeId }) => nodeId === desired.nodeId);
+      if (!target) continue;
+      const generated = await this.reasoning.generateRegionText({
+        goal: analysis.goal,
+        currentText: target.text,
+        regionKind: target.kind,
+        instruction: desired.instruction,
+      });
+      operations.push(target.kind === "tableCell"
+        ? {
+            kind: "set-cell-text",
+            address: target.address as Extract<StableDocumentAddress, { kind: "table-cell" }>,
+            expectedText: target.text,
+            expectedHash: target.address.fingerprint,
+            text: generated.replacement,
+          }
+        : {
+            kind: "replace-text",
+            address: target.address as Extract<StableDocumentAddress, { kind: "paragraph" }>,
+            expectedText: target.text,
+            replacement: generated.replacement,
+          });
+      rationales.push(`${target.nodeId}: ${generated.rationale}`);
+    }
+    if (!operations.length) throw new StepExecutionError("NO_GENERATION_TARGET", "No plan region could be resolved in the current document.", false);
+    const output: GenerationOutput = { taskId: analysis.taskId, operations, rationale: rationales.join("\n") };
     return { outputRef: JSON.stringify(output) };
   }
 
@@ -150,7 +160,7 @@ export class PaperDuckStepExecutor implements AgentStepExecutor {
     const source = await this.storage.get(current.objectKey);
     const result = await this.documents.mutate(source, {
       expectedRevision: context.run.baseRevision,
-      operations: [generated.operation],
+        operations: generated.operations,
     });
     const fileId = crypto.randomUUID();
     const objectKey = buildTaskObjectKey({
@@ -176,15 +186,23 @@ export class PaperDuckStepExecutor implements AgentStepExecutor {
       outputRef: JSON.stringify({
         objectKey,
         manifestObjectKey,
-        operationLog: [{ kind: generated.operation.kind, rationale: generated.rationale }],
+        operationLog: generated.operations.map((operation) => ({ kind: operation.kind, rationale: generated.rationale })),
       }),
       derivedRevision: result.manifest.revision,
     };
   }
 
   private async validate(context: StepExecutionContext): Promise<StepExecutionResult> {
-    const current = await this.loadCurrentDocument(context.run.documentId);
-    const inspection = await this.documents.validate(await this.storage.get(current.objectKey));
+    const apply = context.run.receipts.find((receipt) => receipt.effect === "apply");
+    if (!apply) throw new StepExecutionError("APPLY_RECEIPT_MISSING", "Cannot validate without an applied artifact.", false);
+    let artifact: { objectKey?: string };
+    try {
+      artifact = JSON.parse(apply.outputRef) as { objectKey?: string };
+    } catch {
+      throw new StepExecutionError("APPLY_OUTPUT_INVALID", "The applied artifact receipt is invalid.", false);
+    }
+    if (!artifact.objectKey) throw new StepExecutionError("APPLY_OBJECT_MISSING", "The applied artifact has no object key.", false);
+    const inspection = await this.documents.validate(await this.storage.get(artifact.objectKey));
     ensureInspectionIsWritable(inspection);
     return {
       outputRef: JSON.stringify({

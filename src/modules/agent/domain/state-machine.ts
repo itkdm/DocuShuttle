@@ -7,7 +7,7 @@ const transitions: Readonly<Record<AgentRunStatus, readonly AgentRunStatus[]>> =
   awaiting_scope_confirmation: ["analyzing", "generating", "cancelled", "failed"],
   generating: ["applying", "cancelled", "failed"],
   applying: ["analyzing", "validating", "cancelled", "failed"],
-  validating: ["awaiting_review", "cancelled", "failed"],
+  validating: ["awaiting_review", "analyzing", "cancelled", "failed"],
   awaiting_review: ["completed", "generating", "cancelled", "failed"],
   completed: [],
   failed: [

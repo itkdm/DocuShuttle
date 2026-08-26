@@ -46,6 +46,10 @@ export type CommitDerivedVersionResult =
   | { readonly kind: "revision-conflict"; readonly actualRevision: string }
   | { readonly kind: "run-cancelled" };
 
+export type RollbackRejectedVersionResult =
+  | { readonly kind: "rolled-back"; readonly versionRef: string; readonly revision: string }
+  | { readonly kind: "revision-conflict"; readonly actualRevision: string };
+
 export interface DocumentVersionCommitPort {
   /** Authoritative server-side revision; never substitute a client-supplied value. */
   getCurrentRevision(documentId: string): Promise<string>;
@@ -54,6 +58,13 @@ export interface DocumentVersionCommitPort {
    * Replaying the idempotency key returns the original committed result.
    */
   commitDerivedVersion(input: CommitDerivedVersionInput): Promise<CommitDerivedVersionResult>;
+  /** Restore the last valid parent after a user rejects the reviewed derived version. */
+  rollbackRejectedVersion(input: {
+    readonly runId: string;
+    readonly documentId: string;
+    readonly expectedRevision: string;
+    readonly idempotencyKey: string;
+  }): Promise<RollbackRejectedVersionResult>;
 }
 
 export interface CancelledEffectReconciler {

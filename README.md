@@ -43,10 +43,18 @@ Auth/DB   private files  text/reasoning GPT Image 2
 - [验收标准](docs/testing/acceptance.md)
 - [架构决策记录](docs/adr/README.md)
 
-## 尚未阻塞开发、但上线前需要确认
+## 当前交付状态
 
-1. 最终生产子域名：默认建议 `paperduck.itkdm.com`。
-2. Supabase 项目名称和区域：默认建议项目名 `paperduck-production`，选择离主要用户最近且满足 Vercel 到数据库延迟的区域；项目创建前会核对费用。
-3. 最终开源许可证：等待 Document Engine 实测决策后确定。
+- 自研 OOXML Preservation Kernel 已通过工作区 4 份真实 DOCX 的 no-op、两轮单元格修改、重开和结构诊断回归。
+- Agent 已支持多区域原子生成；派生对象在 validate 重新打开通过后才晋级 current；拒绝提案会创建可审计恢复版本。
+- Supabase production 已应用至 `example_seed_semantics`、`agent_validation_promotion_and_review_rollback` 迁移。
+- 远程 `main`/`master` 已同步到最新提交；Vercel 已创建生产部署，但当前仍受团队 Deployment Protection 保护，尚未绑定最终自定义域名。
+
+## 上线前需要手动完成
+
+1. 在 Vercel 团队 `itkdm's projects` 的 `paperduck` 项目中配置 `.env.example` 列出的 Production 环境变量，并重新部署。
+2. 关闭 Deployment Protection，或创建可供验收使用的临时 bypass；否则外部请求只会看到 Vercel 登录页。
+3. 将最终生产域名（默认 `paperduck.itkdm.com`）添加到 Vercel 项目，再在 Cloudflare DNS 添加对应 CNAME 并开启 HTTPS。
+4. 最终开源许可证仍需产品决定；Document Engine 本身没有迫使项目采用 copyleft 的依赖理由。
 
 除此之外，当前产品、工程和安全默认值由项目规则自主收敛，不需要逐项等待确认。

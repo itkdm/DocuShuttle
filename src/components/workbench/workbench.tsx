@@ -9,7 +9,7 @@ import { PaperDuckMark } from "./paperduck-mark";
 import { downloadLocalDocument, formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile, productionPersistenceConfigured } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
-import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentRun, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoop, resumeBrowserAgentLoop, type BrowserAgentLoopResult, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
 import type { AgentRun } from "@/modules/agent";
 import type { AgentStage, DocumentLoadState, ProposalState, UploadAsset, VersionItem } from "./types";
 
@@ -43,6 +43,7 @@ export function Workbench() {
   const [imageBusy, setImageBusy] = useState(false);
   const [imageNodes, setImageNodes] = useState<BrowserImageNode[]>([]);
   const [conversation, setConversation] = useState<Array<{ role: "user" | "agent"; text: string }>>([]);
+  const [loopResult, setLoopResult] = useState<BrowserAgentLoopResult>();
   useEffect(() => {
     if (!productionPersistenceConfigured()) return;
     const raw = window.localStorage.getItem(workspaceResumeKey);
@@ -60,6 +61,7 @@ export function Workbench() {
         if (saved.runId) {
           const resumed = await loadBrowserAgentRun(saved.runId);
           setRun(resumed); setProposalSummary(resumed.proposal?.summary);
+          try { setLoopResult(await loadBrowserAgentLoop(saved.runId)); } catch { setLoopResult(undefined); }
           setAwaitingFinalReview(resumed.status === "awaiting_review");
           setStage(resumed.status === "awaiting_scope_confirmation" || resumed.status === "awaiting_review" ? "awaiting" : resumed.status === "completed" ? "complete" : "idle");
         }
@@ -135,18 +137,44 @@ export function Workbench() {
     setProposalSummary(undefined);
     try {
       const created = await createBrowserAgentRun(taskId, prompt);
-      const analyzed = await advanceBrowserAgentRun(created.id);
-      if (analyzed.status === "failed") throw new Error(analyzed.failure?.message ?? "文档分析失败");
-      setRun(analyzed);
+      setRun(created);
+      const result = await runBrowserAgentLoop(created.id, prompt);
+      setLoopResult(result);
+      const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
+      if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
+      if (result.checkpoint.status === "failed") throw new Error(result.checkpoint.finalText ?? "Agent Loop 未完成");
       setProposal("pending");
-      setProposalSummary(analyzed.proposal?.summary ?? "Agent 已完成范围分析，请确认后继续。");
-      setStage("awaiting");
-      setConversation((items) => [...items, { role: "agent", text: analyzed.proposal?.summary ?? "我已完成文档分析，请确认建议修改范围。" }]);
-      setNotice("真实修改计划已绑定当前 revision，等待确认");
+      setProposalSummary(result.checkpoint.pendingApproval ? undefined : result.checkpoint.finalText);
+      setStage(result.checkpoint.pendingApproval ? "awaiting" : "complete");
+      setNotice(result.checkpoint.pendingApproval ? "Agent 已完成读取并请求写入确认" : "Agent 已完成本轮对话");
     } catch (error) {
       setConversation((items) => [...items, { role: "agent", text: error instanceof Error ? `这次分析没有完成：${error.message}` : "这次分析没有完成，请重试。" }]);
       setStage("idle");
       setNotice(error instanceof Error ? error.message : "Agent 分析失败");
+    }
+  };
+
+  const decideLoop = async (choice: "approved" | "rejected") => {
+    if (!run) return;
+    try {
+      const result = await resumeBrowserAgentLoop(run.id, choice);
+      setLoopResult(result);
+      const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
+      if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
+      if (result.checkpoint.status === "completed") {
+        setStage("complete");
+        if (taskId) {
+          const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
+          const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
+          setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } });
+          setCurrentRevision(nextDocument.version.revision);
+          await refreshVersions(taskId);
+        }
+        setNotice("Agent 已完成写入并通过版本校验");
+      } else if (result.checkpoint.status === "awaiting_user") setNotice("Agent 需要你的下一步决定");
+    } catch (error) {
+      setStage("idle");
+      setNotice(error instanceof Error ? error.message : "Agent 恢复失败");
     }
   };
 
@@ -160,6 +188,7 @@ export function Workbench() {
     setNotice(`正在本地检查 ${file.name}`);
     try {
       const bytes = await readDocxFile(file);
+      setLoopResult(undefined);
       const next = { kind, name: file.name, size: formatFileSize(file.size) };
       setAssets((items) => [...items.filter((item) => item.kind !== kind), next]);
       if (maySeedWorkingDocument && !productionPersistenceConfigured()) {
@@ -295,7 +324,7 @@ export function Workbench() {
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
         {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} imageCount={imageNodes.length} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
         <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} proposal={proposal} onChoose={chooseWorkingDocument} onDecide={decide} liveAgent={cloudSaved} proposalSummary={proposalSummary} /></div>
-        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} conversation={conversation} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onRetry={retry} onDecide={decide} mode={cloudSaved ? "production" : "local"} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
+        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} onLoopApproval={decideLoop} conversation={conversation} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onRetry={retry} onDecide={decide} mode={cloudSaved ? "production" : "local"} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 
       <div className="mobile-dock" aria-label="移动端工作台导航"><button onClick={() => setMobilePanel("outline")} className={mobilePanel === "outline" ? "active" : ""}><FilePlus2 size={18} /><span>文档</span></button><button onClick={() => setMobilePanel("agent")} className={mobilePanel === "agent" ? "active" : ""}><Sparkles size={18} /><span>审批</span><i>1</i></button><button onClick={() => setMobilePanel("versions")} className={mobilePanel === "versions" ? "active" : ""}><History size={18} /><span>版本</span></button><button onClick={downloadCurrent}><Download size={18} /><span>下载</span></button></div>

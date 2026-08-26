@@ -11,6 +11,19 @@ import { OoxmlPreservationKernel } from "@/modules/documents";
 
 const schema = z.object({ message: z.string().trim().min(1).max(8_000) });
 
+export async function GET(_request: Request, { params }: { params: Promise<{ runId: string }> }) {
+  try {
+    const { runId } = await params;
+    const { client } = await requireSupabaseUser();
+    const checkpoint = await new SupabaseAgentLoopStore(client).load(runId);
+    if (!checkpoint) return NextResponse.json({ code: "LOOP_NOT_FOUND" }, { status: 404 });
+    return NextResponse.json({ checkpoint, events: [] });
+  } catch (error) {
+    if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
+    return NextResponse.json({ code: "AGENT_LOOP_LOAD_FAILED" }, { status: 500 });
+  }
+}
+
 export async function POST(request: Request, { params }: { params: Promise<{ runId: string }> }) {
   try {
     const input = schema.parse(await request.json());

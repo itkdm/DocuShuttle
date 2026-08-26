@@ -32,12 +32,16 @@ export type BrowserAgentLoopResult = {
     status: "running" | "awaiting_user" | "completed" | "failed";
     finalText?: string;
     iterations: number;
+    pendingApproval?: { callId: string; name: string; input: unknown };
   };
-  events: ReadonlyArray<{ type: string; [key: string]: unknown }>;
+  events: ReadonlyArray<{ type: string; text?: string; name?: string; error?: string; [key: string]: unknown }>;
 };
 
 export const runBrowserAgentLoop = async (runId: string, message: string) =>
   json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop`, post({ message }));
+
+export const loadBrowserAgentLoop = async (runId: string) =>
+  json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop`);
 
 export const resumeBrowserAgentLoop = async (runId: string, approval: "approved" | "rejected") =>
   json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop/resume`, post({ approval }));

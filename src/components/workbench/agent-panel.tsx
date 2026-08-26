@@ -29,7 +29,8 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onRet
   const [tab, setTab] = useState<Tab>("agent");
   const [prompt, setPrompt] = useState("");
   const submit = () => { const value = prompt.trim(); if (!value) return; onRun(value); setPrompt(""); };
-  const pct = stage === "complete" ? "100%" : stage === "analyzing" ? "38%" : "76%";
+  const completedSteps = run?.steps.filter((step) => step.status === "completed").length ?? 0;
+  const pct = run && run.steps.length > 0 ? `${Math.round((completedSteps / run.steps.length) * 100)}%` : stage === "complete" ? "100%" : "0%";
   return (
     <aside className="agent-panel" aria-label="纸上鸭 Agent">
       <div className="agent-heading">

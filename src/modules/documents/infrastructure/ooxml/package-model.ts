@@ -194,7 +194,7 @@ function detectMacroDiagnostics(
 ): DocumentDiagnostic[] {
   const diagnostics: DocumentDiagnostic[] = [];
   for (const path of entries.keys()) {
-    if (/(^|\/)vba(?:project|data)\.bin$/i.test(path)) {
+    if (/(^|\/)vba(?:project|data)\.(?:bin|xml)$/i.test(path)) {
       diagnostics.push({
         severity: "error",
         code: "MACRO_CONTENT_UNSUPPORTED",

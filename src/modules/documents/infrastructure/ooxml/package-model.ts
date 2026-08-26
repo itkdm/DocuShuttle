@@ -256,6 +256,7 @@ export async function loadPackage(bytes: Uint8Array): Promise<LoadedPackage> {
     manifest: {
       revision: await sha256(bytes),
       entries: manifestEntries,
+      nodes: [],
     },
     contentTypes,
     diagnostics,

@@ -81,11 +81,11 @@ export class PaperDuckStepExecutor implements AgentStepExecutor {
       ...inspection.tableCells
         .filter(({ text }) => text.trim().length > 0)
         .slice(0, 60)
-        .map((region, index) => ({ nodeId: `cell:${index}`, kind: "tableCell" as const, text: region.text, address: region.address })),
+        .map((region) => ({ nodeId: region.address.nodeId, kind: "tableCell" as const, text: region.text, address: region.address })),
       ...inspection.paragraphs
         .filter(({ text, address }) => text.trim().length > 0 && address.entry === "word/document.xml")
         .slice(0, 60)
-        .map((region, index) => ({ nodeId: `paragraph:${index}`, kind: "paragraph" as const, text: region.text, address: region.address })),
+        .map((region) => ({ nodeId: region.address.nodeId, kind: "paragraph" as const, text: region.text, address: region.address })),
     ];
     if (!regions.length) throw new StepExecutionError("NO_EDITABLE_REGION", "No editable text region was found.", false);
 

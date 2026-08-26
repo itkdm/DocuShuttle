@@ -15,6 +15,17 @@ import {
 } from "./package-model";
 import { attributes, findElementRanges, visibleText, type XmlRange } from "./xml";
 
+/** Deterministic logical identity independent of visible text and revision. */
+async function logicalNodeId(
+  kind: "paragraph" | "table-cell" | "image",
+  entry: string,
+  path: string,
+  anchor = path,
+): Promise<string> {
+  const digest = await sha256(utf8(`${kind}\u0000${entry}\u0000${anchor}`));
+  return `node_${digest.slice(0, 32)}`;
+}
+
 export interface IndexedParagraph extends InspectedParagraph {
   range: XmlRange;
 }
@@ -91,6 +102,7 @@ async function indexCells(
         const path = `tbl[${tableIndex}]/tr[${rowIndex}]/tc[${cellIndex}]`;
         const address: TableCellAddress = {
           kind: "table-cell",
+          nodeId: await logicalNodeId("table-cell", entry, path),
           sourceRevision: revision,
           fingerprint,
           entry,
@@ -116,8 +128,15 @@ async function indexParagraphs(
       const openTag = range.xml.slice(0, range.xml.indexOf(">") + 1);
       const paraId = attributes(openTag)["w14:paraId"];
       const path = containingCellPath(range, cells) ?? `p[${index}]`;
+      const nodeId = await logicalNodeId(
+        "paragraph",
+        entry,
+        path,
+        paraId ? `paraId:${paraId}` : path,
+      );
       const address: ParagraphAddress = {
         kind: "paragraph",
+        nodeId,
         sourceRevision: revision,
         fingerprint: await sha256(utf8(text)),
         entry,
@@ -164,6 +183,12 @@ async function indexImages(
     const path = `drawing[${imageIndex}]`;
     const address: ImageAddress = {
       kind: "image",
+      nodeId: await logicalNodeId(
+        "image",
+        entry,
+        path,
+        `${relationshipId}\u0000${mediaEntry}\u0000${docPr.id ?? path}`,
+      ),
       sourceRevision: loaded.manifest.revision,
       fingerprint,
       entry,

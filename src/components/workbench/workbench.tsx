@@ -8,6 +8,7 @@ import { OutlinePanel } from "./outline-panel";
 import { PaperDuckMark } from "./paperduck-mark";
 import { downloadLocalDocument, formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile, productionPersistenceConfigured } from "@/modules/uploads/browser-source-upload";
+import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
 import { advanceBrowserAgentRun, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, loadBrowserAgentRun, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun } from "@/modules/agent/browser-runtime";
 import type { AgentRun } from "@/modules/agent";
 import type { AgentStage, DocumentLoadState, ProposalState, UploadAsset, VersionItem } from "./types";
@@ -25,6 +26,7 @@ export function Workbench() {
   const [proposal, setProposal] = useState<ProposalState>("pending");
   const [stage, setStage] = useState<AgentStage>("awaiting");
   const [assets, setAssets] = useState(initialAssets);
+  const [sourceState, setSourceState] = useState<SourceRegistrationState>(emptySourceRegistrationState);
   const [documentLoad, setDocumentLoad] = useState<DocumentLoadState>({ status: "empty" });
   const [versions, setVersions] = useState(initialVersions);
   const [versionsOpen, setVersionsOpen] = useState(false);
@@ -149,27 +151,58 @@ export function Workbench() {
 
   const upload = async (kind: UploadAsset["kind"], file?: File) => {
     if (!file) return;
-    setDocumentLoad({ status: "loading", fileName: file.name });
+    const isTemplate = kind === "template";
+    // Reference examples are persisted but must never replace the document
+    // currently rendered in the canvas. Only a template upload changes it.
+    if (isTemplate) setDocumentLoad({ status: "loading", fileName: file.name });
     setNotice(`正在本地检查 ${file.name}`);
     try {
       const bytes = await readDocxFile(file);
       const next = { kind, name: file.name, size: formatFileSize(file.size) };
       setAssets((items) => [...items.filter((item) => item.kind !== kind), next]);
-      setDocumentLoad({ status: "ready", document: { file, bytes } });
-      setVersions([{ id: "local", label: "本地原始文件", time: "刚刚", actor: "你", current: true }]);
-      setCloudSaved(false);
-      setRun(undefined);
-      setProposalSummary(undefined);
-      setAwaitingFinalReview(false);
-      if (productionPersistenceConfigured()) {
-        setNotice(`${file.name} 已打开，正在安全上传并建立不可变版本`);
-        const persisted = await persistSourceFile({ file, bytes, role: kind, taskId });
-        setTaskId(persisted.taskId);
-        setCloudSaved(true);
-        await refreshVersions(persisted.taskId);
-        setNotice(`${file.name} 已保存到私有工作区并建立版本 v1`);
+      if (isTemplate) {
+        setDocumentLoad({ status: "ready", document: { file, bytes } });
+        setVersions([{ id: "local", label: "本地原始模板", time: "刚刚", actor: "你", current: true }]);
+        setCloudSaved(false);
       } else {
-        setNotice(`${file.name} 已在本地打开；云端服务尚未配置`);
+        // Reference context changed, so any proposal generated without this
+        // example is stale even though the Working Document bytes are stable.
+        setRun(undefined);
+        setProposal("pending");
+        setProposalSummary(undefined);
+        setAwaitingFinalReview(false);
+        setStage("idle");
+      }
+      if (productionPersistenceConfigured()) {
+        setNotice(isTemplate ? `${file.name} 已打开，正在安全上传并建立不可变版本` : `${file.name} 已读取，正在作为参考示例安全上传`);
+        const persisted = await persistSourceFile({ file, bytes, role: kind, taskId });
+        const nextSourceState = reduceSourceRegistration(sourceState, persisted);
+        setSourceState(nextSourceState);
+        setTaskId(persisted.taskId);
+        const createsWorkingDocument = isWorkingDocumentUpload(kind, persisted);
+        const hadWorkingDocument = Boolean(sourceState.workingDocumentId);
+        if (isTemplate && createsWorkingDocument && !hadWorkingDocument) {
+          setCloudSaved(true);
+          await refreshVersions(persisted.taskId);
+          setNotice(`${file.name} 已保存为 Working Document，并建立版本 v1`);
+        } else if (isTemplate && createsWorkingDocument && hadWorkingDocument) {
+          setCloudSaved(true);
+          await refreshVersions(persisted.taskId);
+          setNotice(`${file.name} 已替换 Working Document，并建立新的不可变版本`);
+        } else if (isTemplate && nextSourceState.workingDocumentId) {
+          setCloudSaved(true);
+          await refreshVersions(persisted.taskId);
+          setNotice(`${file.name} 已保存；当前 Working Document 仍保持不变`);
+        } else if (kind === "example") {
+          setCloudSaved(Boolean(nextSourceState.workingDocumentId));
+          setNotice(nextSourceState.workingDocumentId
+            ? `${file.name} 已保存为参考示例，Working Document 未改变`
+            : `${file.name} 已保存为参考示例；请继续上传模板以开始编辑`);
+        }
+      } else {
+        setNotice(isTemplate
+          ? `${file.name} 已在本地打开；云端服务尚未配置`
+          : `${file.name} 已作为本地参考示例载入；云端服务尚未配置`);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "读取文件失败，请重试。";

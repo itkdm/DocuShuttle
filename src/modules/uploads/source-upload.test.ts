@@ -7,6 +7,7 @@ import type { TaskRepositoryPort } from "@/modules/tasks/ports";
 
 import { CompleteSourceUpload } from "./complete-source-upload";
 import { CreateSourceUpload } from "./create-source-upload";
+import { emptySourceRegistrationState, reduceSourceRegistration } from "./source-role-semantics";
 
 const ownerUserId = "1e56a54a-5e96-4cc0-9430-702a68b21c63";
 const taskId = "0872a73c-d403-429c-9ca7-d0e629b36c69";
@@ -33,7 +34,7 @@ const createStorage = (bytes = new Uint8Array([1, 2, 3])): PrivateObjectStorageP
 });
 
 const inspection = {
-  manifest: { revision: "revision", entries: [] },
+  manifest: { revision: "revision", entries: [], nodes: [] },
   paragraphs: [],
   tableCells: [],
   images: [],
@@ -71,8 +72,30 @@ describe("complete source upload", () => {
     });
 
     expect(result.sourceFileId).toBe("source-1");
+    expect(result.role).toBe("template");
+    expect(result.originalName).toBe("实验模板.docx");
     expect(tasks.registerSource).toHaveBeenCalledOnce();
     expect(storage.remove).not.toHaveBeenCalled();
+  });
+
+  it("keeps example uploads as references without establishing a working document", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const tasks = createTasks();
+    vi.mocked(tasks.registerSource).mockResolvedValueOnce({ sourceFileId: "example-1" });
+    const storage = createStorage(bytes);
+    const documents = { inspect: vi.fn().mockResolvedValue(inspection) } as unknown as DocumentEnginePort;
+    const result = await new CompleteSourceUpload(tasks, storage, documents).execute({
+      ownerUserId,
+      taskId,
+      role: "example",
+      originalName: "完成示例.docx",
+      objectKey: `users/${ownerUserId}/tasks/${taskId}/sources/example.docx`,
+      expectedBytes: bytes.byteLength,
+      expectedSha256: await sha256(bytes),
+    });
+
+    expect(result.role).toBe("example");
+    expect(result.workingDocumentId).toBeUndefined();
   });
 
   it("removes an object whose checksum does not match", async () => {
@@ -88,5 +111,47 @@ describe("complete source upload", () => {
       expectedSha256: "0".repeat(64),
     })).rejects.toThrow("UPLOAD_CHECKSUM_MISMATCH");
     expect(storage.remove).toHaveBeenCalledOnce();
+  });
+});
+
+describe("template/example ordering", () => {
+  const registration = (role: "template" | "example", id: string, workingDocumentId?: string) => ({
+    sourceFileId: id,
+    role,
+    originalName: `${role}.docx`,
+    workingDocumentId,
+    versionId: workingDocumentId ? `${id}-version` : undefined,
+  });
+
+  it("does not let an example uploaded after a template change the working source", () => {
+    const template = registration("template", "template-1", "working-1");
+    const afterTemplate = reduceSourceRegistration(emptySourceRegistrationState(), template);
+    const afterExample = reduceSourceRegistration(afterTemplate, registration("example", "example-1"));
+
+    expect(afterExample.workingDocumentId).toBe("working-1");
+    expect(afterExample.workingTemplateSourceId).toBe("template-1");
+    expect(afterExample.template?.sourceFileId).toBe("template-1");
+    expect(afterExample.example?.sourceFileId).toBe("example-1");
+  });
+
+  it("allows an example-first task to acquire a working document when the template arrives", () => {
+    const afterExample = reduceSourceRegistration(emptySourceRegistrationState(), registration("example", "example-1"));
+    const afterTemplate = reduceSourceRegistration(afterExample, registration("template", "template-1", "working-1"));
+
+    expect(afterExample.workingDocumentId).toBeUndefined();
+    expect(afterTemplate.workingDocumentId).toBe("working-1");
+    expect(afterTemplate.example?.sourceFileId).toBe("example-1");
+  });
+
+  it("tracks a later template replacement without losing the reference example", () => {
+    const seeded = reduceSourceRegistration(
+      reduceSourceRegistration(emptySourceRegistrationState(), registration("template", "template-1", "working-1")),
+      registration("example", "example-1"),
+    );
+    const replaced = reduceSourceRegistration(seeded, registration("template", "template-2", "working-1"));
+
+    expect(replaced.workingDocumentId).toBe("working-1");
+    expect(replaced.workingTemplateSourceId).toBe("template-2");
+    expect(replaced.example?.sourceFileId).toBe("example-1");
   });
 });

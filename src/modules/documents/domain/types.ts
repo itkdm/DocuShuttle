@@ -16,12 +16,32 @@ export interface PackageEntryManifest {
   contentType?: string;
 }
 
+export type DocumentNodeKind = "paragraph" | "table-cell" | "image";
+
+/**
+ * Provider-neutral logical identity for a semantic document node.
+ *
+ * `path` is only the address in one revision. Consumers must persist and
+ * exchange `nodeId`; the address is resolved again when a revision is opened.
+ */
+export interface DocumentNodeManifest {
+  nodeId: string;
+  kind: DocumentNodeKind;
+  entry: string;
+  path: string;
+  fingerprint: string;
+}
+
 export interface DocumentManifest {
   revision: string;
   entries: readonly PackageEntryManifest[];
+  /** Logical node map persisted beside the package manifest. */
+  nodes: readonly DocumentNodeManifest[];
 }
 
 interface StableAddressBase {
+  /** Logical identity stable across derived revisions. */
+  nodeId: string;
   /** Revision at which the address was discovered. */
   sourceRevision: string;
   /** Fingerprint of the addressed semantic object, not of the whole package. */

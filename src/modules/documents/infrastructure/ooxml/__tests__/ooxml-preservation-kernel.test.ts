@@ -27,6 +27,13 @@ describe("OoxmlPreservationKernel", () => {
 
     expect(inspected.diagnostics.filter(({ severity }) => severity === "error")).toEqual([]);
     expect(inspected.manifest.revision).toMatch(/^[a-f0-9]{64}$/);
+    expect(inspected.manifest.nodes).toHaveLength(
+      inspected.paragraphs.length + inspected.tableCells.length + inspected.images.length,
+    );
+    expect(new Set(inspected.manifest.nodes.map(({ nodeId }) => nodeId)).size).toBe(
+      inspected.manifest.nodes.length,
+    );
+    expect(inspected.paragraphs[0].address.nodeId).toMatch(/^node_[a-f0-9]{32}$/);
     expect(inspected.manifest.entries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ path: "word/document.xml", sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }),
@@ -118,6 +125,13 @@ describe("OoxmlPreservationKernel", () => {
       "Hello PaperDuck",
     );
     expect(after.tableCells[0].text).toBe("Approved");
+    expect(after.paragraphs.find(({ address }) => address.paraId === "A1B2C3D4")?.address.nodeId).toBe(
+      before.paragraphs[0].address.nodeId,
+    );
+    expect(after.tableCells[0].address.nodeId).toBe(before.tableCells[0].address.nodeId);
+    expect(after.images[0].address.nodeId).toBe(before.images[0].address.nodeId);
+    expect(after.manifest.nodes.find(({ kind, path }) => kind === "paragraph" && path === before.paragraphs[0].address.path)?.nodeId)
+      .toBe(before.paragraphs[0].address.nodeId);
     expect(after.paragraphs.find(({ address }) => address.paraId === "A1B2C3D4")?.address.path).toBe(
       before.paragraphs[0].address.path,
     );

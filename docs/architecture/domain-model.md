@@ -14,6 +14,8 @@
 
 `document_versions` 至少记录 parent、origin、Storage object key、SHA-256、engine/version、创建者和 run。大结构清单可在私有 Storage 保存，数据库保留索引和摘要。稳定 `node_id` 是逻辑身份，具体 OOXML 路径/偏移是某版本的地址，两者不能混为一谈。
 
+每个导出版本的 manifest 同时保存 `nodes[]`：其中 `node_id` 是 provider-neutral 的逻辑身份，`kind`、`entry`、`path` 和 `fingerprint` 是该版本的解析索引。文本修改不参与 `node_id` 计算；因此分析、HITL、派生版本和恢复流程都传递同一个逻辑节点，而不是使用 `cell:0` / `paragraph:0` 等运行时序号。
+
 ## 关键不变量
 
 - Source bytes immutable；Working Document 永远指向一个已校验版本。

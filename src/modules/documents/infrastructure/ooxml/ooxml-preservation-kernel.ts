@@ -5,6 +5,8 @@ import {
   DocumentKernelError,
   type DocumentDiagnostic,
   type DocumentInspection,
+  type DocumentManifest,
+  type DocumentNodeManifest,
   type DocumentMutation,
   type MutationRequest,
   type MutationResult,
@@ -42,8 +44,9 @@ function inspection(
   loaded: LoadedPackage,
   index: DocumentIndex,
 ): DocumentInspection {
+  const manifest = manifestWithNodes(loaded.manifest, index);
   return {
-    manifest: loaded.manifest,
+    manifest,
     paragraphs: index.paragraphs.map(({ address, text }) => ({ address, text })),
     tableCells: index.cells.map(({ address, text }) => ({ address, text })),
     images: index.images.map(({ address, contentType, byteLength }) => ({
@@ -61,6 +64,36 @@ function inspection(
   };
 }
 
+function manifestWithNodes(
+  manifest: DocumentManifest,
+  index: DocumentIndex,
+): DocumentManifest {
+  const nodes: DocumentNodeManifest[] = [
+    ...index.paragraphs.map(({ address }) => ({
+      nodeId: address.nodeId,
+      kind: address.kind,
+      entry: address.entry,
+      path: address.path,
+      fingerprint: address.fingerprint,
+    })),
+    ...index.cells.map(({ address }) => ({
+      nodeId: address.nodeId,
+      kind: address.kind,
+      entry: address.entry,
+      path: address.path,
+      fingerprint: address.fingerprint,
+    })),
+    ...index.images.map(({ address }) => ({
+      nodeId: address.nodeId,
+      kind: address.kind,
+      entry: address.entry,
+      path: address.path,
+      fingerprint: address.fingerprint,
+    })),
+  ];
+  return { ...manifest, nodes };
+}
+
 function addressMatches(
   indexed: IndexedParagraph | IndexedCell | IndexedImage,
   operation: DocumentMutation,
@@ -68,6 +101,7 @@ function addressMatches(
   const expected = operation.address;
   const actual = indexed.address;
   if (actual.kind !== expected.kind || actual.entry !== expected.entry) return false;
+  if (actual.nodeId !== expected.nodeId) return false;
   if (actual.kind === "paragraph" && expected.kind === "paragraph" && expected.paraId) {
     return actual.paraId === expected.paraId;
   }
@@ -275,7 +309,7 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
     if (request.operations.length === 0) {
       return {
         bytes: Uint8Array.from(bytes),
-        manifest: loaded.manifest,
+        manifest: manifestWithNodes(loaded.manifest, indexed),
         changedEntries: [],
         diagnostics: [{
           severity: "info",
@@ -361,7 +395,7 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
     if (stagedText.size === 0 && stagedBinary.size === 0) {
       return {
         bytes: Uint8Array.from(bytes),
-        manifest: loaded.manifest,
+        manifest: manifestWithNodes(loaded.manifest, indexed),
         changedEntries: [],
         diagnostics: [{
           severity: "info",
@@ -393,7 +427,7 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
     await verifyMutationOutcomes(indexed, validatedIndex, request.operations);
     return {
       bytes: output,
-      manifest: validated.manifest,
+      manifest: manifestWithNodes(validated.manifest, validatedIndex),
       changedEntries: [...changedEntries].sort(),
       diagnostics: [
         ...validated.diagnostics,

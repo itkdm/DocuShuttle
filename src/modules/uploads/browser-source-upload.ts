@@ -3,6 +3,14 @@
 import { ensureAnonymousSession } from "@/infrastructure/supabase/browser";
 import type { SourceRole } from "@/modules/tasks/domain";
 
+export type PersistedSourceFile = {
+  sourceFileId: string;
+  role: SourceRole;
+  originalName?: string;
+  workingDocumentId?: string;
+  versionId?: string;
+};
+
 type ApiErrorBody = { code?: string };
 
 const requestJson = async <T>(url: string, init: RequestInit): Promise<T> => {
@@ -20,7 +28,7 @@ const sha256 = async (bytes: ArrayBuffer) => {
 const proxyUpload = async (input: { file: File; taskId: string; role: SourceRole; originalName: string }) => {
   const form = new FormData();
   form.set("taskId", input.taskId); form.set("role", input.role); form.set("originalName", input.originalName); form.set("file", input.file);
-  return requestJson<{ sourceFileId: string; workingDocumentId?: string; versionId?: string }>("/api/uploads/source/proxy", { method: "POST", body: form });
+  return requestJson<PersistedSourceFile>("/api/uploads/source/proxy", { method: "POST", body: form });
 };
 
 export const productionPersistenceConfigured = () => Boolean(
@@ -59,7 +67,7 @@ export async function persistSourceFile(input: {
   } catch { directUploadFailed = true; } finally { window.clearTimeout(timer); }
   if (directUploadFailed) return { taskId, ...(await proxyUpload({ file: input.file, taskId, role: input.role, originalName: input.file.name })) };
 
-  const completed = await requestJson<{ sourceFileId: string; workingDocumentId?: string; versionId?: string }>("/api/uploads/source/complete", {
+  const completed = await requestJson<PersistedSourceFile>("/api/uploads/source/complete", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -71,5 +79,5 @@ export async function persistSourceFile(input: {
       expectedSha256: checksum,
     }),
   });
-  return { taskId, ...completed };
+  return { taskId, ...completed, role: input.role };
 }

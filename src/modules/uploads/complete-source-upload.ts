@@ -68,7 +68,14 @@ export class CompleteSourceUpload {
         manifestObjectKey,
         engineVersion: "paperduck-ooxml-v1",
       });
-      return { ...registered, inspection };
+      // Keep role metadata in the response so clients can distinguish the
+      // editable template from reference examples regardless of upload order.
+      return {
+        ...registered,
+        role: input.role,
+        originalName: input.originalName,
+        inspection,
+      };
     } catch (error) {
       await this.storage.remove(objectKey);
       if (manifestObjectKey) await this.storage.remove(manifestObjectKey);

@@ -53,6 +53,23 @@ describe("AgentLoopRunner", () => {
     expect(resumed.checkpoint.messages.some((message) => message.toolName === "apply_change" && message.content.includes("revision"))).toBe(true);
   });
 
+  it("allows explicitly selected full autonomy to execute approval tools", async () => {
+    const applyTool: AgentTool = {
+      name: "apply_change",
+      description: "Apply a document change.",
+      inputSchema: z.object({ nodeId: z.string() }),
+      requiresApproval: true,
+      async execute() { return { revision: "rev-full" }; },
+    };
+    const model: AgentModelPort = { decide: async ({ messages }) => messages.some((m) => m.role === "tool")
+      ? { kind: "message", text: "已自动完成。" }
+      : { kind: "tool_calls", calls: [{ id: "call-full", name: "apply_change", input: { nodeId: "p-1" } }] } };
+    const result = await new AgentLoopRunner(model, new MemoryStore(), [applyTool]).runWithPermission("run-full", "直接执行修改", "full");
+    expect(result.checkpoint.status).toBe("completed");
+    expect(result.checkpoint.pendingApproval).toBeUndefined();
+    expect(result.events.some((event) => event.type === "tool.completed")).toBe(true);
+  });
+
   it("records tool failures as tool messages so the model can recover", async () => {
     const failing: AgentTool = { ...inspectTool, async execute() { throw new Error("storage unavailable"); } };
     const model: AgentModelPort = { decide: async ({ messages }) => messages.some((m) => m.role === "tool")
@@ -61,6 +78,16 @@ describe("AgentLoopRunner", () => {
     const result = await new AgentLoopRunner(model, new MemoryStore(), [failing]).run("run-3", "读取文档");
     expect(result.events.some((event) => event.type === "tool.failed")).toBe(true);
     expect(result.checkpoint.status).toBe("completed");
+  });
+
+  it("persists provider failures as a failed checkpoint", async () => {
+    const store = new MemoryStore();
+    const result = await new AgentLoopRunner({
+      decide: async () => { throw new Error("gateway timeout"); },
+    }, store, []).run("run-provider-failure", "请检查文档");
+    expect(result.checkpoint.status).toBe("failed");
+    expect(result.checkpoint.finalText).toContain("模型服务异常");
+    expect((await store.load())?.status).toBe("failed");
   });
 
   it("keeps a completed session conversational for a later user turn", async () => {

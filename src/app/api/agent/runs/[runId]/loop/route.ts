@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
-import { AgentLoopRunner } from "@/modules/agent/application/loop";
+import { AgentLoopRunner, type AgentPermissionMode } from "@/modules/agent/application/loop";
 import { createDocumentTools } from "@/modules/agent/application/document-tools";
 import { createDocumentVersionTools } from "@/modules/agent/application/document-version-tools";
 import { createSourceContextTools } from "@/modules/agent/application/source-context-tools";
@@ -13,7 +13,10 @@ import { SupabaseDocumentVersionAccess } from "@/modules/agent/infrastructure/su
 import { SupabaseSourceDocumentContext } from "@/modules/agent/infrastructure/supabase/source-context";
 import { OoxmlPreservationKernel } from "@/modules/documents";
 
-const schema = z.object({ message: z.string().trim().min(1).max(8_000) });
+const schema = z.object({
+  message: z.string().trim().min(1).max(8_000),
+  permissionMode: z.enum(["default", "full"]).optional().default("default"),
+});
 
 export async function GET(_request: Request, { params }: { params: Promise<{ runId: string }> }) {
   try {
@@ -46,7 +49,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
       createOpenAICompatibleAgentModelFromEnvironment(),
       new SupabaseAgentLoopStore(client),
       tools,
-    ).run(runId, input.message);
+    ).runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode);
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });

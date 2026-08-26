@@ -12,7 +12,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tas
     const version = await client.from("document_versions").select("object_key, sha256").eq("id", document.data.current_version_id).eq("owner_user_id", user.id).single();
     if (version.error || !version.data) return NextResponse.json({ code: "VERSION_NOT_FOUND" }, { status: 404 });
     const inspection = await new OoxmlPreservationKernel().inspect(await new SupabaseStorageAdapter(client).get(version.data.object_key as string));
-    return NextResponse.json({ revision: version.data.sha256, images: inspection.images.map(({ address, contentType, byteLength }) => ({ nodeId: address.nodeId, contentType, byteLength, path: address.path })) });
+    return NextResponse.json({ revision: version.data.sha256, counts: { paragraphs: inspection.paragraphs.length, tableCells: inspection.tableCells.length, images: inspection.images.length }, images: inspection.images.map(({ address, contentType, byteLength }) => ({ nodeId: address.nodeId, contentType, byteLength, path: address.path })) });
   } catch (error) {
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
     console.error("document_inspection_failed", error instanceof Error ? error.message : "unknown");

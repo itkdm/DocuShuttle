@@ -11,6 +11,7 @@ import { persistSourceFile, productionPersistenceConfigured } from "@/modules/up
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
 import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoop, resumeBrowserAgentLoop, type BrowserAgentLoopResult, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
 import type { AgentRun } from "@/modules/agent";
+import type { AgentPermissionMode } from "@/modules/agent/application/loop";
 import type { AgentStage, DocumentLoadState, ProposalState, UploadAsset, VersionItem } from "./types";
 
 const initialAssets: UploadAsset[] = [];
@@ -42,8 +43,11 @@ export function Workbench() {
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageBusy, setImageBusy] = useState(false);
   const [imageNodes, setImageNodes] = useState<BrowserImageNode[]>([]);
+  const [paragraphCount, setParagraphCount] = useState(0);
+  const [tableCellCount, setTableCellCount] = useState(0);
   const [conversation, setConversation] = useState<Array<{ role: "user" | "agent"; text: string }>>([]);
   const [loopResult, setLoopResult] = useState<BrowserAgentLoopResult>();
+  const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>("default");
   useEffect(() => {
     if (!productionPersistenceConfigured()) return;
     const raw = window.localStorage.getItem(workspaceResumeKey);
@@ -56,7 +60,7 @@ export function Workbench() {
         const fileName = saved.fileName ?? "paperduck.docx";
         const document = await loadCurrentTaskDocument(saved.taskId!, fileName);
         setTaskId(saved.taskId); setCloudSaved(true);
-        setDocumentLoad({ status: "ready", document: { file: document.file, bytes: document.bytes } }); setCurrentRevision(document.version.revision); setImageNodes((await inspectBrowserTaskDocument(saved.taskId!)).images);
+        setDocumentLoad({ status: "ready", document: { file: document.file, bytes: document.bytes } }); setCurrentRevision(document.version.revision); const inspection = await inspectBrowserTaskDocument(saved.taskId!); setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
         await refreshVersions(saved.taskId!);
         if (saved.runId) {
           const resumed = await loadBrowserAgentRun(saved.runId);
@@ -115,7 +119,7 @@ export function Workbench() {
         if (current.status !== "awaiting_review" || !current.workingRevision) throw new Error("Agent 未进入最终复核状态");
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
         const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
-        setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } }); setCurrentRevision(nextDocument.version.revision); setImageNodes((await inspectBrowserTaskDocument(taskId!)).images);
+        setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } }); setCurrentRevision(nextDocument.version.revision); const inspection = await inspectBrowserTaskDocument(taskId!); setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
         await refreshVersions(taskId);
         setAwaitingFinalReview(true);
         setStage("awaiting");
@@ -145,7 +149,7 @@ export function Workbench() {
     try {
       const activeRun = run ?? await createBrowserAgentRun(taskId, prompt);
       setRun(activeRun);
-      const result = await runBrowserAgentLoop(activeRun.id, prompt);
+      const result = await runBrowserAgentLoop(activeRun.id, prompt, permissionMode);
       setLoopResult(result);
       const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
       if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
@@ -233,6 +237,12 @@ export function Workbench() {
         const nextSourceState = reduceSourceRegistration(sourceState, persisted);
         setSourceState(nextSourceState);
         setTaskId(persisted.taskId);
+        if (nextSourceState.workingDocumentId) {
+          const inspection = await inspectBrowserTaskDocument(persisted.taskId);
+          setImageNodes(inspection.images);
+          setParagraphCount(inspection.counts.paragraphs);
+          setTableCellCount(inspection.counts.tableCells);
+        }
         const createsWorkingDocument = isWorkingDocumentUpload(kind, persisted);
         const hadWorkingDocument = Boolean(sourceState.workingDocumentId);
         if (createsWorkingDocument && !hadWorkingDocument) {
@@ -291,7 +301,7 @@ export function Workbench() {
         const restored = await restoreBrowserDocumentVersion(taskId, id);
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
         const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
-          setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } }); setCurrentRevision(nextDocument.version.revision); setImageNodes((await inspectBrowserTaskDocument(taskId)).images);
+          setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } }); setCurrentRevision(nextDocument.version.revision); const inspection = await inspectBrowserTaskDocument(taskId); setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
         await refreshVersions(taskId);
         setVersionsOpen(false); setMobilePanel("none"); setNotice(`已创建恢复版本 v${restored.version.version_number}，完整历史已保留`);
       } catch (error) { setNotice(error instanceof Error ? error.message : "恢复版本失败"); }
@@ -345,9 +355,9 @@ export function Workbench() {
       {versionsOpen && <div className="version-popover" role="dialog" aria-label="版本历史"><div className="version-heading"><div><span className="eyebrow">不可变历史</span><h2>版本记录</h2></div><button className="icon-button" onClick={() => setVersionsOpen(false)} aria-label="关闭版本记录"><X size={16} /></button></div><p>恢复会创建新版本，不会删除后续记录。</p><ol>{versions.map((version) => <li key={version.id} className={version.current ? "current" : ""}><span className="version-node">{version.current ? <Check size={12} /> : version.id.slice(1)}</span><div><strong>{version.label}</strong><small>{version.id} · {version.actor} · {version.time}</small></div>{!version.current && <button onClick={() => restoreVersion(version.id)}><RotateCcw size={12} /> 恢复</button>}</li>)}</ol></div>}
 
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
-        {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} imageCount={imageNodes.length} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
+        {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
         <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} proposal={proposal} onChoose={chooseWorkingDocument} onDecide={decide} liveAgent={cloudSaved} proposalSummary={proposalSummary} /></div>
-        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} onLoopApproval={decideLoop} conversation={conversation} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onRetry={retry} onDecide={decide} mode={cloudSaved ? "production" : "local"} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
+        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} onLoopApproval={decideLoop} conversation={conversation} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onRetry={retry} onDecide={decide} mode={cloudSaved ? "production" : "local"} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 
       <div className="mobile-dock" aria-label="移动端工作台导航"><button onClick={() => setMobilePanel("outline")} className={mobilePanel === "outline" ? "active" : ""}><FilePlus2 size={18} /><span>文档</span></button><button onClick={() => setMobilePanel("agent")} className={mobilePanel === "agent" ? "active" : ""}><Sparkles size={18} /><span>审批</span><i>1</i></button><button onClick={() => setMobilePanel("versions")} className={mobilePanel === "versions" ? "active" : ""}><History size={18} /><span>版本</span></button><button onClick={downloadCurrent}><Download size={18} /><span>下载</span></button></div>

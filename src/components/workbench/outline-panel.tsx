@@ -7,8 +7,8 @@ interface OutlinePanelProps {
   onUpload: (kind: UploadAsset["kind"], file?: File) => void;
 }
 
-interface OutlinePanelPropsExtended extends OutlinePanelProps { documentReady?: boolean; imageCount?: number; tableCellCount?: number; }
-export function OutlinePanel({ assets, onCollapse, onUpload, documentReady = false, imageCount = 0, tableCellCount = 0 }: OutlinePanelPropsExtended) {
+interface OutlinePanelPropsExtended extends OutlinePanelProps { documentReady?: boolean; paragraphCount?: number; imageCount?: number; tableCellCount?: number; }
+export function OutlinePanel({ assets, onCollapse, onUpload, documentReady = false, paragraphCount = 0, imageCount = 0, tableCellCount = 0 }: OutlinePanelPropsExtended) {
   const getAsset = (kind: UploadAsset["kind"]) => assets.find((item) => item.kind === kind);
   return (
     <aside className="outline-panel" aria-label="文档结构">
@@ -31,10 +31,10 @@ export function OutlinePanel({ assets, onCollapse, onUpload, documentReady = fal
         })}
       </div>
       <nav className="outline-nav" aria-label="页面内导航">
-        <button className="outline-section" aria-expanded="true"><span>{documentReady ? "已解析的文档节点" : "等待文档解析"}</span><ChevronDown size={15} /></button>
-        <ol>{documentReady ? <><li><div className="outline-node"><FileText size={15} /><span>正文内容</span><small>已由 DOCX 引擎分页渲染</small></div></li><li><div className="outline-node"><Table2 size={15} /><span>表格单元格</span><small>{tableCellCount} 个</small></div></li><li><div className="outline-node"><ImageIcon size={15} /><span>图片节点</span><small>{imageCount} 个</small></div></li></> : <li><div className="outline-empty">上传真实 DOCX 后显示结构，不预填示例章节。</div></li>}</ol>
+        <button className="outline-section" aria-expanded="true"><span>{documentReady ? "文档概览" : "等待文档解析"}</span><ChevronDown size={15} /></button>
+        <ol>{documentReady ? <><li><div className="outline-node"><FileText size={15} /><span>正文段落</span><small>{paragraphCount} 个</small></div></li><li><div className="outline-node"><Table2 size={15} /><span>表格单元格</span><small>{tableCellCount} 个</small></div></li><li><div className="outline-node"><ImageIcon size={15} /><span>图片节点</span><small>{imageCount} 个</small></div></li></> : <li><div className="outline-empty">上传 DOCX 后，这里会显示真实解析结果。</div></li>}</ol>
       </nav>
-      <div className="outline-legend"><span><i className="legend-dot generated" /> 由 Agent 运行状态决定</span><span><i className="legend-dot locked" /> 未解析节点不显示</span></div>
+      <div className="outline-legend"><span><i className="legend-dot generated" /> 来自当前 DOCX</span><span><i className="legend-dot locked" /> 仅显示已解析结构</span></div>
     </aside>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import type { AgentRun } from "./domain/model";
+import type { AgentPermissionMode } from "./application/loop";
 
 type AgentResponse = { run: AgentRun };
 type AdvanceResponse = { kind: string; run: AgentRun };
@@ -34,12 +35,13 @@ export type BrowserAgentLoopResult = {
     iterations: number;
     pendingApproval?: { callId: string; name: string; input: unknown };
     messages: ReadonlyArray<{ role: "system" | "user" | "assistant" | "tool"; content: string }>;
+    permissionMode?: AgentPermissionMode;
   };
   events: ReadonlyArray<{ type: string; text?: string; name?: string; error?: string; [key: string]: unknown }>;
 };
 
-export const runBrowserAgentLoop = async (runId: string, message: string) =>
-  json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop`, post({ message }));
+export const runBrowserAgentLoop = async (runId: string, message: string, permissionMode: AgentPermissionMode = "default") =>
+  json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop`, post({ message, permissionMode }));
 
 export const loadBrowserAgentLoop = async (runId: string) =>
   json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop`);
@@ -134,4 +136,4 @@ export const applyBrowserImageCandidate = async (input: {
 
 export type BrowserImageNode = { nodeId: string; contentType?: string; byteLength: number; path: string };
 export const inspectBrowserTaskDocument = async (taskId: string) =>
-  json<{ revision: string; images: BrowserImageNode[] }>(`/api/tasks/${taskId}/document/inspect`);
+  json<{ revision: string; counts: { paragraphs: number; tableCells: number; images: number }; images: BrowserImageNode[] }>(`/api/tasks/${taskId}/document/inspect`);

@@ -154,6 +154,18 @@ button:focus-visible, textarea:focus-visible, label:has(input:focus-visible) { o
 .message-meta strong { font-size: 10px; }.message-meta small { font-size: 8px; color: var(--muted); }
 .agent-message p { margin: 9px 0 0 30px; font-size: 11px; line-height: 1.65; color: #4d5049; }
 .agent-rich-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-md-line, .agent-md-list-item, .agent-md-heading { display: block; }
+.agent-md-list-item { display: flex; gap: 8px; padding-left: 4px; }
+.agent-md-heading { margin: 4px 0 2px; }
+.agent-rich-text code { padding: 1px 4px; border-radius: 4px; background: #f2efe7; font-size: .9em; }
+.agent-heading-actions { display: flex; align-items: center; gap: 10px; }
+.composer-permission { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.composer-permission select { border: 1px solid var(--line); background: var(--paper); color: var(--ink); border-radius: 5px; padding: 3px 18px 3px 5px; font-size: 10px; }
+.permission-control { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.permission-control select { border: 1px solid var(--line); background: var(--paper); color: var(--ink); border-radius: 6px; padding: 5px 22px 5px 7px; font: inherit; }
+.tool-disclosure { display: flex; align-items: center; justify-content: space-between; width: 100%; border: 1px dashed var(--line); background: transparent; color: var(--muted); padding: 9px 12px; margin: 12px 0; border-radius: 8px; font: inherit; text-align: left; }
+.tool-disclosure svg { transition: transform 160ms ease; }
+.tool-disclosure[aria-expanded="true"] svg { transform: rotate(90deg); }
 .conversation-message.user { background: #eef4f9; border-color: #c5d7e5; }.conversation-message.agent { background: white; }
 .scope-card { position: relative; border: 1px solid #dfc452; background: #fff9db; padding: 13px; box-shadow: 3px 3px 0 rgba(121,86,0,.12); }
 .scope-kicker { font-size: 8px; letter-spacing: .1em; color: var(--duck-dark); text-transform: uppercase; }.scope-card > strong { display: block; font: 700 15px var(--doc-font); margin-top: 4px; }

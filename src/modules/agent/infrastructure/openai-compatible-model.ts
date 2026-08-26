@@ -10,6 +10,16 @@ export type OpenAICompatibleModelOptions = {
   system?: string;
 };
 
+const parseToolResult = (content: string) => {
+  try {
+    return JSON.parse(content);
+  } catch {
+    // Checkpoints created by older builds may contain plain text tool output.
+    // Preserve it rather than failing the entire continuation request.
+    return content;
+  }
+};
+
 const PAPERDUCK_AGENT_SYSTEM = `你是纸上鸭（PaperDuck），一个围绕真实 Word 文档工作的通用 Agent。
 
 你的工作规则：
@@ -54,7 +64,7 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
               type: "tool-result",
               toolCallId: message.toolCallId ?? "unknown",
               toolName: message.toolName ?? "unknown",
-              output: { type: "json", value: JSON.parse(message.content) },
+              output: { type: "json", value: parseToolResult(message.content) },
             }],
           } as const)
         : message.role === "assistant" && message.toolCalls

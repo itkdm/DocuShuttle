@@ -29,6 +29,9 @@ export type AgentModelDecision =
   | { kind: "tool_calls"; calls: ReadonlyArray<{ id: string; name: string; input: unknown }> }
   | { kind: "ask_user"; text: string };
 
+/** Controls how much autonomy the user grants to this run. */
+export type AgentPermissionMode = "default" | "full";
+
 export interface AgentModelPort {
   decide(input: {
     messages: readonly AgentLoopMessage[];
@@ -44,6 +47,7 @@ export type AgentLoopCheckpoint = {
   pendingApproval?: { callId: string; name: string; input: unknown };
   status: "running" | "awaiting_user" | "completed" | "failed";
   finalText?: string;
+  permissionMode?: AgentPermissionMode;
 };
 
 export type AgentLoopStore = {
@@ -65,6 +69,11 @@ export type AgentLoopResult = {
   events: AgentLoopEvent[];
 };
 
+const serializeToolOutput = (value: unknown) => {
+  const encoded = JSON.stringify(value);
+  return encoded === undefined ? "null" : encoded;
+};
+
 export class AgentLoopRunner {
   constructor(
     private readonly model: AgentModelPort,
@@ -75,13 +84,23 @@ export class AgentLoopRunner {
   ) {}
 
   async run(runId: string, userText: string, signal?: AbortSignal): Promise<AgentLoopResult> {
+    return this.runWithPermission(runId, userText, "default", signal);
+  }
+
+  async runWithPermission(runId: string, userText: string, permissionMode: AgentPermissionMode, signal?: AbortSignal): Promise<AgentLoopResult> {
     const current = await this.store.load(runId);
     const checkpoint: AgentLoopCheckpoint = current ?? {
       messages: [],
       iterations: 0,
       toolCallCount: 0,
       status: "running",
+      permissionMode,
     };
+    // Permission is selected per user turn. A resumed approval keeps the mode
+    // persisted in its checkpoint, while a new turn may intentionally switch
+    // between the default guardrail profile and full autonomy.
+    if (userText.trim()) checkpoint.permissionMode = permissionMode;
+    else checkpoint.permissionMode ??= permissionMode;
     if ((checkpoint.status === "completed" || checkpoint.status === "failed") && !userText.trim()) {
       return { checkpoint, events: checkpoint.finalText ? [{ type: "completed", text: checkpoint.finalText }] : [] };
     }
@@ -92,7 +111,19 @@ export class AgentLoopRunner {
 
     while (checkpoint.iterations < this.maxIterations) {
       checkpoint.iterations += 1;
-      const decision = await this.model.decide({ messages: checkpoint.messages, tools: this.tools, signal });
+      let decision: AgentModelDecision;
+      try {
+        decision = await this.model.decide({ messages: checkpoint.messages, tools: this.tools, signal });
+      } catch (error) {
+        // Provider/network failures must become a durable checkpoint instead of
+        // leaving the run in `running` forever (or only returning a generic 500).
+        // This also gives the UI a truthful, retryable terminal state.
+        const message = error instanceof Error ? error.message : "Model request failed";
+        checkpoint.status = "failed";
+        checkpoint.finalText = `这次请求暂时没有完成（模型服务异常）。请稍后重试。\n\n错误信息：${message}`;
+        await this.store.save(runId, checkpoint);
+        return { checkpoint, events: [{ type: "assistant.message", text: checkpoint.finalText }] };
+      }
       if (decision.kind === "message") {
         checkpoint.messages.push({ role: "assistant", content: decision.text });
         events.push({ type: "assistant.message", text: decision.text });
@@ -147,7 +178,7 @@ export class AgentLoopRunner {
           events.push({ type: "tool.failed", callId: call.id, name: call.name, error: message });
           continue;
         }
-        if (tool.requiresApproval) {
+        if (tool.requiresApproval && checkpoint.permissionMode !== "full") {
           checkpoint.pendingApproval = { callId: call.id, name: call.name, input };
           checkpoint.status = "awaiting_user";
           events.push({ type: "approval.required", callId: call.id, name: call.name, input });
@@ -157,7 +188,7 @@ export class AgentLoopRunner {
         events.push({ type: "tool.started", callId: call.id, name: call.name, input });
         try {
           const output = await tool.execute(input, { runId, callId: call.id, idempotencyKey: `${runId}:${call.id}`, attempt: checkpoint.toolCallCount, signal });
-          checkpoint.messages.push({ role: "tool", content: JSON.stringify(output), toolCallId: call.id, toolName: call.name });
+          checkpoint.messages.push({ role: "tool", content: serializeToolOutput(output), toolCallId: call.id, toolName: call.name });
           events.push({ type: "tool.completed", callId: call.id, name: call.name, output });
         } catch (error) {
           const message = error instanceof Error ? error.message : "Tool execution failed";
@@ -189,7 +220,7 @@ export class AgentLoopRunner {
     if (approval === "approved") {
       try {
         const output = await tool.execute(input, { runId, callId: pending.callId, idempotencyKey: `${runId}:${pending.callId}`, attempt: checkpoint.toolCallCount, signal });
-        checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval, output }), toolCallId: pending.callId, toolName: pending.name });
+        checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval, output }), toolCallId: pending.callId, toolName: pending.name });
         events.push({ type: "tool.completed", callId: pending.callId, name: pending.name, output });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Tool execution failed";
@@ -201,7 +232,7 @@ export class AgentLoopRunner {
       events.push({ type: "tool.failed", callId: pending.callId, name: pending.name, error: "User rejected the tool call." });
     }
     await this.store.save(runId, checkpoint);
-    const continuation = await this.run(runId, "", signal);
+    const continuation = await this.runWithPermission(runId, "", checkpoint.permissionMode ?? "default", signal);
     return { checkpoint: continuation.checkpoint, events: [...events, ...continuation.events] };
   }
 }

@@ -38,4 +38,13 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       .maybeSingle();
     if (updated.error || !updated.data) throw new ConcurrentRunUpdateError(runId);
   }
+
+  async claimPendingApproval(runId: string, callId: string): Promise<AgentLoopCheckpoint | undefined> {
+    const result = await this.client.rpc("claim_agent_loop_approval", { p_run_id: runId, p_call_id: callId });
+    if (result.error) {
+      if (result.error.message.includes("APPROVAL_ALREADY_CLAIMED")) return undefined;
+      throw new Error(`Unable to claim agent approval: ${result.error.message}`);
+    }
+    return (result.data ?? undefined) as AgentLoopCheckpoint | undefined;
+  }
 }

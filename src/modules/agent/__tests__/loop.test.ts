@@ -62,4 +62,35 @@ describe("AgentLoopRunner", () => {
     expect(result.events.some((event) => event.type === "tool.failed")).toBe(true);
     expect(result.checkpoint.status).toBe("completed");
   });
+
+  it("keeps a completed session conversational for a later user turn", async () => {
+    const model: AgentModelPort = { decide: async ({ messages }) => ({
+      kind: "message",
+      text: messages.filter((message) => message.role === "user").length === 1 ? "第一轮完成。" : "第二轮也完成。",
+    }) };
+    const store = new MemoryStore();
+    const runner = new AgentLoopRunner(model, store, []);
+    await runner.run("run-4", "第一轮");
+    const second = await runner.run("run-4", "第二轮");
+    expect(second.checkpoint.status).toBe("completed");
+    expect(second.checkpoint.messages.filter((message) => message.role === "user")).toHaveLength(2);
+    expect(second.checkpoint.finalText).toBe("第二轮也完成。");
+  });
+
+  it("does not partially execute a multi-tool batch", async () => {
+    let executions = 0;
+    const model: AgentModelPort = {
+      decide: async ({ messages }) => messages.some((message) => message.role === "tool")
+        ? { kind: "message", text: "我会按顺序继续。" }
+        : { kind: "tool_calls", calls: [
+            { id: "a", name: "inspect_document", input: { query: "a" } },
+            { id: "b", name: "inspect_document", input: { query: "b" } },
+          ] },
+    };
+    const tool: AgentTool = { ...inspectTool, async execute() { executions += 1; return {}; } };
+    const result = await new AgentLoopRunner(model, new MemoryStore(), [tool]).run("run-5", "检查");
+    expect(executions).toBe(0);
+    expect(result.checkpoint.status).toBe("completed");
+    expect(result.checkpoint.messages.filter((message) => message.role === "tool")).toHaveLength(2);
+  });
 });

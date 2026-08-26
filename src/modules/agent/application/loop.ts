@@ -10,6 +10,9 @@ export type AgentLoopMessage = {
 
 export type AgentToolContext = {
   runId: string;
+  callId: string;
+  idempotencyKey: string;
+  attempt: number;
   signal?: AbortSignal;
 };
 
@@ -46,6 +49,7 @@ export type AgentLoopCheckpoint = {
 export type AgentLoopStore = {
   load(runId: string): Promise<AgentLoopCheckpoint | undefined>;
   save(runId: string, checkpoint: AgentLoopCheckpoint): Promise<void>;
+  claimPendingApproval?(runId: string, callId: string): Promise<AgentLoopCheckpoint | undefined>;
 };
 
 export type AgentLoopEvent =
@@ -78,11 +82,12 @@ export class AgentLoopRunner {
       toolCallCount: 0,
       status: "running",
     };
-    if (checkpoint.status === "completed" || checkpoint.status === "failed") {
+    if ((checkpoint.status === "completed" || checkpoint.status === "failed") && !userText.trim()) {
       return { checkpoint, events: checkpoint.finalText ? [{ type: "completed", text: checkpoint.finalText }] : [] };
     }
     if (userText.trim()) checkpoint.messages.push({ role: "user", content: userText });
     checkpoint.status = "running";
+    checkpoint.finalText = undefined;
     const events: AgentLoopEvent[] = [];
 
     while (checkpoint.iterations < this.maxIterations) {
@@ -107,6 +112,16 @@ export class AgentLoopRunner {
         events.push({ type: "assistant.message", text: decision.text });
         await this.store.save(runId, checkpoint);
         return { checkpoint, events };
+      }
+      if (decision.calls.length > 1) {
+        checkpoint.messages.push({ role: "assistant", content: "", toolCalls: decision.calls });
+        const message = "为保证每个工具调用都有明确结果，本轮请逐个调用工具。";
+        for (const call of decision.calls) {
+          checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: message }), toolCallId: call.id, toolName: call.name });
+          events.push({ type: "tool.failed", callId: call.id, name: call.name, error: message });
+        }
+        await this.store.save(runId, checkpoint);
+        continue;
       }
       checkpoint.messages.push({ role: "assistant", content: "", toolCalls: decision.calls });
       for (const call of decision.calls) {
@@ -141,7 +156,7 @@ export class AgentLoopRunner {
         }
         events.push({ type: "tool.started", callId: call.id, name: call.name, input });
         try {
-          const output = await tool.execute(input, { runId, signal });
+          const output = await tool.execute(input, { runId, callId: call.id, idempotencyKey: `${runId}:${call.id}`, attempt: checkpoint.toolCallCount, signal });
           checkpoint.messages.push({ role: "tool", content: JSON.stringify(output), toolCallId: call.id, toolName: call.name });
           events.push({ type: "tool.completed", callId: call.id, name: call.name, output });
         } catch (error) {
@@ -159,7 +174,10 @@ export class AgentLoopRunner {
   }
 
   async resume(runId: string, approval: "approved" | "rejected", signal?: AbortSignal): Promise<AgentLoopResult> {
-    const checkpoint = await this.store.load(runId);
+    const current = await this.store.load(runId);
+    const checkpoint = current?.pendingApproval && this.store.claimPendingApproval
+      ? await this.store.claimPendingApproval(runId, current.pendingApproval.callId)
+      : current;
     if (!checkpoint?.pendingApproval) throw new Error("No pending agent approval");
     const pending = checkpoint.pendingApproval;
     checkpoint.pendingApproval = undefined;
@@ -169,7 +187,7 @@ export class AgentLoopRunner {
     const input = tool.inputSchema.parse(pending.input);
     if (approval === "approved") {
       try {
-        const output = await tool.execute(input, { runId, signal });
+        const output = await tool.execute(input, { runId, callId: pending.callId, idempotencyKey: `${runId}:${pending.callId}`, attempt: checkpoint.toolCallCount, signal });
         checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval, output }), toolCallId: pending.callId, toolName: pending.name });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Tool execution failed";

@@ -71,3 +71,38 @@ $$;
 
 revoke all on function public.commit_loop_document_version(uuid, bigint, uuid, text, text, text, text) from public, anon;
 grant execute on function public.commit_loop_document_version(uuid, bigint, uuid, text, text, text, text) to authenticated;
+
+-- Claim an approval exactly once before executing a side-effecting tool.
+create or replace function public.claim_agent_loop_approval(
+  p_run_id uuid,
+  p_call_id text
+)
+returns jsonb
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  v_owner uuid := auth.uid();
+  v_run public.agent_runs%rowtype;
+  v_checkpoint jsonb;
+begin
+  select * into v_run from public.agent_runs
+  where id = p_run_id and owner_user_id = v_owner for update;
+  if not found then raise exception 'RUN_NOT_FOUND' using errcode = 'P0002'; end if;
+  v_checkpoint := v_run.state->'loopCheckpoint';
+  if v_checkpoint #>> '{pendingApproval,callId}' <> p_call_id then
+    raise exception 'APPROVAL_ALREADY_CLAIMED' using errcode = '40001';
+  end if;
+  update public.agent_runs
+  set state = jsonb_set(state, '{loopCheckpoint,pendingApproval}', 'null'::jsonb, true),
+      resume_cursor = jsonb_set(resume_cursor, '{pendingApproval}', 'null'::jsonb, true),
+      lock_version = lock_version + 1,
+      updated_at = now()
+  where id = p_run_id and owner_user_id = v_owner;
+  return v_checkpoint;
+end;
+$$;
+
+revoke all on function public.claim_agent_loop_approval(uuid, text) from public, anon;
+grant execute on function public.claim_agent_loop_approval(uuid, text) to authenticated;

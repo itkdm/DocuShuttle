@@ -145,8 +145,9 @@ export function Workbench() {
       if (result.checkpoint.status === "failed") throw new Error(result.checkpoint.finalText ?? "Agent Loop 未完成");
       setProposal("pending");
       setProposalSummary(result.checkpoint.pendingApproval ? undefined : result.checkpoint.finalText);
-      setStage(result.checkpoint.pendingApproval ? "awaiting" : "complete");
-      setNotice(result.checkpoint.pendingApproval ? "Agent 已完成读取并请求写入确认" : "Agent 已完成本轮对话");
+      const wrote = result.events.some((event) => event.type === "tool.completed" && event.name === "apply_text_change");
+      setStage(result.checkpoint.pendingApproval ? "awaiting" : wrote ? "complete" : "idle");
+      setNotice(result.checkpoint.pendingApproval ? "Agent 已完成读取并请求写入确认" : wrote ? "Agent 已完成写入并通过版本校验" : "Agent 已完成本轮对话");
     } catch (error) {
       setConversation((items) => [...items, { role: "agent", text: error instanceof Error ? `这次分析没有完成：${error.message}` : "这次分析没有完成，请重试。" }]);
       setStage("idle");
@@ -162,7 +163,8 @@ export function Workbench() {
       const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
       if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
       if (result.checkpoint.status === "completed") {
-        setStage("complete");
+        const wrote = result.events.some((event) => event.type === "tool.completed" && event.name === "apply_text_change");
+        setStage(wrote ? "complete" : "idle");
         if (taskId) {
           const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
           const nextDocument = await loadCurrentTaskDocument(taskId, fileName);

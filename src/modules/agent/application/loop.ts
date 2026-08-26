@@ -185,18 +185,23 @@ export class AgentLoopRunner {
     const tool = this.tools.find((candidate) => candidate.name === pending.name);
     if (!tool) throw new Error(`Unknown agent tool: ${pending.name}`);
     const input = tool.inputSchema.parse(pending.input);
+    const events: AgentLoopEvent[] = [{ type: "tool.started", callId: pending.callId, name: pending.name, input }];
     if (approval === "approved") {
       try {
         const output = await tool.execute(input, { runId, callId: pending.callId, idempotencyKey: `${runId}:${pending.callId}`, attempt: checkpoint.toolCallCount, signal });
         checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval, output }), toolCallId: pending.callId, toolName: pending.name });
+        events.push({ type: "tool.completed", callId: pending.callId, name: pending.name, output });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Tool execution failed";
         checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval, error: message }), toolCallId: pending.callId, toolName: pending.name });
+        events.push({ type: "tool.failed", callId: pending.callId, name: pending.name, error: message });
       }
     } else {
       checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: "rejected", reason: "The user rejected this action." }), toolCallId: pending.callId, toolName: pending.name });
+      events.push({ type: "tool.failed", callId: pending.callId, name: pending.name, error: "User rejected the tool call." });
     }
     await this.store.save(runId, checkpoint);
-    return this.run(runId, "", signal);
+    const continuation = await this.run(runId, "", signal);
+    return { checkpoint: continuation.checkpoint, events: [...events, ...continuation.events] };
   }
 }

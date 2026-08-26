@@ -8,7 +8,7 @@ Cloudflare 管理 `itkdm.com` DNS、HTTPS 边缘保护与必要限流；Vercel �
 
 大文件不经过 Vercel Function 请求体转发，浏览器通过服务端授权的短时签名直接上传私有 Supabase Storage bucket。
 
-DeepSeek 模型 ID 必须通过服务端环境配置，不在代码中长期锁死已弃用别名。2026-08-26 实测基线使用官方当前 `deepseek-v4-flash`；上线前连接测试与结构化输出回归属于发布门槛。
+文本模型通过 OpenAI-compatible Chat Completions 端口接入；DeepSeek、OpenAI 或自托管网关只由服务端 `*_BASE_URL`、`*_MODEL` 和密钥配置决定，不在 UI/领域层锁定供应商。上线前连接测试、普通对话、tool-call 往返和结构化输出回归属于发布门槛。
 
 ## 代码依赖方向
 
@@ -33,7 +33,7 @@ Supabase / AI / DOCX adapters
 ## 运行与一致性
 
 - 数据库是任务状态真源；SSE 仅传输可重连事件。
-- Agent 由可恢复短步骤组成，每个副作用都有幂等键和持久化检查点。
+- Agent 由可恢复模型驱动 Tool Loop 组成；每个 turn、tool call 和副作用都有幂等键与持久化 checkpoint。旧短步骤只保留为兼容事务边界，不负责决定语义流程。
 - `working_documents.current_version_id` 通过 revision/CAS 乐观锁推进。
 - 原始文件和版本文件位于私有 Supabase Storage；数据库只保存对象键、校验和、结构化状态和审计信息。
 - 模型输出是不可信结构化输入，必须校验并限制到当前用户、任务和允许工具。

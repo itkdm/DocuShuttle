@@ -40,6 +40,19 @@ Never treat the historical remote repository as authoritative without reconcilin
 5. Make the smallest coherent vertical slice, then prove it through the real document lifecycle. Do not count mock-only or unit-only success as feature completion.
 6. If browser login state or an external console blocks UI automation, continue all safe code/API verification and report the exact remaining manual action instead of weakening the acceptance criteria.
 
+## Active delivery contract
+
+This project is being delivered as a complete production product, not as a visual prototype. The current objective is the live PaperDuck product on an `itkdm.com` subdomain, with the product requirements in `docs/product/prd.md` treated as the feature source of truth.
+
+- The Agent must use a provider-neutral model-driven Tool Loop. A fixed `analyze → generate → apply → validate` route may remain only as a compatibility transaction boundary while its capabilities are migrated into tools; it must not decide the user's semantic workflow.
+- Agent tools must be independently composable and typed, with explicit read/write/approval capabilities. Document writes always go through the document engine, immutable derived versions, validation, and revision CAS.
+- Every vertical slice must include its use case, adapter boundary, failure behavior, durable state, documentation, tests, and a real DOCX fixture round trip. Mock-only UI success is never completion evidence.
+- Keep layers `UI/API → application → domain → ports → adapters`; do not put provider calls, OOXML mutation, orchestration, or persistence policy in React components or route handlers.
+- Use parallel subagents for disjoint implementation and review scopes when available. The primary agent owns integration, shared-file conflict resolution, final tests, and release decisions. A reviewer must inspect architecture-sensitive changes before release.
+- Research current official documentation and comparable products before making framework or interaction decisions. Record durable decisions in ADRs with links and a reason for not adopting alternatives.
+- During the current delivery phase, browser automation may be temporarily skipped by explicit user instruction. Substitute deterministic API, fixture, export/reopen, persistence, and simulated browser-state checks; retain the browser acceptance checklist and report it as an outstanding release gate rather than claiming it passed.
+- Deployment is part of the objective: verify Vercel build configuration, Supabase migrations/RLS/Storage, Cloudflare DNS and HTTPS, environment variables, health checks, and rollback information. Any console action that requires the user must be listed with the exact values and expected result.
+
 ## Definition of done
 
 A feature is complete only when implementation, relevant automated tests, failure handling, documentation, and real-fixture validation agree. Production work additionally requires a successful deployed flow, observability sufficient to diagnose failures, no leaked secrets, and a documented rollback path.

@@ -111,3 +111,7 @@ export const applyBrowserImageCandidate = async (input: {
 }) => json<{ versionId: string; versionNumber: number; revision: string }>(
   `/api/tasks/${input.taskId}/images/${input.assetId}/apply`, post(input),
 );
+
+export type BrowserImageNode = { nodeId: string; contentType?: string; byteLength: number; path: string };
+export const inspectBrowserTaskDocument = async (taskId: string) =>
+  json<{ revision: string; images: BrowserImageNode[] }>(`/api/tasks/${taskId}/document/inspect`);

@@ -85,3 +85,29 @@ export const createBrowserDocumentExport = async (taskId: string) =>
   json<{ export: { id: string; versionId: string; number: number; revision: string }; downloadUrl: string }>(
     `/api/tasks/${taskId}/export`, post(),
   );
+
+export type BrowserImageCandidate = {
+  id: string;
+  taskId: string;
+  targetNodeId?: string;
+  mimeType: string;
+  downloadUrl: string;
+  provider: string;
+  providerRequestId?: string;
+};
+
+export const generateBrowserImageCandidates = async (input: {
+  taskId: string;
+  prompt: string;
+  targetNodeId?: string;
+  count?: number;
+}) => json<{ candidates: BrowserImageCandidate[] }>(`/api/tasks/${input.taskId}/images`, post(input));
+
+export const applyBrowserImageCandidate = async (input: {
+  taskId: string;
+  assetId: string;
+  targetNodeId: string;
+  expectedRevision: string;
+}) => json<{ versionId: string; versionNumber: number; revision: string }>(
+  `/api/tasks/${input.taskId}/images/${input.assetId}/apply`, post(input),
+);

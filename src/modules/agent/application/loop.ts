@@ -81,6 +81,7 @@ export class AgentLoopRunner {
     private readonly tools: readonly AgentTool[],
     private readonly maxIterations = 12,
     private readonly maxToolCalls = 32,
+    private readonly modelTimeoutMs = 30_000,
   ) {}
 
   async run(runId: string, userText: string, signal?: AbortSignal): Promise<AgentLoopResult> {
@@ -112,17 +113,26 @@ export class AgentLoopRunner {
     while (checkpoint.iterations < this.maxIterations) {
       checkpoint.iterations += 1;
       let decision: AgentModelDecision;
+      const modelController = new AbortController();
+      const abortModel = () => modelController.abort(signal?.reason);
+      const timeout = setTimeout(() => modelController.abort(new Error("模型响应超时")), this.modelTimeoutMs);
+      signal?.addEventListener("abort", abortModel, { once: true });
       try {
-        decision = await this.model.decide({ messages: checkpoint.messages, tools: this.tools, signal });
+        decision = await this.model.decide({ messages: checkpoint.messages, tools: this.tools, signal: modelController.signal });
       } catch (error) {
         // Provider/network failures must become a durable checkpoint instead of
         // leaving the run in `running` forever (or only returning a generic 500).
         // This also gives the UI a truthful, retryable terminal state.
-        const message = error instanceof Error ? error.message : "Model request failed";
+        const message = modelController.signal.aborted && !signal?.aborted
+          ? `模型响应超时（${Math.round(this.modelTimeoutMs / 1000)} 秒）`
+          : error instanceof Error ? error.message : "Model request failed";
         checkpoint.status = "failed";
-        checkpoint.finalText = `这次请求暂时没有完成（模型服务异常）。请稍后重试。\n\n错误信息：${message}`;
+        checkpoint.finalText = `这次请求暂时没有完成（模型服务异常）。${message}，请稍后重试。`;
         await this.store.save(runId, checkpoint);
         return { checkpoint, events: [{ type: "assistant.message", text: checkpoint.finalText }] };
+      } finally {
+        clearTimeout(timeout);
+        signal?.removeEventListener("abort", abortModel);
       }
       if (decision.kind === "message") {
         checkpoint.messages.push({ role: "assistant", content: decision.text });

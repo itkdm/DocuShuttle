@@ -90,6 +90,18 @@ describe("AgentLoopRunner", () => {
     expect((await store.load())?.status).toBe("failed");
   });
 
+  it("times out a provider that never resolves", async () => {
+    const store = new MemoryStore();
+    const result = await new AgentLoopRunner({
+      decide: async ({ signal }) => await new Promise<never>((_, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }),
+    }, store, [], 12, 32, 5).run("run-provider-timeout", "请检查文档");
+    expect(result.checkpoint.status).toBe("failed");
+    expect(result.checkpoint.finalText).toContain("响应超时");
+    expect((await store.load())?.status).toBe("failed");
+  });
+
   it("keeps a completed session conversational for a later user turn", async () => {
     const model: AgentModelPort = { decide: async ({ messages }) => ({
       kind: "message",

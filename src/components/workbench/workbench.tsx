@@ -24,7 +24,7 @@ export function Workbench() {
   const [rightOpen, setRightOpen] = useState(true);
   const [mobilePanel, setMobilePanel] = useState<"none" | "outline" | "agent" | "versions">("none");
   const [proposal, setProposal] = useState<ProposalState>("pending");
-  const [stage, setStage] = useState<AgentStage>("awaiting");
+  const [stage, setStage] = useState<AgentStage>("idle");
   const [assets, setAssets] = useState(initialAssets);
   const [sourceState, setSourceState] = useState<SourceRegistrationState>(emptySourceRegistrationState);
   const [documentLoad, setDocumentLoad] = useState<DocumentLoadState>({ status: "empty" });
@@ -60,14 +60,15 @@ export function Workbench() {
         await refreshVersions(saved.taskId!);
         if (saved.runId) {
           const resumed = await loadBrowserAgentRun(saved.runId);
-          setRun(resumed); setProposalSummary(resumed.proposal?.summary);
+          setRun(resumed);
           try {
             const resumedLoop = await loadBrowserAgentLoop(saved.runId);
             setLoopResult(resumedLoop);
+            setProposalSummary(undefined);
             setConversation(resumedLoop.checkpoint.messages
               .filter((message) => (message.role === "user" || message.role === "assistant") && message.content.trim())
               .map((message) => ({ role: message.role === "user" ? "user" as const : "agent" as const, text: message.content })));
-          } catch { setLoopResult(undefined); }
+          } catch { setLoopResult(undefined); setProposalSummary(resumed.proposal?.summary); }
           setAwaitingFinalReview(resumed.status === "awaiting_review");
           setStage(resumed.status === "awaiting_scope_confirmation" || resumed.status === "awaiting_review" ? "awaiting" : resumed.status === "completed" ? "complete" : "idle");
         }
@@ -149,8 +150,6 @@ export function Workbench() {
       const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
       if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
       if (result.checkpoint.status === "failed") throw new Error(result.checkpoint.finalText ?? "Agent Loop 未完成");
-      setProposal("pending");
-      setProposalSummary(result.checkpoint.pendingApproval ? undefined : result.checkpoint.finalText);
       const wrote = result.events.some((event) => event.type === "tool.completed" && event.name === "apply_text_change");
       setStage(result.checkpoint.pendingApproval ? "awaiting" : wrote ? "complete" : "idle");
       setNotice(result.checkpoint.pendingApproval ? "Agent 已完成读取并请求写入确认" : wrote ? "Agent 已完成写入并通过版本校验" : "Agent 已完成本轮对话");
@@ -169,6 +168,7 @@ export function Workbench() {
       const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
       if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
       if (result.checkpoint.status === "completed") {
+        setProposalSummary(undefined);
         const wrote = result.events.some((event) => event.type === "tool.completed" && event.name === "apply_text_change");
         setStage(wrote ? "complete" : "idle");
         if (taskId) {

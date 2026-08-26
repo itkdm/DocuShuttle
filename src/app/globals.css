@@ -153,6 +153,7 @@ button:focus-visible, textarea:focus-visible, label:has(input:focus-visible) { o
 .message-meta > span { width: 23px; height: 23px; display: grid; place-items: center; border-radius: 50%; background: var(--duck); border: 1px solid #d49b10; font: 700 9px var(--doc-font); }
 .message-meta strong { font-size: 10px; }.message-meta small { font-size: 8px; color: var(--muted); }
 .agent-message p { margin: 9px 0 0 30px; font-size: 11px; line-height: 1.65; color: #4d5049; }
+.agent-rich-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .conversation-message.user { background: #eef4f9; border-color: #c5d7e5; }.conversation-message.agent { background: white; }
 .scope-card { position: relative; border: 1px solid #dfc452; background: #fff9db; padding: 13px; box-shadow: 3px 3px 0 rgba(121,86,0,.12); }
 .scope-kicker { font-size: 8px; letter-spacing: .1em; color: var(--duck-dark); text-transform: uppercase; }.scope-card > strong { display: block; font: 700 15px var(--doc-font); margin-top: 4px; }

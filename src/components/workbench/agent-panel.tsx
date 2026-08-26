@@ -28,6 +28,14 @@ interface AgentPanelProps {
 }
 
 type Tab = "agent" | "plan" | "activity";
+
+function renderAssistantText(text: string) {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    return <span key={index}>{part}</span>;
+  });
+}
+
 export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onRetry, onDecide, mode, proposalSummary, awaitingFinalReview, onFinalReview, imageCandidates = [], imageTargetNodeId, imageNodes = [], imagePrompt, onImageTargetNodeIdChange, onImagePromptChange, onGenerateImages, onApplyImage, imageBusy, run, conversation = [], loopResult, onLoopApproval }: AgentPanelProps) {
   const [tab, setTab] = useState<Tab>("agent");
   const [prompt, setPrompt] = useState("");
@@ -41,12 +49,12 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onRet
         <button className="icon-button" onClick={onCollapse} aria-label="收起 Agent 面板"><PanelRightClose size={17} /></button>
       </div>
       <div className="agent-tabs" role="tablist" aria-label="Agent 面板视图">
-        {(["agent", "plan", "activity"] as const).map((item) => <button key={item} role="tab" aria-selected={tab === item} onClick={() => setTab(item)}>{item === "agent" ? "对话" : item === "plan" ? "计划" : "活动"}{item === "plan" && <span>1</span>}</button>)}
+        {(["agent", "plan", "activity"] as const).map((item) => <button key={item} role="tab" aria-selected={tab === item} onClick={() => setTab(item)}>{item === "agent" ? "对话" : item === "plan" ? "计划" : "活动"}{item === "plan" && loopResult?.checkpoint.pendingApproval && <span>1</span>}</button>)}
       </div>
       <div className="agent-content">
         {tab === "agent" && <>
           <div className="agent-message duck-message"><div className="message-meta"><span>鸭</span><strong>{mode === "production" ? "真实文档运行时" : "尚未连接云端"}</strong><small>{mode === "production" ? "可恢复" : "本地"}</small></div><p>{mode === "production" ? "分析、决定、副作用回执和文档版本都会持久化；刷新页面不会静默覆盖新版本。" : "可以真实预览 DOCX；配置完成后这里会执行持久化 Agent 流程。"}</p></div>
-          {conversation.map((message, index) => <div className={`agent-message conversation-message ${message.role}`} key={`${message.role}-${index}`}><div className="message-meta"><span>{message.role === "user" ? "你" : "鸭"}</span><strong>{message.role === "user" ? "你的目标" : "纸上鸭"}</strong><small>{message.role === "user" ? "刚刚" : "实时回复"}</small></div><p>{message.text}</p></div>)}
+          {conversation.map((message, index) => <div className={`agent-message conversation-message ${message.role}`} key={`${message.role}-${index}`}><div className="message-meta"><span>{message.role === "user" ? "你" : "鸭"}</span><strong>{message.role === "user" ? "你的目标" : "纸上鸭"}</strong><small>{message.role === "user" ? "刚刚" : "实时回复"}</small></div><p className="agent-rich-text">{message.role === "agent" ? renderAssistantText(message.text) : message.text}</p></div>)}
           {proposalSummary && !awaitingFinalReview && !loopResult?.checkpoint.pendingApproval && <div className="scope-card"><span className="scope-kicker">等待范围确认</span><strong>Agent 修改计划</strong><p>{proposalSummary}</p>{proposal === "pending" ? <div className="scope-actions"><button className="primary-small" onClick={() => onDecide("accepted")}><Check size={14} /> 批准并应用</button><button onClick={() => onDecide("rejected")}>拒绝</button></div> : <span className="decision-note">{proposal === "accepted" ? "范围已冻结，正在安全写入" : "已拒绝，原文不变"}</span>}</div>}
           {loopResult?.checkpoint.pendingApproval && <div className="scope-card"><span className="scope-kicker">Agent 请求确认</span><strong>允许执行工具：{loopResult.checkpoint.pendingApproval.name}</strong><p>目标参数已由 Agent 根据当前文档生成。批准后才会产生文档副作用。</p><div className="scope-actions"><button className="primary-small" onClick={() => onLoopApproval?.("approved")}><Check size={14} /> 批准并执行</button><button onClick={() => onLoopApproval?.("rejected")}>拒绝</button></div></div>}
           {awaitingFinalReview && <div className="scope-card"><span className="scope-kicker">最终版本复核</span><strong>新版本已通过 OOXML 重开校验</strong><p>中央画布已切换到生成后的真实 DOCX。确认后完成任务；拒绝会保留审计记录。</p><div className="scope-actions"><button className="primary-small" onClick={() => onFinalReview("approved")}><Check size={14} /> 确认交付</button><button onClick={() => onFinalReview("rejected")}>拒绝版本</button></div></div>}

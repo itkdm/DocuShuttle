@@ -7,15 +7,8 @@ interface OutlinePanelProps {
   onUpload: (kind: UploadAsset["kind"], file?: File) => void;
 }
 
-const outline = [
-  { icon: FileText, label: "实验目的", page: "1" },
-  { icon: FileText, label: "实验环境", page: "1" },
-  { icon: Table2, label: "实验步骤与记录", page: "2", active: true },
-  { icon: ImageIcon, label: "网络拓扑图", page: "3" },
-  { icon: FileText, label: "实验总结", page: "4" },
-];
-
-export function OutlinePanel({ assets, onCollapse, onUpload }: OutlinePanelProps) {
+interface OutlinePanelPropsExtended extends OutlinePanelProps { documentReady?: boolean; imageCount?: number; tableCellCount?: number; }
+export function OutlinePanel({ assets, onCollapse, onUpload, documentReady = false, imageCount = 0, tableCellCount = 0 }: OutlinePanelPropsExtended) {
   const getAsset = (kind: UploadAsset["kind"]) => assets.find((item) => item.kind === kind);
   return (
     <aside className="outline-panel" aria-label="文档结构">
@@ -38,10 +31,10 @@ export function OutlinePanel({ assets, onCollapse, onUpload }: OutlinePanelProps
         })}
       </div>
       <nav className="outline-nav" aria-label="页面内导航">
-        <button className="outline-section" aria-expanded="true"><span>正文 · 4 页</span><ChevronDown size={15} /></button>
-        <ol>{outline.map(({ icon: Icon, label, page, active }) => <li key={label}><button className={active ? "active" : ""}><Icon size={15} /><span>{label}</span><small>{page}</small></button></li>)}</ol>
+        <button className="outline-section" aria-expanded="true"><span>{documentReady ? "已解析的文档节点" : "等待文档解析"}</span><ChevronDown size={15} /></button>
+        <ol>{documentReady ? <><li><div className="outline-node"><FileText size={15} /><span>段落节点</span><small>由 DOCX 解析</small></div></li><li><div className="outline-node"><Table2 size={15} /><span>表格单元格</span><small>{tableCellCount} 个</small></div></li><li><div className="outline-node"><ImageIcon size={15} /><span>图片节点</span><small>{imageCount} 个</small></div></li></> : <li><div className="outline-empty">上传真实 DOCX 后显示结构，不预填示例章节。</div></li>}</ol>
       </nav>
-      <div className="outline-legend"><span><i className="legend-dot generated" /> 待生成 3</span><span><i className="legend-dot locked" /> 已锁定 5</span></div>
+      <div className="outline-legend"><span><i className="legend-dot generated" /> 由 Agent 运行状态决定</span><span><i className="legend-dot locked" /> 未解析节点不显示</span></div>
     </aside>
   );
 }

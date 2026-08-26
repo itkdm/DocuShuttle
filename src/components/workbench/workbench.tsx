@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, ChevronDown, Cloud, Download, FilePlus2, History, Menu, PanelLeftOpen, PanelRightOpen, RotateCcw, Sparkles, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { AgentPanel } from "./agent-panel";
 import { DocumentCanvas } from "./document-canvas";
 import { OutlinePanel } from "./outline-panel";
@@ -42,10 +42,6 @@ export function Workbench() {
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageBusy, setImageBusy] = useState(false);
   const [imageNodes, setImageNodes] = useState<BrowserImageNode[]>([]);
-  const timers = useRef<number[]>([]);
-
-  useEffect(() => () => timers.current.forEach(window.clearTimeout), []);
-
   useEffect(() => {
     if (!productionPersistenceConfigured()) return;
     const raw = window.localStorage.getItem(workspaceResumeKey);
@@ -119,16 +115,7 @@ export function Workbench() {
       }
       return;
     }
-    setProposal(decision);
-    setNotice(decision === "accepted" ? "演示建议已接受；当前 DOCX 字节不会改变" : decision === "rejected" ? "演示建议已拒绝，文档保持不变" : "演示决定已重置");
-    if (decision !== "accepted") return;
-    setStage("applying");
-    const timer = window.setTimeout(() => {
-      setStage("complete");
-      setVersions((items) => items.some((item) => item.id === "demo-2") ? items : [{ id: "demo-2", label: "HITL 界面演示（未写回）", time: "刚刚", actor: "纸上鸭", current: true }, ...items.map((item) => ({ ...item, current: false }))]);
-      setNotice("HITL 界面演示完成；下载仍是原始 DOCX");
-    }, 1300);
-    timers.current.push(timer);
+    setNotice("当前是本地预览模式；未连接持久化 Agent，不会伪造批准或版本写回。请先配置云端工作区。");
   };
 
   const runAgent = async (prompt: string) => {
@@ -254,7 +241,6 @@ export function Workbench() {
     setVersionsOpen(false); setMobilePanel("none"); setNotice(`已从 ${id} 创建新的恢复版本，历史记录仍完整保留`);
   };
   const cancelRun = async () => {
-    timers.current.forEach(window.clearTimeout); timers.current = [];
     try { if (run && cloudSaved) setRun(await cancelBrowserAgentRun(run.id)); } catch { /* persisted latest state wins */ }
     setStage("idle"); setNotice("任务已取消，最近有效版本未受影响");
   };
@@ -298,9 +284,9 @@ export function Workbench() {
       {versionsOpen && <div className="version-popover" role="dialog" aria-label="版本历史"><div className="version-heading"><div><span className="eyebrow">不可变历史</span><h2>版本记录</h2></div><button className="icon-button" onClick={() => setVersionsOpen(false)} aria-label="关闭版本记录"><X size={16} /></button></div><p>恢复会创建新版本，不会删除后续记录。</p><ol>{versions.map((version) => <li key={version.id} className={version.current ? "current" : ""}><span className="version-node">{version.current ? <Check size={12} /> : version.id.slice(1)}</span><div><strong>{version.label}</strong><small>{version.id} · {version.actor} · {version.time}</small></div>{!version.current && <button onClick={() => restoreVersion(version.id)}><RotateCcw size={12} /> 恢复</button>}</li>)}</ol></div>}
 
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
-        {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
+        {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} imageCount={imageNodes.length} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
         <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} proposal={proposal} onChoose={chooseWorkingDocument} onDecide={decide} liveAgent={cloudSaved} proposalSummary={proposalSummary} /></div>
-        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onRetry={retry} onDecide={decide} mode={cloudSaved ? "production" : "local"} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
+        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onRetry={retry} onDecide={decide} mode={cloudSaved ? "production" : "local"} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 
       <div className="mobile-dock" aria-label="移动端工作台导航"><button onClick={() => setMobilePanel("outline")} className={mobilePanel === "outline" ? "active" : ""}><FilePlus2 size={18} /><span>文档</span></button><button onClick={() => setMobilePanel("agent")} className={mobilePanel === "agent" ? "active" : ""}><Sparkles size={18} /><span>审批</span><i>1</i></button><button onClick={() => setMobilePanel("versions")} className={mobilePanel === "versions" ? "active" : ""}><History size={18} /><span>版本</span></button><button onClick={downloadCurrent}><Download size={18} /><span>下载</span></button></div>

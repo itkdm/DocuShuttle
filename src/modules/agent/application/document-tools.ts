@@ -67,12 +67,22 @@ export function createDocumentTools(
 
   const listRegions: AgentTool<typeof regionListSchema> = {
     name: "list_document_regions",
-    description: "List stable paragraph, table-cell and image node IDs from the current Word document.",
+    description: "List stable document nodes and short text previews so the requested region can be located without guessing.",
     inputSchema: regionListSchema,
     async execute(input) {
       const { inspection } = await inspectCurrent(documents, working);
       const nodes = inspection.manifest.nodes.filter((node) => input.kind === "all" || node.kind === input.kind);
-      return { revision: inspection.manifest.revision, nodes };
+      const textByNodeId = new Map([
+        ...inspection.paragraphs.map((paragraph) => [paragraph.address.nodeId, paragraph.text] as const),
+        ...inspection.tableCells.map((cell) => [cell.address.nodeId, cell.text] as const),
+      ]);
+      return {
+        revision: inspection.manifest.revision,
+        nodes: nodes.map((node) => {
+          const text = textByNodeId.get(node.nodeId);
+          return text === undefined ? node : { ...node, text: text.length > 240 ? `${text.slice(0, 240)}…` : text };
+        }),
+      };
     },
   };
 

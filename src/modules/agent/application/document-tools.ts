@@ -1,0 +1,116 @@
+import { z } from "zod";
+
+import type { DocumentEnginePort } from "@/modules/documents/application/document-engine-port";
+import type { DocumentInspection, ParagraphAddress, TableCellAddress } from "@/modules/documents/domain/types";
+
+import type { AgentTool } from "./loop";
+
+export type WorkingDocumentAccessPort = {
+  load(): Promise<{ bytes: Uint8Array; revision: string }>;
+  commit(input: {
+    expectedRevision: string;
+    bytes: Uint8Array;
+    revision: string;
+    changedEntries: readonly string[];
+  }): Promise<{ revision: string }>;
+};
+
+const nodeIdSchema = z.string().trim().min(1).max(300);
+const emptySchema = z.object({});
+const regionListSchema = z.object({ kind: z.enum(["all", "paragraph", "table-cell", "image"]).default("all") });
+const regionReadSchema = z.object({ nodeId: nodeIdSchema });
+const textChangeSchema = z.object({
+  nodeId: nodeIdSchema,
+  expectedRevision: z.string().trim().min(1).max(300),
+  expectedText: z.string().min(1).max(20_000),
+  replacement: z.string().min(1).max(20_000),
+});
+
+const summarizeInspection = (inspection: DocumentInspection) => ({
+  revision: inspection.manifest.revision,
+  counts: {
+    paragraphs: inspection.paragraphs.length,
+    tableCells: inspection.tableCells.length,
+    images: inspection.images.length,
+  },
+  diagnostics: inspection.diagnostics,
+});
+
+async function inspectCurrent(
+  documents: DocumentEnginePort,
+  working: WorkingDocumentAccessPort,
+): Promise<{ bytes: Uint8Array; inspection: DocumentInspection }> {
+  const current = await working.load();
+  const inspection = await documents.inspect(current.bytes);
+  if (inspection.manifest.revision !== current.revision) {
+    throw new Error("WORKING_DOCUMENT_REVISION_MISMATCH");
+  }
+  if (inspection.diagnostics.some(({ severity }) => severity === "error")) {
+    throw new Error("WORKING_DOCUMENT_INSPECTION_FAILED");
+  }
+  return { bytes: current.bytes, inspection };
+}
+
+export function createDocumentTools(
+  documents: DocumentEnginePort,
+  working: WorkingDocumentAccessPort,
+): readonly AgentTool[] {
+  const inspectDocument: AgentTool<typeof emptySchema> = {
+    name: "inspect_document",
+    description: "Read the current Word document structure, counts, diagnostics and revision without modifying it.",
+    inputSchema: emptySchema,
+    async execute() {
+      const { inspection } = await inspectCurrent(documents, working);
+      return summarizeInspection(inspection);
+    },
+  };
+
+  const listRegions: AgentTool<typeof regionListSchema> = {
+    name: "list_document_regions",
+    description: "List stable paragraph, table-cell and image node IDs from the current Word document.",
+    inputSchema: regionListSchema,
+    async execute(input) {
+      const { inspection } = await inspectCurrent(documents, working);
+      const nodes = inspection.manifest.nodes.filter((node) => input.kind === "all" || node.kind === input.kind);
+      return { revision: inspection.manifest.revision, nodes };
+    },
+  };
+
+  const readRegion: AgentTool<typeof regionReadSchema> = {
+    name: "read_document_region",
+    description: "Read the current text for one stable paragraph or table-cell node.",
+    inputSchema: regionReadSchema,
+    async execute(input) {
+      const { inspection } = await inspectCurrent(documents, working);
+      const paragraph = inspection.paragraphs.find(({ address }) => address.nodeId === input.nodeId);
+      if (paragraph) return { revision: inspection.manifest.revision, nodeId: input.nodeId, kind: "paragraph", text: paragraph.text };
+      const cell = inspection.tableCells.find(({ address }) => address.nodeId === input.nodeId);
+      if (cell) return { revision: inspection.manifest.revision, nodeId: input.nodeId, kind: "table-cell", text: cell.text };
+      throw new Error("DOCUMENT_REGION_NOT_FOUND");
+    },
+  };
+
+  const applyTextChange: AgentTool<typeof textChangeSchema> = {
+    name: "apply_text_change",
+    description: "Apply one exact text replacement to a paragraph or table cell after the user approves it. Creates one immutable derived document version.",
+    requiresApproval: true,
+    inputSchema: textChangeSchema,
+    async execute(input) {
+      const current = await inspectCurrent(documents, working);
+      if (current.inspection.manifest.revision !== input.expectedRevision) throw new Error("DOCUMENT_REVISION_CONFLICT");
+      const paragraph = current.inspection.paragraphs.find(({ address }) => address.nodeId === input.nodeId);
+      const cell = current.inspection.tableCells.find(({ address }) => address.nodeId === input.nodeId);
+      if (!paragraph && !cell) throw new Error("DOCUMENT_REGION_NOT_FOUND");
+      const operation = paragraph
+        ? { kind: "replace-text" as const, address: paragraph.address as ParagraphAddress, expectedText: input.expectedText, replacement: input.replacement }
+        : { kind: "set-cell-text" as const, address: cell!.address as TableCellAddress, expectedText: input.expectedText, text: input.replacement };
+      const mutation = await documents.mutate(current.bytes, { expectedRevision: input.expectedRevision, operations: [operation] });
+      const validated = await documents.validate(mutation.bytes);
+      if (validated.diagnostics.some(({ severity }) => severity === "error")) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
+      const committed = await working.commit({ expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
+      return { nodeId: input.nodeId, previousRevision: input.expectedRevision, revision: committed.revision, changedEntries: mutation.changedEntries };
+    },
+  };
+
+  return [inspectDocument, listRegions, readRegion, applyTextChange];
+}

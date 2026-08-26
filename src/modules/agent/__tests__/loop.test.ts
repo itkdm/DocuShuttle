@@ -27,6 +27,7 @@ describe("AgentLoopRunner", () => {
     expect(result.checkpoint.status).toBe("completed");
     expect(result.events.map((event) => event.type)).toEqual(["tool.started", "tool.completed", "assistant.message", "completed"]);
     expect(result.checkpoint.messages.some((message) => message.role === "tool")).toBe(true);
+    expect(result.checkpoint.messages.some((message) => message.role === "assistant" && message.toolCalls?.[0]?.name === "inspect_document")).toBe(true);
   });
 
   it("pauses before an approval-required tool and resumes from its checkpoint", async () => {
@@ -49,6 +50,7 @@ describe("AgentLoopRunner", () => {
     expect(paused.events[0]?.type).toBe("approval.required");
     const resumed = await runner.resume("run-2", "approved");
     expect(resumed.checkpoint.status).toBe("completed");
+    expect(resumed.checkpoint.messages.some((message) => message.toolName === "apply_change" && message.content.includes("revision"))).toBe(true);
   });
 
   it("records tool failures as tool messages so the model can recover", async () => {

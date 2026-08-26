@@ -27,6 +27,21 @@ export const loadBrowserAgentRun = async (runId: string) =>
 export const advanceBrowserAgentRun = async (runId: string) =>
   (await json<AdvanceResponse>(`/api/agent/runs/${runId}/advance`, post())).run;
 
+export type BrowserAgentLoopResult = {
+  checkpoint: {
+    status: "running" | "awaiting_user" | "completed" | "failed";
+    finalText?: string;
+    iterations: number;
+  };
+  events: ReadonlyArray<{ type: string; [key: string]: unknown }>;
+};
+
+export const runBrowserAgentLoop = async (runId: string, message: string) =>
+  json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop`, post({ message }));
+
+export const resumeBrowserAgentLoop = async (runId: string, approval: "approved" | "rejected") =>
+  json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop/resume`, post({ approval }));
+
 export const decideBrowserAgentRun = async (runId: string, choice: "approved" | "rejected") =>
   (await json<AgentResponse>(`/api/agent/runs/${runId}/decision`, post({
     commandId: crypto.randomUUID(),

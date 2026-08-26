@@ -2,6 +2,7 @@ export * from "./application/events";
 export * from "./application/ports";
 export * from "./application/runtime";
 export * from "./application/loop";
+export * from "./application/document-tools";
 export * from "./infrastructure/openai-compatible-model";
 export * from "./domain/errors";
 export * from "./domain/model";

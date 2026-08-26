@@ -4,6 +4,8 @@ export type AgentLoopMessage = {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
   toolCallId?: string;
+  toolName?: string;
+  toolCalls?: ReadonlyArray<{ id: string; name: string; input: unknown }>;
 };
 
 export type AgentToolContext = {
@@ -35,6 +37,7 @@ export interface AgentModelPort {
 export type AgentLoopCheckpoint = {
   messages: AgentLoopMessage[];
   iterations: number;
+  toolCallCount: number;
   pendingApproval?: { callId: string; name: string; input: unknown };
   status: "running" | "awaiting_user" | "completed" | "failed";
   finalText?: string;
@@ -64,6 +67,7 @@ export class AgentLoopRunner {
     private readonly store: AgentLoopStore,
     private readonly tools: readonly AgentTool[],
     private readonly maxIterations = 12,
+    private readonly maxToolCalls = 32,
   ) {}
 
   async run(runId: string, userText: string, signal?: AbortSignal): Promise<AgentLoopResult> {
@@ -71,12 +75,13 @@ export class AgentLoopRunner {
     const checkpoint: AgentLoopCheckpoint = current ?? {
       messages: [],
       iterations: 0,
+      toolCallCount: 0,
       status: "running",
     };
     if (checkpoint.status === "completed" || checkpoint.status === "failed") {
       return { checkpoint, events: checkpoint.finalText ? [{ type: "completed", text: checkpoint.finalText }] : [] };
     }
-    checkpoint.messages.push({ role: "user", content: userText });
+    if (userText.trim()) checkpoint.messages.push({ role: "user", content: userText });
     checkpoint.status = "running";
     const events: AgentLoopEvent[] = [];
 
@@ -103,10 +108,30 @@ export class AgentLoopRunner {
         await this.store.save(runId, checkpoint);
         return { checkpoint, events };
       }
+      checkpoint.messages.push({ role: "assistant", content: "", toolCalls: decision.calls });
       for (const call of decision.calls) {
+        checkpoint.toolCallCount += 1;
+        if (checkpoint.toolCallCount > this.maxToolCalls) {
+          checkpoint.status = "failed";
+          checkpoint.finalText = "Agent stopped after reaching its tool-call safety budget.";
+          await this.store.save(runId, checkpoint);
+          return { checkpoint, events };
+        }
         const tool = this.tools.find((candidate) => candidate.name === call.name);
-        if (!tool) throw new Error(`Unknown agent tool: ${call.name}`);
-        const input = tool.inputSchema.parse(call.input);
+        if (!tool) {
+          checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: `Unknown agent tool: ${call.name}` }), toolCallId: call.id, toolName: call.name });
+          events.push({ type: "tool.failed", callId: call.id, name: call.name, error: `Unknown agent tool: ${call.name}` });
+          continue;
+        }
+        let input: unknown;
+        try {
+          input = tool.inputSchema.parse(call.input);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Tool input validation failed";
+          checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: message }), toolCallId: call.id, toolName: call.name });
+          events.push({ type: "tool.failed", callId: call.id, name: call.name, error: message });
+          continue;
+        }
         if (tool.requiresApproval) {
           checkpoint.pendingApproval = { callId: call.id, name: call.name, input };
           checkpoint.status = "awaiting_user";
@@ -117,11 +142,11 @@ export class AgentLoopRunner {
         events.push({ type: "tool.started", callId: call.id, name: call.name, input });
         try {
           const output = await tool.execute(input, { runId, signal });
-          checkpoint.messages.push({ role: "tool", content: JSON.stringify(output), toolCallId: call.id });
+          checkpoint.messages.push({ role: "tool", content: JSON.stringify(output), toolCallId: call.id, toolName: call.name });
           events.push({ type: "tool.completed", callId: call.id, name: call.name, output });
         } catch (error) {
           const message = error instanceof Error ? error.message : "Tool execution failed";
-          checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: message }), toolCallId: call.id });
+          checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: message }), toolCallId: call.id, toolName: call.name });
           events.push({ type: "tool.failed", callId: call.id, name: call.name, error: message });
         }
       }
@@ -139,8 +164,21 @@ export class AgentLoopRunner {
     const pending = checkpoint.pendingApproval;
     checkpoint.pendingApproval = undefined;
     checkpoint.status = "running";
-    checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval }), toolCallId: pending.callId });
+    const tool = this.tools.find((candidate) => candidate.name === pending.name);
+    if (!tool) throw new Error(`Unknown agent tool: ${pending.name}`);
+    const input = tool.inputSchema.parse(pending.input);
+    if (approval === "approved") {
+      try {
+        const output = await tool.execute(input, { runId, signal });
+        checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval, output }), toolCallId: pending.callId, toolName: pending.name });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Tool execution failed";
+        checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval, error: message }), toolCallId: pending.callId, toolName: pending.name });
+      }
+    } else {
+      checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: "rejected", reason: "The user rejected this action." }), toolCallId: pending.callId, toolName: pending.name });
+    }
     await this.store.save(runId, checkpoint);
-    return this.run(runId, "Continue from the approved tool decision.", signal);
+    return this.run(runId, "", signal);
   }
 }

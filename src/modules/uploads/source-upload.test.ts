@@ -7,7 +7,7 @@ import type { TaskRepositoryPort } from "@/modules/tasks/ports";
 
 import { CompleteSourceUpload } from "./complete-source-upload";
 import { CreateSourceUpload } from "./create-source-upload";
-import { emptySourceRegistrationState, reduceSourceRegistration } from "./source-role-semantics";
+import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration } from "./source-role-semantics";
 
 const ownerUserId = "1e56a54a-5e96-4cc0-9430-702a68b21c63";
 const taskId = "0872a73c-d403-429c-9ca7-d0e629b36c69";
@@ -177,5 +177,13 @@ describe("template/example ordering", () => {
     expect(replaced.workingDocumentId).toBe("working-1");
     expect(replaced.workingTemplateSourceId).toBe("template-2");
     expect(replaced.example?.sourceFileId).toBe("example-1");
+  });
+
+  it("allows the first example to seed the editable document", () => {
+    const firstExample = registration("example", "example-1", "working-1");
+    const state = reduceSourceRegistration(emptySourceRegistrationState(), firstExample);
+
+    expect(state.workingDocumentId).toBe("working-1");
+    expect(isWorkingDocumentUpload("example", firstExample)).toBe(true);
   });
 });

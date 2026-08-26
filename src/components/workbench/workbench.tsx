@@ -152,19 +152,20 @@ export function Workbench() {
   const upload = async (kind: UploadAsset["kind"], file?: File) => {
     if (!file) return;
     const isTemplate = kind === "template";
+    const maySeedWorkingDocument = isTemplate || !sourceState.workingDocumentId;
     // Reference examples are persisted but must never replace the document
     // currently rendered in the canvas. Only a template upload changes it.
-    if (isTemplate) setDocumentLoad({ status: "loading", fileName: file.name });
+    if (maySeedWorkingDocument) setDocumentLoad({ status: "loading", fileName: file.name });
     setNotice(`正在本地检查 ${file.name}`);
     try {
       const bytes = await readDocxFile(file);
       const next = { kind, name: file.name, size: formatFileSize(file.size) };
       setAssets((items) => [...items.filter((item) => item.kind !== kind), next]);
-      if (isTemplate) {
+      if (maySeedWorkingDocument && !productionPersistenceConfigured()) {
         setDocumentLoad({ status: "ready", document: { file, bytes } });
-        setVersions([{ id: "local", label: "本地原始模板", time: "刚刚", actor: "你", current: true }]);
+        setVersions([{ id: "local", label: isTemplate ? "本地原始模板" : "本地原始示例", time: "刚刚", actor: "你", current: true }]);
         setCloudSaved(false);
-      } else {
+      } else if (!maySeedWorkingDocument) {
         // Reference context changed, so any proposal generated without this
         // example is stale even though the Working Document bytes are stable.
         setRun(undefined);
@@ -181,7 +182,9 @@ export function Workbench() {
         setTaskId(persisted.taskId);
         const createsWorkingDocument = isWorkingDocumentUpload(kind, persisted);
         const hadWorkingDocument = Boolean(sourceState.workingDocumentId);
-        if (isTemplate && createsWorkingDocument && !hadWorkingDocument) {
+        if (createsWorkingDocument && !hadWorkingDocument) {
+          setDocumentLoad({ status: "ready", document: { file, bytes } });
+          setVersions([{ id: persisted.versionId ?? "local", label: isTemplate ? "原始模板" : "完成示例", time: "刚刚", actor: "你", current: true }]);
           setCloudSaved(true);
           await refreshVersions(persisted.taskId);
           setNotice(`${file.name} 已保存为 Working Document，并建立版本 v1`);

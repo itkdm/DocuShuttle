@@ -16,6 +16,8 @@ const eslintConfig = defineConfig([
     "research/document-engine/poc-superdoc/**",
     ".remote-audit/**",
     ".docx-audit/**",
+    "playwright-report/**",
+    "test-results/**",
   ]),
 ]);
 

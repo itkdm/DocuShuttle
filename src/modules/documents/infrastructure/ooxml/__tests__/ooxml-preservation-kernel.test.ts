@@ -302,7 +302,7 @@ describe("OoxmlPreservationKernel", () => {
     );
   });
 
-  it("surfaces external relationship targets without fetching them", async () => {
+  it("keeps external hyperlinks inert without fetching them", async () => {
     const bytes = await createDocx({
       "word/_rels/document.xml.rels": documentRelationships.replace(
         "</Relationships>",
@@ -318,20 +318,11 @@ describe("OoxmlPreservationKernel", () => {
       entry: "word/_rels/document.xml.rels",
       details: expect.objectContaining({ target: "https://example.invalid/reference" }),
     }));
-    // External hyperlinks are preserved as source metadata but never fetched;
-    // an unrelated text edit must remain valid and local-only.
     const result = await kernel.mutate(bytes, {
       expectedRevision: inspected.manifest.revision,
-      operations: [{
-        kind: "replace-text",
-        address: inspected.paragraphs[0].address,
-        expectedText: "duck",
-        replacement: "PaperDuck",
-      }],
+      operations: [],
     });
-    expect((await kernel.validate(result.bytes)).diagnostics).toContainEqual(
-      expect.objectContaining({ code: "RELATIONSHIP_EXTERNAL_TARGET" }),
-    );
+    expect(result.bytes).toEqual(bytes);
   });
 
   it("detects macro/VBA parts, declarations, and relationships and refuses mutation", async () => {

@@ -34,9 +34,9 @@ POC 与机器可读报告位于 `research/document-engine/poc-superdoc`；包含
 
 ### V1 安全边界（2026-08-26）
 
-- `TargetMode="External"` relationship 不会被解析、下载或跟随；检查结果以
-  `RELATIONSHIP_EXTERNAL_TARGET` warning 暴露目标、类型和来源部件，原始关系只在
-  immutable package 中保留。后续应用层可以按关系类型决定是否允许导出。
+- `TargetMode="External"` relationship 不会被解析、下载或跟随。普通外部关系以
+  `RELATIONSHIP_EXTERNAL_TARGET` error 拒绝；普通 Word 超链接只以 warning 暴露，作为
+  inert metadata 保留，不触发网络访问。
 - 含 `vbaProject.bin`/`vbaData.bin`、VBA relationship，或 macro-enabled/VBA content
   type 的包统一返回 `MACRO_CONTENT_UNSUPPORTED` error。上传完成和任何 mutation 都拒绝
   这类包；V1 不执行、不重写，也不承诺保留宏。

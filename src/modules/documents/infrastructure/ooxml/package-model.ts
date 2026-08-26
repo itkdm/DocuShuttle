@@ -132,14 +132,12 @@ function validateRelationships(
       }
       ids.add(attrs.Id);
       // External targets are valid OPC, but they are not package parts and
-      // must never be silently treated as local data.  We preserve them in
-      // the immutable source while surfacing them to callers so the UI and
-      // upload policy can make an explicit decision (for example, external
-      // hyperlinks are normally safe to preserve, whereas external template
-      // relationships may not be).
+      // must never be silently treated as local data. Hyperlinks are retained
+      // as inert metadata; every other external relationship is rejected at
+      // the upload boundary so later consumers cannot fetch an untrusted URL.
       if (attrs.TargetMode?.toLowerCase() === "external") {
         diagnostics.push({
-          severity: "warning",
+          severity: attrs.Type?.toLowerCase().endsWith("/hyperlink") ? "warning" : "error",
           code: "RELATIONSHIP_EXTERNAL_TARGET",
           message: `Relationship ${attrs.Id} targets an external resource and is not fetched by PaperDuck.`,
           entry: path,

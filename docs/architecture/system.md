@@ -37,6 +37,8 @@ Supabase / AI / DOCX adapters
 - `working_documents.current_version_id` 通过 revision/CAS 乐观锁推进。
 - 原始文件和版本文件位于私有 Supabase Storage；数据库只保存对象键、校验和、结构化状态和审计信息。
 - 模型输出是不可信结构化输入，必须校验并限制到当前用户、任务和允许工具。
+- 图片候选通过 `POST /api/tasks/:taskId/images` 进入独立的 Generation 用例：APIMart 只返回供应商结果，应用层将候选下载为受限 MIME/大小的二进制，写入私有 `assets` 对象并返回短时签名 URL。API 不暴露供应商密钥，也不把供应商 URL 当作持久化文档地址。
+- 图片候选 DTO 可带 `targetNodeId`，但候选生成不会修改 Working Document；只有后续显式选择/确认步骤才能构造 `replace-image` 操作并进入 OOXML 版本提交。
 
 ## 安全边界
 

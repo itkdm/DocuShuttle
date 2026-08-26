@@ -154,6 +154,20 @@ export function Workbench() {
       setStage(result.checkpoint.pendingApproval ? "awaiting" : wrote ? "complete" : "idle");
       setNotice(result.checkpoint.pendingApproval ? "Agent 已完成读取并请求写入确认" : wrote ? "Agent 已完成写入并通过版本校验" : "Agent 已完成本轮对话");
     } catch (error) {
+      // A model/provider can fail after the loop has durably saved an approval
+      // checkpoint. Recover that checkpoint so the user sees the real next
+      // action instead of a misleading generic failure message.
+      if (run) {
+        try {
+          const recovered = await loadBrowserAgentLoop(run.id);
+          if (recovered.checkpoint.pendingApproval) {
+            setLoopResult(recovered);
+            setStage("awaiting");
+            setNotice("Agent 已完成读取并请求写入确认");
+            return;
+          }
+        } catch { /* preserve the original error below */ }
+      }
       setConversation((items) => [...items, { role: "agent", text: error instanceof Error ? `这次分析没有完成：${error.message}` : "这次分析没有完成，请重试。" }]);
       setStage("idle");
       setNotice(error instanceof Error ? error.message : "Agent 分析失败");

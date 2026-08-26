@@ -112,6 +112,30 @@ describe("complete source upload", () => {
     })).rejects.toThrow("UPLOAD_CHECKSUM_MISMATCH");
     expect(storage.remove).toHaveBeenCalledOnce();
   });
+
+  it("rejects documents with unsafe inspection diagnostics", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const tasks = createTasks();
+    const storage = createStorage(bytes);
+    const documents = {
+      inspect: vi.fn().mockResolvedValue({
+        ...inspection,
+        diagnostics: [{ severity: "error", code: "RELATIONSHIP_TARGET_MISSING", message: "broken relationship" }],
+      }),
+    } as unknown as DocumentEnginePort;
+
+    await expect(new CompleteSourceUpload(tasks, storage, documents).execute({
+      ownerUserId,
+      taskId,
+      role: "template",
+      originalName: "损坏模板.docx",
+      objectKey: `users/${ownerUserId}/tasks/${taskId}/sources/broken.docx`,
+      expectedBytes: bytes.byteLength,
+      expectedSha256: await sha256(bytes),
+    })).rejects.toThrow("DOCX_INSPECTION_FAILED");
+    expect(tasks.registerSource).not.toHaveBeenCalled();
+    expect(storage.remove).toHaveBeenCalledOnce();
+  });
 });
 
 describe("template/example ordering", () => {

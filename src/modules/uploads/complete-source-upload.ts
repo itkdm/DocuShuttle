@@ -44,6 +44,9 @@ export class CompleteSourceUpload {
     let manifestObjectKey: string | undefined;
     try {
       const inspection = await this.documents.inspect(bytes);
+      if (inspection.diagnostics.some(({ severity }) => severity === "error")) {
+        throw new Error("DOCX_INSPECTION_FAILED");
+      }
       manifestObjectKey = buildTaskObjectKey({
         userId: input.ownerUserId,
         taskId: input.taskId,

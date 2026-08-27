@@ -197,8 +197,8 @@ export function Workbench() {
           durableConversationLoaded = durable.messages.length > 0;
           setConversationCursor(durable.nextCursor);
           setConversation(projectAgentThread({ messages: durable.messages, historicalEvents: [], activeEvents: [] }).turns.flatMap((turn) => [
-            { id: turn.user.id, role: "user" as const, text: turn.user.content, status: turn.user.deliveryStatus },
-            ...(turn.assistant.finalContent ? [{ id: turn.assistant.messageId, role: "agent" as const, text: turn.assistant.finalContent, status: "sent" as const }] : []),
+            { id: turn.user.id, role: "user" as const, text: turn.user.content, runId: turn.runId, status: turn.user.deliveryStatus },
+            ...(turn.assistant.finalContent ? [{ id: turn.assistant.messageId, role: "agent" as const, text: turn.assistant.finalContent, runId: turn.runId, status: "sent" as const }] : []),
           ]));
         }
         if (documentResult.status === "fulfilled" && documentResult.value) {
@@ -282,7 +282,7 @@ export function Workbench() {
       const older = page.messages.flatMap((message) => {
         const text = message.parts.find((part) => part.type === "text")?.text;
         if (!text || (message.role !== "user" && message.role !== "assistant")) return [];
-        return [{ id: message.id, role: message.role === "user" ? "user" as const : "agent" as const, text, status: message.delivery_status ?? "sent" }];
+        return [{ id: message.id, role: message.role === "user" ? "user" as const : "agent" as const, text, runId: message.run_id ?? undefined, createdAt: message.created_at, status: message.delivery_status ?? "sent" }];
       });
       setConversation((items) => [...older, ...items]);
       setConversationCursor(page.nextCursor);

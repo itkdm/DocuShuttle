@@ -1,7 +1,7 @@
 import { useCallback, useReducer } from "react";
 import type { BrowserAgentLoopResult } from "@/modules/agent/browser-runtime";
 
-export type ConversationMessage = { id?: string; role: "user" | "agent"; text: string; status?: "pending" | "sent" | "failed" };
+export type ConversationMessage = { id?: string; role: "user" | "agent"; text: string; runId?: string; createdAt?: string; status?: "pending" | "sent" | "failed" };
 type Event = BrowserAgentLoopResult["events"][number];
 type State = { conversation: ConversationMessage[]; loopResult?: BrowserAgentLoopResult; liveEvents: Event[]; timelineHistory: Event[] };
 type Action =

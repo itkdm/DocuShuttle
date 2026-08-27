@@ -98,7 +98,7 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
   const currentTimeline = liveEvents.length ? liveEvents : loopResult?.events ?? [];
   const timelineEvents = [...timelineHistory, ...currentTimeline];
   const turns = projectAgentThread({
-    messages: conversation.map((message, index) => ({ id: message.id ?? `local:${index}`, role: message.role === "agent" ? "assistant" as const : "user" as const, parts: [{ type: "text", text: message.text }], run_id: run?.id ?? null, created_at: "", message_key: message.id ?? `local:${index}`, delivery_status: message.status })),
+    messages: conversation.map((message, index) => ({ id: message.id ?? `local:${index}`, role: message.role === "agent" ? "assistant" as const : "user" as const, parts: [{ type: "text", text: message.text }], run_id: message.runId ?? null, created_at: message.createdAt ?? "", message_key: message.id ?? `local:${index}`, delivery_status: message.status })),
     historicalEvents: timelineHistory,
     activeEvents: currentTimeline,
     activeRunId: run?.id,

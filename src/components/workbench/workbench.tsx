@@ -354,7 +354,7 @@ export function Workbench() {
     // Reference examples are persisted but must never replace the document
     // currently rendered in the canvas. Only a template upload changes it.
     if (maySeedWorkingDocument) setDocumentLoad({ status: "loading", fileName: file.name });
-    setNotice(`正在本地检查 ${file.name}`);
+    setNotice(`正在检查 ${file.name}`);
     try {
       const bytes = await readDocxFile(file);
       setLoopResult(undefined);

@@ -5,8 +5,9 @@ import { AgentLoopRunner, type AgentLoopCheckpoint, type AgentModelPort, type Ag
 
 class MemoryStore {
   private value?: AgentLoopCheckpoint;
+  saves = 0;
   async load() { return this.value; }
-  async save(_runId: string, checkpoint: AgentLoopCheckpoint) { this.value = structuredClone(checkpoint); }
+  async save(_runId: string, checkpoint: AgentLoopCheckpoint) { this.saves += 1; this.value = structuredClone(checkpoint); }
 }
 
 const inspectTool: AgentTool = {
@@ -29,6 +30,19 @@ describe("AgentLoopRunner", () => {
     expect(result.checkpoint.messages.some((message) => message.role === "tool")).toBe(true);
     expect(result.checkpoint.messages.some((message) => message.role === "assistant" && message.toolCalls?.[0]?.name === "inspect_document")).toBe(true);
     expect(result.events.every((event) => typeof event.eventId === "string")).toBe(true);
+  });
+
+  it("does not duplicate the checkpoint save after a tool result", async () => {
+    const store = new MemoryStore();
+    let hasToolResult = false;
+    const model: AgentModelPort = { decide: async ({ messages }) => {
+      if (messages.some((message) => message.role === "tool")) return { kind: "message", text: "已完成。" };
+      return { kind: "tool_calls", calls: [{ id: "save-once", name: "inspect_document", input: { query: "summary" } }] };
+    } };
+    const tool: AgentTool = { ...inspectTool, async execute() { hasToolResult = true; return { ok: true }; } };
+    await new AgentLoopRunner(model, store, [tool]).run("run-save-once", "检查");
+    expect(hasToolResult).toBe(true);
+    expect(store.saves).toBe(5);
   });
 
   it("compacts a long model transcript without breaking tool evidence", async () => {

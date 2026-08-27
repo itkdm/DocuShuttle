@@ -317,7 +317,12 @@ export class AgentLoopRunner {
           onEvent?.(toolFailedEvent);
         }
       }
-      await this.store.save(runId, checkpoint);
+      // A successful or failed tool execution already persisted the
+      // checkpoint at its side-effect boundary. Avoid an unconditional second
+      // read/update round-trip, which is noticeable with remote stores such as
+      // Supabase. Empty tool batches still need a save so the model boundary
+      // and any trace event remain durable.
+      if (decision.calls.length === 0) await this.store.save(runId, checkpoint);
     }
     checkpoint.status = "failed";
     checkpoint.finalText = "本轮操作未能在安全步数内完成。已保留已完成的读取结果，未提交未确认的写入；请缩小范围后重试。";

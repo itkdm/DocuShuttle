@@ -41,7 +41,7 @@
 字节
   → package-security.preflightZipPackage   ZIP 炸弹/路径/目录
   → package-model.loadPackage              解压、UTF-8 XML、关系、宏、Content_Types
-  → inspector.indexDocument                正则切段落/表/图
+  → inspector.indexDocument                无损 XML 源树切段落/表/图
   → inspect 返回 nodes + diagnostics
   → mutate：对目标节点做字符串补丁
   → 重开 validate + 未触及 entry 哈希核对
@@ -74,7 +74,7 @@ ZIP 结束记录后的填充字节已忽略（WPS/Word 导出常见）。
 
 节点种类只有三种：`paragraph` / `table-cell` / `image`。
 
-定位方式是 **正则扫 XML 字符串**，不是 DOM 树：
+定位方式是 **带 UTF-16 source span 的无损 XML 源树**，不是可回写 DOM：
 
 ```106:118:src/modules/documents/infrastructure/ooxml/xml.ts
 export function findElementRanges(xml: string, qualifiedName: string): XmlRange[] {
@@ -84,7 +84,7 @@ export function findElementRanges(xml: string, qualifiedName: string): XmlRange[
   );
 ```
 
-这是覆盖率上限的根：非贪婪 `*?` 在第一个匹配的结束标签处截断。嵌套的 `<w:tbl>` 会让外层表的范围在内层 `</w:tbl>` 结束，单元格坐标失效。所以当前策略是：**含有内层表的匹配整表跳过，不作为 `table-cell` 索引**。段落仍按 `<w:p>` 索引，正文多数仍可写。
+`lossless-xml.ts` 以栈匹配开始/闭合标签，保留原始 source slice、open/content/close/end span 和 children；因此嵌套范围不会在内层闭合标签处截断。当前 inspector 仍暂不把嵌套表 cell 提升为可写语义节点，这是 P2 的明确缺口，而不是坐标错误。
 
 图片靠 `r:embed` + relationships；同一 media part 被多处引用则拒绝替换（避免一改全改）。
 

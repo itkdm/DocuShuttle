@@ -1,4 +1,5 @@
 import { XMLValidator } from "fast-xml-parser";
+import { flattenLosslessXml, parseLosslessXml } from "./lossless-xml";
 
 export interface XmlRange {
   start: number;
@@ -104,17 +105,14 @@ export function setTextNodeText(xml: string, node: XmlRange, value: string): str
 }
 
 export function findElementRanges(xml: string, qualifiedName: string): XmlRange[] {
-  const escaped = qualifiedName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(
-    `<${escaped}(?:\\s[^>]*)?>[\\s\\S]*?<\\/${escaped}>`,
-    "g",
-  );
-  return Array.from(xml.matchAll(pattern), (match) => ({
-    start: match.index,
-    end: match.index + match[0].length,
-    openEnd: match.index + match[0].indexOf(">") + 1,
-    xml: match[0],
-  }));
+  return flattenLosslessXml(parseLosslessXml(xml))
+    .filter((node) => node.name === qualifiedName)
+    .map((node) => ({
+      start: node.start,
+      end: node.end,
+      openEnd: node.openEnd,
+      xml: node.rawSource,
+    }));
 }
 
 export function setElementText(xml: string, value: string): string {

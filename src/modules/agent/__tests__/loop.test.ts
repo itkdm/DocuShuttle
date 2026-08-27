@@ -344,4 +344,24 @@ describe("AgentLoopRunner", () => {
     expect(blocked.checkpoint.permissionMode).toBe(before?.permissionMode);
     expect(blocked.checkpoint.messages).toEqual(before?.messages);
   });
+
+  it.each([
+    ["completed", "turn.completed"],
+    ["failed", "turn.failed"],
+    ["cancelled", "turn.cancelled"],
+  ] as const)("replays a %s checkpoint with the matching terminal event", async (status, eventType) => {
+    const store = new MemoryStore();
+    await store.save("run-terminal", {
+      messages: [],
+      iterations: 1,
+      toolCallCount: 0,
+      status,
+      finalText: "终态结果",
+    });
+
+    const result = await new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "不应调用模型" }) }, store, []).run("run-terminal", "");
+
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0].type).toBe(eventType);
+  });
 });

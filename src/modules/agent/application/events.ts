@@ -54,11 +54,46 @@ export function createAgentEvent<TPayload extends AgentEventPayload>(runId: stri
 export function isAgentEvent(value: unknown): value is AgentEvent {
   if (!value || typeof value !== "object") return false;
   const event = value as Record<string, unknown>;
-  return typeof event.eventId === "string"
-    && typeof event.runId === "string"
-    && typeof event.timestamp === "string"
-    && typeof event.type === "string"
-    && (AGENT_EVENT_TYPES as readonly string[]).includes(event.type);
+  if (typeof event.eventId !== "string"
+    || typeof event.runId !== "string"
+    || typeof event.timestamp !== "string"
+    || typeof event.type !== "string"
+    || !(AGENT_EVENT_TYPES as readonly string[]).includes(event.type)) return false;
+
+  const hasField = (name: string) => Object.prototype.hasOwnProperty.call(event, name);
+  const isString = (name: string) => typeof event[name] === "string";
+  const isNumber = (name: string) => typeof event[name] === "number" && Number.isFinite(event[name]);
+  const hasUnknownValue = (name: string) => hasField(name);
+
+  switch (event.type) {
+    case "turn.started":
+      return isString("text") && (!hasField("clientMessageId") || isString("clientMessageId"));
+    case "model.started":
+    case "assistant.message":
+    case "turn.cancelled":
+      return isString("text");
+    case "model.completed":
+      return isNumber("durationMs");
+    case "model.delta":
+      return isString("text")
+        && (!hasField("channel") || event.channel === "commentary" || event.channel === "reasoning_summary" || event.channel === "final");
+    case "tool.started":
+    case "approval.required":
+      return isString("callId") && isString("name") && hasUnknownValue("input");
+    case "tool.completed":
+      return isString("callId") && isString("name") && hasUnknownValue("output");
+    case "tool.failed":
+      return isString("callId") && isString("name") && isString("error")
+        && (!hasField("durationMs") || isNumber("durationMs"));
+    case "approval.resolved":
+      return isString("callId") && isString("name") && (event.decision === "approved" || event.decision === "rejected");
+    case "turn.completed":
+      return isString("text");
+    case "turn.failed":
+      return isString("error");
+  }
+
+  return false;
 }
 
 export function isDurableAgentEvent(value: unknown): value is DurableAgentEvent {

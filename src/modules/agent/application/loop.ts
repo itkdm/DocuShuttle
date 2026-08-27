@@ -211,7 +211,13 @@ export class AgentLoopRunner {
     }
     else checkpoint.permissionMode ??= permissionMode;
     if ((checkpoint.status === "completed" || checkpoint.status === "failed" || checkpoint.status === "cancelled") && !userText.trim()) {
-      return { checkpoint, events: checkpoint.finalText ? [createAgentEvent(runId, { type: "turn.completed", text: checkpoint.finalText })] : [] };
+      if (!checkpoint.finalText) return { checkpoint, events: [] };
+      const terminalEvent = checkpoint.status === "completed"
+        ? createAgentEvent(runId, { type: "turn.completed", text: checkpoint.finalText })
+        : checkpoint.status === "failed"
+          ? createAgentEvent(runId, { type: "turn.failed", error: checkpoint.finalText })
+          : createAgentEvent(runId, { type: "turn.cancelled", text: checkpoint.finalText });
+      return { checkpoint, events: [terminalEvent] };
     }
     if (userText.trim()) {
       // An answer to ask_user continues the same checkpoint and therefore

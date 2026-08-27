@@ -314,7 +314,8 @@ export function Workbench() {
       setNotice("请先打开一份 DOCX，建立文档工作区");
       return;
     }
-    setConversation((items) => [...items, { role: "user", text: prompt }]);
+    const localMessageId = `msg:${crypto.randomUUID()}`;
+    setConversation((items) => [...items, { id: localMessageId, role: "user", text: prompt, status: "pending" }]);
     setStage("analyzing");
     setNotice(`纸上鸭正在处理你的请求：“${prompt.slice(0, 24)}${prompt.length > 24 ? "…" : ""}”`);
     setAwaitingFinalReview(false);
@@ -353,6 +354,7 @@ export function Workbench() {
       }, abortController.signal);
       setLoopResult(result);
       setLiveEvents((items) => mergeTimelineEvents(items, result.events));
+      setConversation((items) => items.map((item) => item.id === localMessageId ? { ...item, status: result.checkpoint.status === "failed" ? "failed" : "sent" } : item));
       if (result.checkpoint.status === "failed") {
         // The failed checkpoint already contains the user-facing assistant
         // message and turn.failed event. Keep the unified Timeline as the
@@ -392,8 +394,9 @@ export function Workbench() {
       if (runToRecover) {
         try {
           const recovered = await loadBrowserAgentLoop(runToRecover.id);
+          setLoopResult(recovered);
+          setLiveEvents((items) => mergeTimelineEvents(items, recovered.events));
           if (recovered.checkpoint.pendingApproval || recovered.checkpoint.pendingUserQuestion) {
-            setLoopResult(recovered);
             setStage("awaiting");
             setNotice(recovered.checkpoint.pendingApproval ? "Agent 已完成读取并请求写入确认" : "Agent 正在等待你的回答");
             return;
@@ -401,6 +404,7 @@ export function Workbench() {
         } catch { /* preserve the original error below */ }
       }
       const failureMessage = error instanceof Error ? error.message : "这次分析没有完成，请重试。";
+      setConversation((items) => items.map((item) => item.id === localMessageId ? { ...item, status: "failed" } : item));
       setLiveEvents((items) => mergeTimelineEvents(items, [{
         type: "turn.failed",
         eventId: `local:failed:${crypto.randomUUID()}`,

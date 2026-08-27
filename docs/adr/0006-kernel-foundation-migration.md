@@ -1,6 +1,6 @@
 # ADR-0006：OOXML Preservation Kernel Foundation Migration
 
-状态：Accepted · Foundation 1、P2 与 P3 识别/防护基础已实现
+状态：Accepted · Foundation 1–6 的第一阶段基础已实现；复杂 Feature 写入仍按 guarded 边界推进
 
 ## 决策
 
@@ -19,13 +19,17 @@ Document Kernel 的 XML 寻址采用 source-preserving、namespace-aware 的元�
 - `lossless-xml.test.ts` 覆盖嵌套范围、原始 lexical source、注释/CDATA/声明；kernel 回归覆盖真实 DOCX、未触及 ZIP part 哈希、嵌套 cell 写入和外层容器 fail-closed。
 - 文本框段落会以 `textbox[n]/p[n]` 语义路径暴露，并携带 `replace-text: guarded` 能力；`mc:AlternateContent` 会被识别为需要 Choice/Fallback coherence 的保留组，尚未开放写入。
 - `capability-registry.ts` 集中产生节点级 operation capability；Agent 只消费 `supported/guarded/unsupported` 与稳定 reason code，不感知 OOXML parser 类型。
+- `opc-graph.ts` 统一保存全部 package parts、source hash 和 relationship；图片索引不再重复解析关系。
+- `node-identity.ts` 提供 NodeId/Locator/NativeIdentity/Fingerprint 的 sidecar remap，歧义匹配显式返回 `ambiguous`。
+- `planMutation` 提供不写包的 dry-run，提前执行 target、precondition 和 overlap resolve；`DocumentInspection.validation` 提供分层验证报告。
+- `feature-adapter-registry.ts` 与 `capability-catalog.ts` 提供可注册 Feature Adapter 和机器可读 conformance 目录；签名、字段、修订、内容控件等区域按 guarded 策略处理。
 
 ## 后续迁移顺序
 
 1. P3 完整写入：建立文本框/AlternateContent Feature Adapter，Choice 与 Fallback 必须作为 coherence group 一起更新。
 2. P4：以 Feature Adapter 识别内容控件，保留 `sdtPr` 与锁定策略。
-3. Foundation 2/3/4：把 OPC relationship graph、NodeId/Locator/Fingerprint/Remap 进一步拆出，并将 registry 接入所有 Feature Adapter。
-4. Foundation 5/6：将 mutation planner、dry-run 和分层 validation report 提升为明确的 application port；保持现有 `mutate` 兼容入口。
+3. TextProjection 扩展：增加更多显式 format policy，并继续以真实 Word/WPS corpus 验证。
+4. Foundation 6 增量：补齐 relationship/reference、schema baseline-diff 和 identity validation 的更多真实 fixture。
 
 ## 不变的安全边界
 

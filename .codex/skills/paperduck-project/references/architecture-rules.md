@@ -24,6 +24,8 @@ Keep original DOCX bytes immutable. Every mutation creates a derived artifact or
 
 For OOXML source indexing, use a namespace-aware, source-preserving tree with one documented coordinate system (currently JavaScript UTF-16 code-unit offsets). Keep raw source spans and unknown XML in infrastructure; semantic nodes and Agent tools must not depend on parser AST types. Never use a generic XML serializer for an authoritative write path.
 
+Treat the OPC package graph, NodeId/Locator/NativeIdentity/Fingerprint sidecar, Feature Adapter Registry, capability catalog, typed mutation plan/dry-run, and layered validation report as the kernel foundations. New Word features must add an adapter, capability evidence, typed operation, validator, and real fixture; they must not add OOXML-specific branches to the Agent runtime. Signed packages, fields, tracked revisions, content controls, AlternateContent, and shared media remain readable/preserved but guarded until their coherence and reference rules are implemented.
+
 Do not claim format fidelity from HTML preview alone. Inspect the exported OOXML package and reopen the DOCX. Where visual rendering is available, compare representative pages as an additional signal.
 
 ## Agent execution

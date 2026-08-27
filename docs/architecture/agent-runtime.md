@@ -14,7 +14,7 @@ PaperDuck 使用模型驱动的、可恢复的 Tool Loop。模型每一轮都可
 - `AgentModelPort` 只负责把消息和工具描述交给模型并解析模型决策，不拥有 Supabase、Storage 或 DOCX 写权限。
 - `AgentTool` 是 provider-neutral 能力，参数必须由 Zod schema 校验；工具执行由应用层注入 `runId`、用户身份和当前文档 revision。
 - 所有写工具都必须经过文档引擎、临时对象、结构校验和 revision CAS；模型不能直接修改数据库或对象存储。
-- `AgentLoopCheckpoint` 持久化消息、工具结果、迭代次数、待审批调用和终态，支持故障恢复、重试和前端刷新。
+- `AgentLoopCheckpoint` 持久化消息、工具结果、迭代次数、待审批调用和终态（包括 completed、failed、cancelled），支持故障恢复、重试和前端刷新；取消会追加 `turn.cancelled`，不能被旧循环保存覆盖。
 - 迭代次数、时间、token 和工具调用数量都有安全预算；工具错误作为结果返回模型，使 Agent 可以解释、重试或向用户提问。
 
 ## 文档工具
@@ -30,3 +30,5 @@ PaperDuck 使用模型驱动的、可恢复的 Tool Loop。模型每一轮都可
 ## HITL、版本与流式展示
 
 工具需要批准时只保存 interrupt，不占用长连接；批准/拒绝后从 checkpoint 恢复。Token、assistant 消息、工具状态和错误仅用于实时展示，刷新后由持久化事件重放。文档画布只在一次原子版本提交成功后更新，避免半写入 DOCX。
+
+运行诊断以 `loopCheckpoint.trace` 为事实源：它记录模型边界、公开文本、工具生命周期、审批解决和终态事件，默认保留最近 200 条；服务端异常日志不得记录模型密钥、系统提示词或未脱敏工具详情。

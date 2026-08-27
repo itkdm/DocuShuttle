@@ -25,6 +25,8 @@ Cloudflare 只负责 DNS、TLS 和边缘防护；Vercel 托管 Next.js；Supabas
 
    任何 service-role、DeepSeek、APIMart 密钥都只能配置在 Vercel server-side 环境变量中，不能以 `NEXT_PUBLIC_` 开头，也不能提交到 Git。
 
+   APIMart GPT-Image-2 使用异步任务接口：图片候选生成可能需要几十秒到两分钟。应用会轮询任务状态并设置单次请求超时；不要把 APIMart 密钥放进浏览器或 `NEXT_PUBLIC_` 变量。
+
 4. 在 Cloudflare DNS 中为最终子域名添加指向 Vercel 的 CNAME（代理状态按 Vercel 域名验证要求配置），再在 Vercel 项目中绑定该域名。
 5. 发布后检查：
 
@@ -42,7 +44,7 @@ Cloudflare 只负责 DNS、TLS 和边缘防护；Vercel 托管 Next.js；Supabas
 
 ## 当前状态
 
-本仓库已通过本地 lint、typecheck、Vitest 和 Next production build。浏览器页面 E2E 的测试定义已提交，但本地未安装 Playwright Chromium，因此当前只运行 API/测试发现验证；部署完成后应在具备浏览器的 CI 或 DevTools 环境执行完整验收矩阵。
+本仓库已通过本地 lint、typecheck、Vitest 和 Next production build。浏览器 E2E 使用 Chrome DevTools MCP 执行，覆盖真实 DOCX 加载、结构读取、文本修改、版本刷新、审批恢复和图片候选生成；部署后仍需按下方清单在生产环境重复执行。
 
 ## 需要用户手动完成的控制台步骤
 
@@ -52,4 +54,4 @@ Cloudflare 只负责 DNS、TLS 和边缘防护；Vercel 托管 Next.js；Supabas
 2. Supabase Authentication：启用匿名登录；Storage 创建私有 `paperduck-private` bucket，并确认 RLS policy 与迁移一致。
 3. Vercel：导入 `itkdm/DocuShuttle`，生产分支选 `main`，配置上方 Production 环境变量并重新部署。
 4. Cloudflare：将目标子域名 CNAME 指向 Vercel 分配的域名；在 Vercel Domains 中绑定同一子域名并等待 HTTPS 生效。
-5. 将部署 URL 和一次真实匿名登录/上传测试结果提供给我，我再继续做 API/导出/恢复验收；浏览器验收按你的要求暂时不执行，最后单独报告。
+5. 将部署 URL 和一次真实匿名登录/上传测试结果提供给我，我再继续做生产环境 API、导出和恢复验收。

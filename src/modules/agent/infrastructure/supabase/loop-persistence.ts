@@ -135,17 +135,25 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     await this.appendEvents(runId, [event]);
   }
 
-  async claimPendingApproval(runId: string, interactionId: string, callId: string): Promise<AgentLoopCheckpoint | undefined> {
-    return this.claimPendingInteraction(runId, interactionId, "approval", callId);
+  async resolvePendingApproval(runId: string, interactionId: string, callId: string, decision: "approved" | "rejected"): Promise<AgentLoopCheckpoint | undefined> {
+    return this.resolvePendingInteraction(runId, interactionId, "approval", { callId, decision });
   }
 
-  async claimPendingUserInput(runId: string, interactionId: string): Promise<AgentLoopCheckpoint | undefined> {
-    return this.claimPendingInteraction(runId, interactionId, "user_input");
+  async resolvePendingUserInput(runId: string, interactionId: string, message: { id: string; text: string }): Promise<AgentLoopCheckpoint | undefined> {
+    return this.resolvePendingInteraction(runId, interactionId, "user_input", message);
   }
 
-  private async claimPendingInteraction(runId: string, interactionId: string, interactionType: "approval" | "user_input", callId?: string): Promise<AgentLoopCheckpoint | undefined> {
-    return measure("agent.interaction.claim", { runId, interactionId, interactionType, ...(callId ? { callId } : {}), operation: "rpc", rpc: "claim_agent_loop_interaction" }, async () => {
-      const result = await this.client.rpc("claim_agent_loop_interaction", { p_run_id: runId, p_interaction_id: interactionId, p_interaction_type: interactionType, p_call_id: callId ?? null });
+  private async resolvePendingInteraction(runId: string, interactionId: string, interactionType: "approval" | "user_input", resolution: { callId: string; decision: "approved" | "rejected" } | { id: string; text: string }): Promise<AgentLoopCheckpoint | undefined> {
+    return measure("agent.interaction.resolve", { runId, interactionId, interactionType, operation: "rpc", rpc: "resolve_agent_loop_interaction" }, async () => {
+      const result = await this.client.rpc("resolve_agent_loop_interaction", {
+        p_run_id: runId,
+        p_interaction_id: interactionId,
+        p_interaction_type: interactionType,
+        p_call_id: "callId" in resolution ? resolution.callId : null,
+        p_resolution: "callId" in resolution
+          ? { interactionId, type: "approval", callId: resolution.callId, decision: resolution.decision }
+          : { interactionId, type: "user_input", messageId: resolution.id, text: resolution.text },
+      });
       if (result.error) {
         if (result.error.message.includes("INTERACTION_ALREADY_CLAIMED")) return undefined;
         if (result.error.message.includes("INTERACTION_MISMATCH")) {

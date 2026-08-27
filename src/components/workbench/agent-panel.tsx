@@ -172,7 +172,7 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
               { value: "full", label: "允许完全访问" },
             ]}
             onChange={(value) => onPermissionModeChange(value as AgentPermissionMode)}
-            disabled={stage === "analyzing" || (stage === "awaiting" && !awaitingUserQuestion)}
+            disabled={stage === "analyzing" || stage === "awaiting"}
             icon={permissionMode === "full" ? <Unlock size={12} className="permission-icon full" /> : <Shield size={12} className="permission-icon" />}
           />
           <div className="composer-actions">

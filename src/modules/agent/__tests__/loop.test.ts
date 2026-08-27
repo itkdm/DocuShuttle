@@ -10,21 +10,23 @@ class MemoryStore {
   async load() { return this.value; }
   async save(_runId: string, checkpoint: AgentLoopCheckpoint) { this.saves += 1; this.value = structuredClone(checkpoint); }
   async heartbeat() { this.heartbeats += 1; return true; }
-  async claimPendingApproval(_runId: string, interactionId: string, callId: string) {
+  async resolvePendingApproval(_runId: string, interactionId: string, callId: string, decision: "approved" | "rejected") {
     const checkpoint = this.value;
     if (checkpoint?.pendingInteraction?.type !== "approval" || checkpoint.pendingInteraction.interactionId !== interactionId || checkpoint.pendingInteraction.callId !== callId) return undefined;
     const claimed = structuredClone(checkpoint);
     claimed.pendingInteraction = undefined;
     claimed.status = "running";
+    claimed.pendingResolution = { interactionId, type: "approval", callId, toolName: checkpoint.pendingInteraction.toolName, input: checkpoint.pendingInteraction.input, decision };
     this.value = claimed;
     return claimed;
   }
-  async claimPendingUserInput(_runId: string, interactionId: string) {
+  async resolvePendingUserInput(_runId: string, interactionId: string, message: { id: string; text: string }) {
     const checkpoint = this.value;
     if (checkpoint?.pendingInteraction?.type !== "user_input" || checkpoint.pendingInteraction.interactionId !== interactionId) return undefined;
     const claimed = structuredClone(checkpoint);
     claimed.pendingInteraction = undefined;
     claimed.status = "running";
+    claimed.pendingResolution = { interactionId, type: "user_input", messageId: message.id, text: message.text };
     this.value = claimed;
     return claimed;
   }
@@ -366,6 +368,38 @@ describe("AgentLoopRunner", () => {
     const userPending = question.checkpoint.pendingInteraction;
     await userRunner.runWithPermission("run-duplicate-user", "回答", "default", undefined, undefined, undefined, userPending!.interactionId);
     await expect(userRunner.runWithPermission("run-duplicate-user", "重复回答", "default", undefined, undefined, undefined, userPending!.interactionId)).rejects.toThrow("USER_INPUT_ALREADY_CLAIMED");
+  });
+
+  it("resumes from a durable approval resolution after the original request is gone", async () => {
+    const store = new MemoryStore();
+    let executions = 0;
+    const tool: AgentTool = { name: "apply_change", description: "Apply", inputSchema: z.object({ nodeId: z.string() }), requiresApproval: true, async execute() { executions += 1; return { ok: true }; } };
+    const firstRunner = new AgentLoopRunner({ decide: async () => ({ kind: "tool_calls", calls: [{ id: "durable-approval", name: "apply_change", input: { nodeId: "p-1" } }] }) }, store, [tool]);
+    const paused = await firstRunner.run("run-durable-approval", "修改");
+    const pending = paused.checkpoint.pendingInteraction;
+    await store.resolvePendingApproval("run-durable-approval", pending!.interactionId, pending?.type === "approval" ? pending.callId : "", "approved");
+
+    const resumed = await new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "已完成。" }) }, store, [tool]).resume(
+      "run-durable-approval", "approved", pending!.interactionId, pending?.type === "approval" ? pending.callId : ""
+    );
+    expect(executions).toBe(1);
+    expect(resumed.checkpoint.status).toBe("completed");
+    expect(resumed.checkpoint.pendingResolution).toBeUndefined();
+  });
+
+  it("replays a durable user-input resolution after the original request is gone", async () => {
+    const store = new MemoryStore();
+    const firstRunner = new AgentLoopRunner({ decide: async () => ({ kind: "ask_user", text: "请补充章节" }) }, store, []);
+    const paused = await firstRunner.run("run-durable-user", "开始");
+    const pending = paused.checkpoint.pendingInteraction;
+    await store.resolvePendingUserInput("run-durable-user", pending!.interactionId, { id: "durable-user-message", text: "第三章" });
+
+    const resumed = await new AgentLoopRunner({ decide: async ({ messages }) => ({ kind: "message", text: messages.some((message) => message.content === "第三章") ? "已完成。" : "回答丢失。" }) }, store, []).runWithPermission(
+      "run-durable-user", "第三章", "full", undefined, undefined, "durable-user-message", pending!.interactionId
+    );
+    expect(resumed.checkpoint.status).toBe("completed");
+    expect(resumed.checkpoint.messages.some((message) => message.role === "user" && message.content === "第三章")).toBe(true);
+    expect(resumed.checkpoint.pendingResolution).toBeUndefined();
   });
 
   it("exposes a terminal safety-budget failure in the timeline", async () => {

@@ -84,11 +84,18 @@ conversation，而不是创建无上下文的新 run。Token、assistant 消息�
 user-input interaction 对应；`running`、终态和取消状态不得残留 runtime interaction。
 `final_review` 不属于 Tool Loop interrupt，本轮仍由产品层保留。
 
+交互解决采用短生命周期的 `pendingResolution` durable inbox：approval 保存
+`interactionId/callId/toolName/input/decision`，user input 保存
+`interactionId/messageId/text`。数据库事务会同时清除 `pendingInteraction`、写入
+`pendingResolution`、同步 `loopCheckpoint.status` 与 `resume_cursor` 为 `running`；Runner
+只有在用户事实已落盘并完成后续 checkpoint 保存后才清除 resolution。进程重启或网络重试
+因此可以依据 resolution 和 Effect Receipt 继续，而不会丢失决定或重复执行副作用。
+
 `requiresApproval && permissionMode = default` 才暂停并等待人工批准；`full` 只表示当前
 Run 的 automatic approval，不是账户级权限，也不绕过 Zod、Tool guardrail、Document Engine、
 revision CAS、OOXML validation、immutable version、Effect Receipt、idempotency、授权或取消竞争。
 `ask_user` 在两种权限模式都可以暂停，因为它是缺少用户事实的 user-input interaction，而不是审批。
-审批和回答都通过 `interactionId` 原子 claim，重复消费必须失败；审批额外校验 `callId`。
+审批和回答都通过 `interactionId` 原子 resolve，重复消费必须失败；审批额外校验 `callId`。
 
 ## 运行状态与恢复契约
 
@@ -97,7 +104,8 @@ revision CAS、OOXML validation、immutable version、Effect Receipt、idempoten
 执行顺序只存在于 `AgentLoopRunner`；没有独立 TurnId，`runId` 是界面可见的一次宏观
 用户回合，`conversationId` 负责跨回合上下文归属。
 
-恢复时先读取 checkpoint，再通过 `claim_agent_loop_interaction` 原子领取审批或用户回答边界；
+恢复时先读取 checkpoint，再通过 `resolve_agent_loop_interaction` 原子持久化审批或用户回答决定；
+若 resolution 已存在则幂等重放该决定，不再次要求用户选择；
 取消先取得 `agent_runs` 行锁，文档提交 RPC 在同一行锁下拒绝 `cancelled` 运行，避免
 取消与不可变版本提交产生不一致。租约只覆盖 `queued/running`，过期运行会被回收为
 `cancelled`，并同步修正 checkpoint 状态。

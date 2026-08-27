@@ -85,7 +85,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
-    if (error instanceof Error && ["USER_INPUT_ALREADY_CLAIMED", "USER_INPUT_INTERACTION_MISMATCH"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
+    if (error instanceof Error && ["USER_INPUT_ALREADY_CLAIMED", "USER_INPUT_INTERACTION_MISMATCH", "USER_INPUT_RESOLUTION_MISMATCH"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
     logger.error("http.request.failed", { method: "POST", route: "/api/agent/runs/:runId/loop", durationMs: performance.now() - started, runId, error });
     return NextResponse.json({ code: "AGENT_LOOP_FAILED" }, { status: 500 });
   }
@@ -136,7 +136,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
-    if (error instanceof Error && ["USER_INPUT_ALREADY_CLAIMED", "USER_INPUT_INTERACTION_MISMATCH"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
+    if (error instanceof Error && ["USER_INPUT_ALREADY_CLAIMED", "USER_INPUT_INTERACTION_MISMATCH", "USER_INPUT_RESOLUTION_MISMATCH"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
     return NextResponse.json({ code: error instanceof Error ? error.message : "AGENT_LOOP_FAILED" }, { status: 500 });
   }
   });

@@ -64,7 +64,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
     if (error instanceof Error && error.message === "No pending agent approval") {
       return NextResponse.json({ code: "APPROVAL_NOT_PENDING" }, { status: 409 });
     }
-    if (error instanceof Error && ["APPROVAL_ALREADY_CLAIMED", "APPROVAL_INTERACTION_MISMATCH"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
+    if (error instanceof Error && ["APPROVAL_ALREADY_CLAIMED", "APPROVAL_INTERACTION_MISMATCH", "APPROVAL_RESOLUTION_MISMATCH"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
     logger.error("http.request.failed", { route: "/api/agent/runs/:runId/loop/resume", error });
     return NextResponse.json({ code: "AGENT_LOOP_RESUME_FAILED" }, { status: 500 });
   }
@@ -78,7 +78,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
     if (error instanceof Error && error.message === "No pending agent approval") return NextResponse.json({ code: "APPROVAL_NOT_PENDING" }, { status: 409 });
-    if (error instanceof Error && ["APPROVAL_ALREADY_CLAIMED", "APPROVAL_INTERACTION_MISMATCH"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
+    if (error instanceof Error && ["APPROVAL_ALREADY_CLAIMED", "APPROVAL_INTERACTION_MISMATCH", "APPROVAL_RESOLUTION_MISMATCH"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
     logger.error("http.request.failed", { route: "/api/agent/runs/:runId/loop/resume", error });
     return NextResponse.json({ code: error instanceof Error ? error.message : "AGENT_LOOP_RESUME_FAILED" }, { status: 500 });
   }

@@ -56,6 +56,7 @@ const post = (body?: unknown): RequestInit => ({
 
 async function consumeAgentStream(
   response: Response,
+  runId: string,
   onEvent: (event: BrowserAgentLoopResult["events"][number]) => void,
 ) {
   if (!response.ok || !response.body) {
@@ -86,10 +87,11 @@ async function consumeAgentStream(
         if (!raw) continue;
         const data = JSON.parse(raw) as BrowserAgentLoopResult | BrowserAgentLoopResult["events"][number] | { code?: string };
         if (event === "event") {
-          const sequence = typeof (data as { sequence?: unknown }).sequence === "number" ? (data as { sequence: number }).sequence : undefined;
+          const normalized = { ...data, eventId: String((data as { eventId?: unknown }).eventId ?? crypto.randomUUID()), runId, turnId: runId, timestamp: String((data as { timestamp?: unknown }).timestamp ?? new Date().toISOString()) } as BrowserAgentEvent;
+          const sequence = typeof normalized.sequence === "number" ? normalized.sequence : undefined;
           if (sequence === undefined || sequence > lastSequence) {
             if (sequence !== undefined) lastSequence = sequence;
-            onEvent(data as BrowserAgentLoopResult["events"][number]);
+            onEvent(normalized);
           }
         }
         if (event === "result") finalResult = data as BrowserAgentLoopResult;
@@ -104,8 +106,9 @@ async function consumeAgentStream(
       frameCount += 1;
       const data = JSON.parse(frame.data) as BrowserAgentLoopResult | BrowserAgentLoopResult["events"][number] | { code?: string };
       if (frame.event === "event") {
-        const sequence = typeof (data as { sequence?: unknown }).sequence === "number" ? (data as { sequence: number }).sequence : undefined;
-        if (sequence === undefined || sequence > lastSequence) { if (sequence !== undefined) lastSequence = sequence; onEvent(data as BrowserAgentLoopResult["events"][number]); }
+        const normalized = { ...data, eventId: String((data as { eventId?: unknown }).eventId ?? crypto.randomUUID()), runId, turnId: runId, timestamp: String((data as { timestamp?: unknown }).timestamp ?? new Date().toISOString()) } as BrowserAgentEvent;
+        const sequence = typeof normalized.sequence === "number" ? normalized.sequence : undefined;
+        if (sequence === undefined || sequence > lastSequence) { if (sequence !== undefined) lastSequence = sequence; onEvent(normalized); }
       }
       if (frame.event === "result") finalResult = data as BrowserAgentLoopResult;
       if (frame.event === "error") throw new Error(userFacingError((data as { code?: string }).code, "这次请求没有完成，请稍后重试。"));
@@ -158,6 +161,26 @@ export const loadBrowserConversationMessages = async (taskId: string, before?: s
 export const advanceBrowserAgentRun = async (runId: string) =>
   (await json<AdvanceResponse>(`/api/agent/runs/${runId}/advance`, post())).run;
 
+export type BrowserAgentEvent = {
+  eventId: string;
+  runId: string;
+  turnId: string;
+  timestamp: string;
+  sequence?: number;
+} & ({ type: "turn.started"; text: string; clientMessageId?: string }
+  | { type: "model.started"; text: string }
+  | { type: "model.completed"; durationMs?: number }
+  | { type: "model.delta"; text: string; channel?: "commentary" | "reasoning_summary" | "final" }
+  | { type: "assistant.message"; text: string }
+  | { type: "tool.started"; callId: string; name: string; input: unknown }
+  | { type: "tool.completed"; callId: string; name: string; output: unknown }
+  | { type: "tool.failed"; callId: string; name: string; error: string; durationMs?: number }
+  | { type: "approval.required"; callId: string; name: string; input: unknown }
+  | { type: "approval.resolved"; callId: string; name: string; decision: "approved" | "rejected" }
+  | { type: "completed"; text: string }
+  | { type: "turn.failed"; error: string }
+  | { type: "turn.cancelled"; text: string });
+
 export type BrowserAgentLoopResult = {
   checkpoint: {
     status: "running" | "awaiting_user" | "completed" | "failed" | "cancelled";
@@ -168,7 +191,9 @@ export type BrowserAgentLoopResult = {
     messages: ReadonlyArray<{ role: "system" | "user" | "assistant" | "tool"; content: string }>;
     permissionMode?: AgentPermissionMode;
   };
-  events: ReadonlyArray<{ type: string; text?: string; name?: string; error?: string; eventId?: string; sequence?: number; timestamp?: string; runId?: string; clientMessageId?: string; [key: string]: unknown }>;
+  /** Server responses are normalized at the SSE boundary; JSON replay is
+   * intentionally validated by the replay adapter before it reaches UI. */
+  events: ReadonlyArray<{ type: string; text?: string; name?: string; error?: string; eventId?: string; sequence?: number; timestamp?: string; runId?: string; turnId?: string; clientMessageId?: string; [key: string]: unknown }>;
 };
 
 export const runBrowserAgentLoop = async (runId: string, message: string, permissionMode: AgentPermissionMode = "default") =>
@@ -185,6 +210,7 @@ export async function runBrowserAgentLoopStream(
 ) {
   return consumeAgentStream(
     await fetch(`/api/agent/runs/${runId}/loop`, { ...post({ message, permissionMode, ...(clientMessageId ? { clientMessageId } : {}) }), method: "PUT", signal }),
+    runId,
     onEvent,
   );
 }
@@ -202,6 +228,7 @@ export const resumeBrowserAgentLoopStream = async (
   signal?: AbortSignal,
 ) => consumeAgentStream(
   await fetch(`/api/agent/runs/${runId}/loop/resume`, { ...post({ approval }), method: "PUT", signal }),
+  runId,
   onEvent,
 );
 

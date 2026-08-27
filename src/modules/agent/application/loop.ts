@@ -94,6 +94,11 @@ export type AgentLoopResult = {
   events: AgentLoopEvent[];
 };
 
+export type AgentEngineeringEvent = {
+  event: string;
+  metadata: Record<string, unknown>;
+};
+
 const compactForModel = (value: unknown, depth = 0): unknown => {
   if (depth > 5) return "[内容已省略]";
   if (typeof value === "string") return value.length > 4_000 ? `${value.slice(0, 4_000)}…` : value;
@@ -142,7 +147,18 @@ export class AgentLoopRunner {
     private readonly modelTimeoutMs = 30_000,
     private readonly contextCompactionPolicy: AgentContextCompactionPolicy = DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY,
     private readonly heartbeatIntervalMs = 30_000,
+    private readonly onEngineeringEvent?: (event: AgentEngineeringEvent) => void,
   ) {}
+
+  private observe(runId: string, event: AgentLoopEvent) {
+    if (!this.onEngineeringEvent || event.type === "model.delta" || event.type === "assistant.message") return;
+    const metadata: Record<string, unknown> = { runId };
+    if ("callId" in event) metadata.callId = event.callId;
+    if ("name" in event) metadata.toolName = event.name;
+    if ("durationMs" in event && event.durationMs !== undefined) metadata.durationMs = event.durationMs;
+    if (event.type === "approval.resolved") metadata.decision = event.decision;
+    this.onEngineeringEvent({ event: `agent.${event.type}`, metadata });
+  }
 
   private async withLeaseHeartbeat<T>(runId: string, operation: () => Promise<T>): Promise<T> {
     if (!this.store.heartbeat) return operation();
@@ -213,6 +229,7 @@ export class AgentLoopRunner {
           ? { ...timestamped, output: summarizeTraceValue(timestamped.output) } as AgentLoopEvent
           : timestamped;
       events.push(traceEvent);
+      this.observe(runId, traceEvent);
       checkpoint.trace = [...(checkpoint.trace ?? []), traceEvent].slice(-200);
       if (notify) onEvent?.(traceEvent);
       return traceEvent;
@@ -379,6 +396,7 @@ export class AgentLoopRunner {
     const emit = (event: AgentLoopEvent, notify = true) => {
       const traceEvent = { ...event, eventId: event.eventId ?? crypto.randomUUID(), timestamp: event.timestamp ?? new Date().toISOString() } as AgentLoopEvent;
       events.push(traceEvent);
+      this.observe(runId, traceEvent);
       checkpoint.trace = [...(checkpoint.trace ?? []), traceEvent].slice(-200);
       if (notify) onEvent?.(traceEvent);
       return traceEvent;

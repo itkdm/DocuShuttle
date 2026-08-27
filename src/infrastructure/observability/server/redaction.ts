@@ -4,6 +4,7 @@ const MAX_PREVIEW = 120;
 
 export const redact = (value: unknown, key?: string): unknown => {
   if (key && SECRET_KEYS.test(key)) {
+    if (typeof value === "number") return value;
     if (PREVIEW_ENABLED && typeof value === "string") return { length: value.length, preview: value.slice(0, MAX_PREVIEW) };
     if (typeof value === "string" || Array.isArray(value) || value instanceof Uint8Array) return { length: value.length };
     return "[REDACTED]";

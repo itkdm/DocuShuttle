@@ -14,8 +14,25 @@ const userFacingError = (code: string | undefined, fallback: string) => ({
   TURN_NOT_ALLOWED: "当前对话正在等待处理，请先完成待处理的确认或回答。",
 }[code ?? ""] ?? fallback);
 
+type BrowserLog = { event: string; durationMs?: number; status?: number; route?: string; firstEventMs?: number; chunkCount?: number; frameCount?: number; bytesReceived?: number; lastEventId?: string; finalResultReceived?: boolean };
+const browserLogQueue: BrowserLog[] = [];
+let browserLogFlushTimer: ReturnType<typeof setTimeout> | undefined;
+const flushBrowserLogs = () => {
+  if (!browserLogQueue.length || process.env.NODE_ENV === "production") return;
+  const events = browserLogQueue.splice(0, browserLogQueue.length);
+  void fetch("/api/dev/logs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ events }), keepalive: true }).catch(() => undefined);
+};
+const logBrowserEvent = (event: BrowserLog) => {
+  if (process.env.NODE_ENV === "production") return;
+  browserLogQueue.push(event);
+  if (browserLogQueue.length >= 20) { if (browserLogFlushTimer) clearTimeout(browserLogFlushTimer); browserLogFlushTimer = undefined; flushBrowserLogs(); return; }
+  if (!browserLogFlushTimer) browserLogFlushTimer = setTimeout(() => { browserLogFlushTimer = undefined; flushBrowserLogs(); }, 1000);
+};
+
 const json = async <T>(url: string, init?: RequestInit): Promise<T> => {
+  const started = performance.now();
   const response = await fetch(url, init);
+  logBrowserEvent({ event: response.ok ? "client.fetch.completed" : "client.fetch.failed", route: url.split("?")[0], status: response.status, durationMs: performance.now() - started });
   const body = await response.json().catch(() => ({})) as T & { code?: string; message?: string };
   if (!response.ok) {
     const userMessage = body.message ?? userFacingError(body.code, `请求未完成（HTTP ${response.status}）`);
@@ -42,9 +59,17 @@ async function consumeAgentStream(
   const decoder = new TextDecoder();
   let buffer = "";
   let finalResult: BrowserAgentLoopResult | undefined;
+  let chunkCount = 0;
+  let frameCount = 0;
+  let bytesReceived = 0;
+  let firstEventMs: number | undefined;
+  const started = performance.now();
   while (true) {
     const next = await reader.read();
     if (next.done) break;
+    chunkCount += 1;
+    bytesReceived += next.value.byteLength;
+    firstEventMs ??= performance.now() - started;
     buffer += decoder.decode(next.value, { stream: true });
     const frames = buffer.split("\n\n");
     buffer = frames.pop() ?? "";
@@ -52,6 +77,7 @@ async function consumeAgentStream(
       const event = /^event: (.+)$/m.exec(frame)?.[1];
       const raw = /^data: (.+)$/m.exec(frame)?.[1];
       if (!event || !raw) continue;
+      frameCount += 1;
       const data = JSON.parse(raw) as BrowserAgentLoopResult | BrowserAgentLoopResult["events"][number] | { code?: string };
       if (event === "event") onEvent(data as BrowserAgentLoopResult["events"][number]);
       if (event === "result") finalResult = data as BrowserAgentLoopResult;
@@ -61,6 +87,7 @@ async function consumeAgentStream(
       }
     }
   }
+  logBrowserEvent({ event: finalResult ? "client.sse.completed" : "client.sse.failed", firstEventMs, chunkCount, frameCount, bytesReceived, finalResultReceived: Boolean(finalResult) });
   if (!finalResult) throw new Error("AGENT_STREAM_INCOMPLETE");
   return finalResult;
 }

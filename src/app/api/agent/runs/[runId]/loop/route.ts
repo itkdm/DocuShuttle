@@ -37,7 +37,7 @@ async function createRunner(runId: string) {
     ...createSourceContextTools(taskId, new SupabaseSourceDocumentContext(client), kernel),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
-  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), new SupabaseAgentLoopStore(client), tools);
+  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), new SupabaseAgentLoopStore(client), tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata));
 }
 
 async function persistAskUserAnswer(runId: string, message: string, clientMessageId?: string) {

@@ -28,6 +28,7 @@ describe("AgentLoopRunner", () => {
     expect(result.events.map((event) => event.type)).toEqual(["turn.started", "model.started", "model.completed", "tool.started", "tool.completed", "model.started", "model.completed", "assistant.message", "completed"]);
     expect(result.checkpoint.messages.some((message) => message.role === "tool")).toBe(true);
     expect(result.checkpoint.messages.some((message) => message.role === "assistant" && message.toolCalls?.[0]?.name === "inspect_document")).toBe(true);
+    expect(result.events.every((event) => typeof event.eventId === "string")).toBe(true);
   });
 
   it("pauses before an approval-required tool and resumes from its checkpoint", async () => {
@@ -132,5 +133,43 @@ describe("AgentLoopRunner", () => {
     expect(executions).toBe(2);
     expect(result.checkpoint.status).toBe("completed");
     expect(result.checkpoint.messages.filter((message) => message.role === "tool")).toHaveLength(2);
+  });
+
+  it("allows the model to revisit a tool and change route after its result", async () => {
+    const calls: string[] = [];
+    let step = 0;
+    const model: AgentModelPort = { decide: async () => {
+      step += 1;
+      if (step === 1) return { kind: "tool_calls", calls: [{ id: "a1", name: "inspect_document", input: { query: "first" } }] };
+      if (step === 2) return { kind: "tool_calls", calls: [{ id: "b1", name: "inspect_document", input: { query: "second" } }] };
+      return { kind: "message", text: "结果需要进一步确认。" };
+    } };
+    const tool: AgentTool = { ...inspectTool, async execute(input) { const query = (input as { query: string }).query; calls.push(query); return { regions: query === "first" ? 0 : 2 }; } };
+    const result = await new AgentLoopRunner(model, new MemoryStore(), [tool]).run("run-revisit", "先查找，不确定时再查一次");
+    expect(calls).toEqual(["first", "second"]);
+    expect(result.checkpoint.status).toBe("completed");
+  });
+
+  it("lets the model ask the user when evidence is insufficient", async () => {
+    const result = await new AgentLoopRunner({ decide: async () => ({ kind: "ask_user", text: "你希望修改哪一个实验结论区域？" }) }, new MemoryStore(), []).run("run-ask", "修改实验结论");
+    expect(result.checkpoint.status).toBe("awaiting_user");
+    expect(result.checkpoint.finalText).toBeUndefined();
+    expect(result.events.some((event) => event.type === "assistant.message")).toBe(true);
+  });
+
+  it("feeds a rejected approval back to the model for a different response", async () => {
+    const store = new MemoryStore();
+    const applyTool: AgentTool = { name: "apply_change", description: "Apply", inputSchema: z.object({ nodeId: z.string() }), requiresApproval: true, async execute() { return { revision: "r" }; } };
+    let calls = 0;
+    const model: AgentModelPort = { decide: async ({ messages }) => {
+      calls += 1;
+      return messages.some((message) => message.role === "tool") ? { kind: "message", text: "好的，我不会修改文档。" } : { kind: "tool_calls", calls: [{ id: "reject-1", name: "apply_change", input: { nodeId: "p-1" } }] };
+    } };
+    const runner = new AgentLoopRunner(model, store, [applyTool]);
+    await runner.run("run-reject", "修改正文");
+    const resumed = await runner.resume("run-reject", "rejected");
+    expect(calls).toBe(2);
+    expect(resumed.checkpoint.status).toBe("completed");
+    expect(resumed.checkpoint.finalText).toContain("不会修改");
   });
 });

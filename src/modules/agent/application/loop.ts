@@ -79,6 +79,8 @@ export type AgentLoopStore = {
   saveEffectReceipt?(runId: string, receipt: AgentEffectReceipt): Promise<AgentEffectReceipt>;
   /** Refresh the server-side lease while a provider/tool call is in flight. */
   heartbeat?(runId: string): Promise<boolean>;
+  claimRecovery?(runId: string): Promise<AgentLoopCheckpoint | undefined>;
+  releaseLeaseForRecovery?(runId: string): Promise<void>;
   resolvePendingApproval?(runId: string, interactionId: string, callId: string, decision: "approved" | "rejected"): Promise<AgentLoopCheckpoint | undefined>;
   resolvePendingUserInput?(runId: string, interactionId: string, message: { id: string; text: string }): Promise<AgentLoopCheckpoint | undefined>;
   markCancelled?(runId: string): Promise<void>;
@@ -105,6 +107,8 @@ export type AgentEngineeringEvent = {
   event: string;
   metadata: Record<string, unknown>;
 };
+
+export const TRANSPORT_INTERRUPTED = "TRANSPORT_INTERRUPTED";
 
 const compactForModel = (value: unknown, depth = 0): unknown => {
   if (depth > 5) return "[内容已省略]";
@@ -182,6 +186,20 @@ export class AgentLoopRunner {
 
   async run(runId: string, userText: string, signal?: AbortSignal): Promise<AgentLoopResult> {
     return this.runWithPermission(runId, userText, "default", signal);
+  }
+
+  async recover(runId: string, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void): Promise<AgentLoopResult> {
+    const current = await this.store.load(runId);
+    if (!current) throw new Error("RUN_NOT_FOUND");
+    if (current.status !== "running") return { checkpoint: current, events: [] };
+    if (this.store.claimRecovery) {
+      const claimed = await this.store.claimRecovery(runId);
+      if (!claimed) {
+        const latest = await this.store.load(runId);
+        return { checkpoint: latest ?? current, events: [] };
+      }
+    }
+    return this.runWithPermission(runId, "", current.permissionMode ?? "default", signal, onEvent);
   }
 
   async runWithPermission(runId: string, userText: string, permissionMode: AgentPermissionMode, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void, clientMessageId?: string, interactionId?: string): Promise<AgentLoopResult> {
@@ -315,6 +333,12 @@ export class AgentLoopRunner {
       // provider call so a refresh can recover the real in-flight phase.
       await saveCheckpoint();
       onEvent?.(modelStartedEvent);
+      if (signal?.aborted) {
+        const cancelled = await this.store.load(runId);
+        if (cancelled?.status === "cancelled") return { checkpoint: cancelled, events };
+        await this.store.releaseLeaseForRecovery?.(runId);
+        throw new Error(TRANSPORT_INTERRUPTED);
+      }
       const modelStartedAt = Date.now();
       let decision: AgentModelDecision;
       const modelController = new AbortController();
@@ -327,12 +351,8 @@ export class AgentLoopRunner {
         if (signal?.aborted) {
           const cancelled = await this.store.load(runId);
           if (cancelled?.status === "cancelled") return { checkpoint: cancelled, events };
-          checkpoint.status = "cancelled";
-          checkpoint.finalText = "本轮操作已取消。";
-          const cancelledEvent = emit({ type: "turn.cancelled", text: checkpoint.finalText }, false);
-          await saveCheckpoint();
-          onEvent?.(cancelledEvent);
-          return { checkpoint, events };
+          await this.store.releaseLeaseForRecovery?.(runId);
+          throw new Error(TRANSPORT_INTERRUPTED);
         }
         // Provider/network failures must become a durable checkpoint instead of
         // leaving the run in `running` forever (or only returning a generic 500).

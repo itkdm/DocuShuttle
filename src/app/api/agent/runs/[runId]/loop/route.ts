@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
 import { AgentLoopRunner, type AgentPermissionMode } from "@/modules/agent/application/loop";
+import { isDurableAgentEvent } from "@/modules/agent/application/events";
 import { createDocumentTools } from "@/modules/agent/application/document-tools";
 import { createDocumentVersionTools } from "@/modules/agent/application/document-version-tools";
 import { createSourceContextTools } from "@/modules/agent/application/source-context-tools";
@@ -22,9 +23,7 @@ const schema = z.object({
 });
 
 const eventPayload = (event: string, data: unknown) => {
-  const id = event === "event" && data && typeof data === "object" && typeof (data as { eventId?: unknown }).eventId === "string"
-    ? `id: ${(data as { eventId: string }).eventId}\n` : "";
-  return `${id}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 };
 
 async function createRunner(runId: string) {
@@ -53,15 +52,20 @@ export async function GET(request: Request, { params }: { params: Promise<{ runI
     const url = new URL(request.url);
     const after = Number(url.searchParams.get("after") ?? "0");
     const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "200"), 1), 500);
-    const durable = await client.from("agent_run_events").select("sequence, event").eq("run_id", runId).gt("sequence", Number.isFinite(after) ? after : 0).order("sequence", { ascending: true }).limit(limit);
+    const cursor = Number.isFinite(after) ? Math.max(0, after) : 0;
+    const durable = await client.from("agent_run_events").select("sequence, event").eq("run_id", runId).gt("sequence", cursor).order("sequence", { ascending: true }).limit(limit + 1);
     if (durable.error) throw new Error(durable.error.message);
-    const events = (durable.data ?? []).map((row) => {
+    const rows = durable.data ?? [];
+    const hasMore = rows.length > limit;
+    const returnedRows = rows.slice(0, limit);
+    const events = returnedRows.map((row) => {
       const event = row.event && typeof row.event === "object" ? row.event as Record<string, unknown> : undefined;
       return event ? { ...event, sequence: row.sequence, runId } : undefined;
-    }).filter((event) => Boolean(event));
-    const response = NextResponse.json({ checkpoint, events, nextSequence: durable.data?.at(-1)?.sequence ?? after });
-    logger.info("agent.replay.completed", { runId, afterSequence: after, limit, durableEventCount: durable.data?.length ?? 0, returnedEventCount: events.length, nextSequence: durable.data?.at(-1)?.sequence ?? after, durationMs: performance.now() - started });
-    logger.info("http.request.completed", { method: "GET", route: "/api/agent/runs/:runId/loop", status: response.status, durationMs: performance.now() - started, runId, afterSequence: after, durableEventCount: durable.data?.length ?? 0, returnedEventCount: events.length });
+    }).filter((event) => Boolean(event) && isDurableAgentEvent(event));
+    const nextSequence = returnedRows.at(-1)?.sequence ?? cursor;
+    const response = NextResponse.json({ checkpoint, events, nextSequence, hasMore });
+    logger.info("agent.replay.completed", { runId, afterSequence: cursor, limit, durableEventCount: rows.length, returnedEventCount: events.length, nextSequence, hasMore, durationMs: performance.now() - started });
+    logger.info("http.request.completed", { method: "GET", route: "/api/agent/runs/:runId/loop", status: response.status, durationMs: performance.now() - started, runId, afterSequence: cursor, durableEventCount: rows.length, returnedEventCount: events.length });
     return response;
   } catch (error) {
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
@@ -108,26 +112,32 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
     let streamFailed = false;
     const stream = new ReadableStream({
       async start(controller) {
-        const heartbeat = setInterval(() => {
-          if (!request.signal.aborted) controller.enqueue(encoder.encode(": ping\n\n"));
-        }, 12_000);
+        let transportOpen = true;
+        const close = () => { if (!transportOpen) return; transportOpen = false; try { controller.close(); } catch { /* detached consumer */ } };
+        request.signal.addEventListener("abort", () => { transportOpen = false; }, { once: true });
+        const heartbeat = setInterval(() => { if (transportOpen) { try { controller.enqueue(encoder.encode(": ping\n\n")); } catch { transportOpen = false; } } }, 12_000);
         const send = (event: string, data: unknown) => {
+          if (!transportOpen) return;
           const payload = encoder.encode(eventPayload(event, data));
           firstEventMs ??= performance.now() - started;
           eventCount += 1;
           bytesSent += payload.byteLength;
-          controller.enqueue(payload);
+          try { controller.enqueue(payload); } catch { transportOpen = false; }
         };
         try {
           const result = await runner.runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, request.signal, (event) => send("event", event), input.clientMessageId, input.interactionId);
           send("result", result);
         } catch (error) {
-          streamFailed = true;
-          send("error", { code: error instanceof Error ? error.message : "AGENT_LOOP_FAILED" });
+          if (error instanceof Error && error.message === "TRANSPORT_INTERRUPTED") {
+            logger.info("agent.transport.detached", { runId, eventCount, bytesSent });
+          } else if (transportOpen) {
+            streamFailed = true;
+            send("error", { code: error instanceof Error ? error.message : "AGENT_LOOP_FAILED" });
+          }
         } finally {
           clearInterval(heartbeat);
           logger.info(streamFailed || request.signal.aborted ? "agent.stream.failed" : "agent.stream.completed", { runId, firstEventMs, eventCount, bytesSent, aborted: request.signal.aborted, completed: !streamFailed && !request.signal.aborted });
-          controller.close();
+          close();
         }
       },
     });

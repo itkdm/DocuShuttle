@@ -16,9 +16,7 @@ import { OoxmlPreservationKernel } from "@/modules/documents";
 
 const schema = z.object({ approval: z.enum(["approved", "rejected"]), interactionId: z.uuid(), callId: z.string().trim().min(1).max(200) });
 const eventPayload = (event: string, data: unknown) => {
-  const id = event === "event" && data && typeof data === "object" && typeof (data as { eventId?: unknown }).eventId === "string"
-    ? `id: ${(data as { eventId: string }).eventId}\n` : "";
-  return `${id}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 };
 
 async function createRunner(runId: string) {
@@ -42,13 +40,16 @@ async function runResume(request: Request, runId: string, stream: boolean) {
   const encoder = new TextEncoder();
   const responseStream = new ReadableStream({
     async start(controller) {
-      const send = (event: string, data: unknown) => controller.enqueue(encoder.encode(eventPayload(event, data)));
+      let open = true;
+      const close = () => { if (!open) return; open = false; try { controller.close(); } catch { /* detached */ } };
+      request.signal.addEventListener("abort", () => { open = false; }, { once: true });
+      const send = (event: string, data: unknown) => { if (!open) return; try { controller.enqueue(encoder.encode(eventPayload(event, data))); } catch { open = false; } };
       try {
         const result = await runner.resume(runId, input.approval, input.interactionId, input.callId, request.signal, (event) => send("event", event));
         send("result", result);
       } catch (error) {
-        send("error", { code: error instanceof Error ? error.message : "AGENT_LOOP_RESUME_FAILED" });
-      } finally { controller.close(); }
+        if (open) send("error", { code: error instanceof Error ? error.message : "AGENT_LOOP_RESUME_FAILED" });
+      } finally { close(); }
     },
   });
   return new Response(responseStream, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" } });

@@ -13,7 +13,7 @@ import { TaskList } from "./task-list";
 import { formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
-import { applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, recoverBrowserAgentLoop, restoreBrowserDocumentVersion, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
 import { createAgentEvent } from "@/modules/agent/application/events";
 import { useConversationStore } from "./conversation-store";
 import { listBrowserTasks, loadBrowserTaskWorkspace, type TaskPage } from "@/modules/tasks/browser-tasks";
@@ -239,6 +239,15 @@ export function Workbench() {
           setAwaitingFinalReview(resumed.status === "awaiting_review");
           const resumedIsActive = ["queued", "running"].includes(resumed.status);
           setStage(resumed.status === "awaiting_approval" || resumed.status === "awaiting_user" || resumed.status === "awaiting_review" ? "awaiting" : resumed.status === "completed" ? "complete" : resumedIsActive ? "analyzing" : "idle");
+          if (resumed.status === "running") {
+            void recoverBrowserAgentLoop(resumed.id, (event) => setActiveEvents((items) => mergeTimelineEvents(items, [event])), abort.signal)
+              .then((recovered) => {
+                if (abort.signal.aborted) return;
+                setLoopResult(recovered);
+                setRun((current) => current && current.id === resumed.id ? { ...current, status: recovered.checkpoint.status } : current);
+                setStage(recovered.checkpoint.pendingInteraction ? "awaiting" : recovered.checkpoint.status === "completed" ? "complete" : recovered.checkpoint.status === "running" ? "analyzing" : "idle");
+              }).catch(() => undefined);
+          }
         } else setStage("idle");
         // Completed-run history is intentionally loaded by the independent
         // background effect below; it must not delay the first usable render
@@ -390,7 +399,7 @@ export function Workbench() {
       const runToRecover = activeRunForRecovery ?? run;
       if (runToRecover) {
         try {
-          const recovered = await loadBrowserAgentLoop(runToRecover.id);
+          const recovered = await recoverBrowserAgentLoop(runToRecover.id, (event) => setActiveEvents((items) => mergeTimelineEvents(items, [event])));
           setLoopResult(recovered);
           setActiveEvents((items) => mergeTimelineEvents(items, recovered.events));
           if (recovered.checkpoint.pendingInteraction) {
@@ -581,9 +590,17 @@ export function Workbench() {
     setVersionsOpen(false); setMobilePanel("none"); setNotice(`已从 ${id} 创建新的恢复版本，历史记录仍完整保留`);
   };
   const cancelRun = async () => {
-    agentAbortRef.current?.abort();
-    try { if (run && workspaceReady) setRun(await cancelBrowserAgentRun(run.id)); } catch { /* persisted latest state wins */ }
-    setStage("idle"); setNotice("任务已取消，最近有效版本未受影响");
+    if (!run || !workspaceReady) return;
+    try {
+      const cancelled = await cancelBrowserAgentRun(run.id);
+      setRun(cancelled);
+      agentAbortRef.current?.abort();
+      setStage("idle"); setNotice("任务已取消，最近有效版本未受影响");
+    } catch {
+      const latest = await loadBrowserAgentRun(run.id).catch(() => undefined);
+      if (latest) setRun(latest);
+      setNotice(latest?.status === "cancelled" ? "任务已取消，最近有效版本未受影响" : "取消请求未确认，已保留服务端运行状态");
+    }
   };
   const finalReview = async (choice: "approved" | "rejected") => {
     setAwaitingFinalReview(false);

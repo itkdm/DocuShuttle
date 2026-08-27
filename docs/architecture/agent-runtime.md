@@ -114,4 +114,20 @@ revision CAS、OOXML validation、immutable version、Effect Receipt、idempoten
 若 resolution 已存在则幂等重放该决定，不再次要求用户选择；
 取消先取得 `agent_runs` 行锁，文档提交 RPC 在同一行锁下拒绝 `cancelled` 运行，避免
 取消与不可变版本提交产生不一致。租约只覆盖 `queued/running`，过期运行会被回收为
-`cancelled`，并同步修正 checkpoint 状态。
+ `cancelled`，并同步修正 checkpoint 状态。
+
+### Transport 与 SSE Recovery
+
+SSE 是可断开的观察传输，不是 Run 生命周期本身。浏览器断线、刷新或消费端关闭只会
+触发 `TRANSPORT_INTERRUPTED`，服务端保持最近一次成功保存的 checkpoint/status，并释放
+`running` Run 的 recovery lease；只有显式 Cancel API 成功后才进入 `cancelled`。
+
+恢复 cursor 唯一使用 durable EventStore 的 `sequence`；`eventId` 只负责事件 identity。
+`GET /loop?after=N` 使用 `limit + 1` 判断 `hasMore`，最多每页 500 条。浏览器按 cursor
+分页 replay，再通过 `eventId` 合并 live 与 durable event，durable 版本可以替换同 identity
+的 live 版本。`model.delta` 是 best-effort live-only 数据，不进入 replay。
+
+`/loop/recover` 不接受用户 prompt、权限覆盖或 interaction answer。它只对同一 `runId` 的
+`running` checkpoint 做原子 recovery claim；活跃租约会被跳过，过期租约才由同一个
+Run 继续执行。刷新与流中断共用 replay → checkpoint reconcile → claim → continue 流程，
+不会创建新 Run 或重新提交原 prompt。

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { AgentLoopRunner, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentModelPort, type AgentTool } from "../application/loop";
+import { AgentLoopRunner, TRANSPORT_INTERRUPTED, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentModelPort, type AgentTool } from "../application/loop";
 import type { AgentEvent } from "../application/events";
 
 class MemoryStore {
@@ -16,6 +16,7 @@ class MemoryStore {
   async load() { return structuredClone(this.value); }
   async save(_runId: string, checkpoint: AgentLoopCheckpoint) { this.saves += 1; if (this.failFromSave !== undefined && this.saves >= this.failFromSave) throw new Error("simulated checkpoint failure"); this.value = structuredClone(checkpoint); }
   async heartbeat() { this.heartbeats += 1; return true; }
+  async releaseLeaseForRecovery() {}
   async loadEffectReceipt(_runId: string, idempotencyKey: string) { return this.receipts.get(idempotencyKey); }
   async saveEffectReceipt(_runId: string, receipt: AgentEffectReceipt) { this.receipts.set(receipt.idempotencyKey, receipt); return receipt; }
   async appendEvents(_runId: string, events: readonly AgentEvent[]) { this.appendEventsCalls += 1; if (this.failEventPersistence) throw new Error("simulated event persistence failure"); this.durableEvents.push(...events); }
@@ -65,6 +66,23 @@ describe("AgentLoopRunner", () => {
     expect(result.checkpoint.messages.some((message) => message.role === "tool")).toBe(true);
     expect(result.checkpoint.messages.some((message) => message.role === "assistant" && message.toolCalls?.[0]?.name === "inspect_document")).toBe(true);
     expect(result.events.every((event) => typeof event.eventId === "string")).toBe(true);
+  });
+
+  it("treats a transport abort as recoverable instead of cancelling the run", async () => {
+    const store = new MemoryStore();
+    let released = 0;
+    store.releaseLeaseForRecovery = async () => { released += 1; };
+    const controller = new AbortController();
+    const model: AgentModelPort = { decide: async ({ signal }) => {
+      await new Promise<void>((resolve) => signal?.aborted ? resolve() : signal?.addEventListener("abort", () => resolve(), { once: true }));
+      throw new Error("socket closed");
+    } };
+    const promise = new AgentLoopRunner(model, store, []).runWithPermission("run-transport", "检查", "default", controller.signal);
+    controller.abort();
+    await expect(promise).rejects.toThrow(TRANSPORT_INTERRUPTED);
+    expect(released).toBe(1);
+    expect(store.durableEvents.some((event) => event.type === "turn.cancelled")).toBe(false);
+    expect((await store.load())?.status).toBe("running");
   });
 
   it("does not duplicate the checkpoint save after a tool result", async () => {

@@ -71,7 +71,6 @@ async function consumeAgentStream(
   let frameCount = 0;
   let bytesReceived = 0;
   let firstEventMs: number | undefined;
-  let lastSequence = 0;
   const started = performance.now();
   try {
     while (true) {
@@ -89,11 +88,7 @@ async function consumeAgentStream(
         const data = JSON.parse(raw) as unknown;
         if (event === "event") {
           const normalized = isAgentEvent(data) && data.runId === runId ? data : undefined;
-          const sequence = normalized?.sequence;
-          if (normalized && (sequence === undefined || sequence > lastSequence)) {
-            if (sequence !== undefined) lastSequence = sequence;
-            onEvent(normalized);
-          }
+          if (normalized) onEvent(normalized);
         }
         if (event === "result" && typeof data === "object" && data !== null) finalResult = data as BrowserAgentLoopResult;
         if (event === "error") {
@@ -108,8 +103,7 @@ async function consumeAgentStream(
       const data = JSON.parse(frame.data) as unknown;
       if (frame.event === "event") {
         const normalized = isAgentEvent(data) && data.runId === runId ? data : undefined;
-        const sequence = normalized?.sequence;
-        if (normalized && (sequence === undefined || sequence > lastSequence)) { if (sequence !== undefined) lastSequence = sequence; onEvent(normalized); }
+        if (normalized) onEvent(normalized);
       }
       if (frame.event === "result" && typeof data === "object" && data !== null) finalResult = data as BrowserAgentLoopResult;
       if (frame.event === "error") throw new Error(userFacingError((data as { code?: string }).code, "这次请求没有完成，请稍后重试。"));
@@ -175,6 +169,8 @@ export type BrowserAgentLoopResult = {
   /** Server responses are normalized at the SSE boundary; JSON replay is
    * intentionally validated by the replay adapter before it reaches UI. */
   events: ReadonlyArray<AgentEvent>;
+  nextSequence?: number;
+  hasMore?: boolean;
 };
 
 export function normalizeReplayEvents(events: readonly unknown[]): DurableAgentEvent[] {
@@ -201,11 +197,47 @@ export async function runBrowserAgentLoopStream(
   );
 }
 
-export const loadBrowserAgentLoop = async (runId: string, after?: number) =>
+export const loadBrowserAgentLoop = async (runId: string, after = 0, limit = 500) =>
   (async () => {
-    const result = await json<BrowserAgentLoopResult & { nextSequence?: number }>(`/api/agent/runs/${runId}/loop${after ? `?after=${after}` : ""}`);
+    const result = await json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop?after=${after}&limit=${limit}`);
     return { ...result, events: normalizeReplayEvents(result.events) };
   })();
+
+const recoveryBackoffMs = [300, 700, 1_500, 3_000, 5_000];
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+export async function recoverBrowserAgentLoop(
+  runId: string,
+  onEvent: (event: AgentEvent) => void,
+  signal?: AbortSignal,
+) {
+  let after = 0;
+  let latest: BrowserAgentLoopResult | undefined;
+  for (let attempt = 0; attempt <= recoveryBackoffMs.length; attempt += 1) {
+    const page = await loadBrowserAgentLoop(runId, after);
+    latest = page;
+    for (const event of page.events) onEvent(event);
+    after = page.nextSequence ?? after;
+    if (page.hasMore) { attempt -= 1; continue; }
+    if (page.checkpoint.status !== "running") return page;
+    try {
+      const recovered = await consumeAgentStream(
+        await fetch(`/api/agent/runs/${runId}/loop/recover`, { method: "PUT", signal }),
+        runId,
+        onEvent,
+      );
+      return recovered;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (attempt === recoveryBackoffMs.length) break;
+      await wait(recoveryBackoffMs[attempt]);
+      const refreshed = await loadBrowserAgentLoop(runId, after);
+      latest = refreshed;
+      if (refreshed.checkpoint.status !== "running") return refreshed;
+    }
+  }
+  return latest ?? await loadBrowserAgentLoop(runId, after);
+}
 
 export const resumeBrowserAgentLoop = async (runId: string, approval: "approved" | "rejected", interactionId: string, callId: string) =>
   json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop/resume`, post({ approval, interactionId, callId }));

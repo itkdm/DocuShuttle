@@ -113,6 +113,20 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     });
   }
 
+  async claimRecovery(runId: string): Promise<AgentLoopCheckpoint | undefined> {
+    const result = await this.client.rpc("claim_agent_run_recovery", { p_run_id: runId });
+    if (result.error) {
+      if (result.error.message.includes("RUN_STILL_ACTIVE")) throw new Error("RUN_STILL_ACTIVE");
+      throw new Error(`Unable to claim agent recovery: ${result.error.message}`);
+    }
+    return normalizeAgentLoopCheckpoint(result.data);
+  }
+
+  async releaseLeaseForRecovery(runId: string): Promise<void> {
+    const result = await this.client.rpc("release_agent_run_recovery_lease", { p_run_id: runId });
+    if (result.error) throw new Error(`Unable to release agent recovery lease: ${result.error.message}`);
+  }
+
   async markCancelled(runId: string): Promise<void> {
     const current = await this.client.from("agent_runs").select("state, lock_version, status").eq("id", runId).maybeSingle();
     if (current.error || !current.data) throw new Error("RUN_NOT_FOUND");

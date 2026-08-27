@@ -27,7 +27,7 @@ const toolNames: Record<string, { label: string; detail: string }> = {
   export_document: { label: "导出文档", detail: "准备当前版本的下载" },
 };
 
-export const toolPresentation = (name: string) => toolNames[name] ?? { label: "执行文档操作", detail: name };
+export const toolPresentation = (name: string) => toolNames[name] ?? { label: "执行文档操作", detail: "处理当前文档" };
 
 const sensitiveKey = /(api[-_]?key|access[-_]?token|refresh[-_]?token|secret|password|authorization|credential|system[-_]?prompt|base64)/i;
 export function sanitizeForDisplay(value: unknown, depth = 0): unknown {
@@ -210,7 +210,7 @@ export function AgentTimeline({ events, onApproval, deciding = false, onCancel }
       if (item.kind === "status") return <div className={`timeline-status ${item.state}`} key={item.id}><StateIcon state={item.state === "completed" ? "completed" : item.state === "cancelled" ? "approval" : "failed"} /><span>{item.text}</span></div>;
       const presentation = toolPresentation(item.name);
       const detailText = typeof item.error === "string" ? item.error : compact(item.output ?? item.input);
-      return <div className={`timeline-tool ${item.state}`} key={item.id}><div className="timeline-tool-head"><span className="timeline-tool-icon"><StateIcon state={item.state} /></span><div><strong>{presentation.label}</strong><small>{presentation.detail} · <code>{item.name}</code>{item.durationMs !== undefined && <> · {item.durationMs}ms</>}</small></div><ChevronRight size={14} /></div>{item.state === "approval" && onApproval && <div className="timeline-approval"><p>这一步会修改文档并创建新的版本，需要你的确认。</p><div><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并执行</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div></div>}{detailText && <details><summary>查看详情</summary><pre>{detailText}</pre></details>}</div>;
+      return <div className={`timeline-tool ${item.state}`} key={item.id}><div className="timeline-tool-head"><span className="timeline-tool-icon"><StateIcon state={item.state} /></span><div><strong>{presentation.label}</strong><small>{presentation.detail}{item.durationMs !== undefined && <> · {item.durationMs}ms</>}</small></div><ChevronRight size={14} /></div>{item.state === "approval" && onApproval && <div className="timeline-approval"><p>这一步会修改文档并创建新的版本，需要你的确认。</p><div><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并执行</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div></div>}{(detailText || item.name) && <details><summary>技术详情</summary><small><code>{item.name}</code></small>{detailText && <pre>{detailText}</pre>}</details>}</div>;
     })}
   </div>;
 }

@@ -12,11 +12,11 @@ import { sha256, utf8 } from "./hash";
 import {
   getContentType,
   type LoadedPackage,
-  resolveRelationshipTarget,
 } from "./package-model";
 import { attributes, findElementRanges, visibleText, type XmlRange } from "./xml";
 import { flattenLosslessXml, parseLosslessXml, type LosslessXmlNode } from "./lossless-xml";
 import { capabilitiesFor } from "./capability-registry";
+import { relationshipPartFor } from "./opc-graph";
 
 function storyForEntry(entry: string, textBox = false): string {
   if (textBox) return "textbox";
@@ -63,13 +63,6 @@ function storyEntries(loaded: LoadedPackage): string[] {
     .sort((left, right) =>
       left === "word/document.xml" ? -1 : right === "word/document.xml" ? 1 : left.localeCompare(right),
     );
-}
-
-function relationshipsEntry(storyEntry: string): string {
-  const slash = storyEntry.lastIndexOf("/");
-  const directory = storyEntry.slice(0, slash);
-  const file = storyEntry.slice(slash + 1);
-  return `${directory}/_rels/${file}.rels`;
 }
 
 function containingCellPath(
@@ -167,32 +160,19 @@ async function indexParagraphs(
   );
 }
 
-function parseRelationships(xml: string): Map<string, string> {
-  const result = new Map<string, string>();
-  for (const match of xml.matchAll(/<(?:\w+:)?Relationship\b[^>]*\/?\s*>/g)) {
-    const attrs = attributes(match[0]);
-    if (attrs.Id && attrs.Target && attrs.TargetMode !== "External") {
-      result.set(attrs.Id, attrs.Target);
-    }
-  }
-  return result;
-}
-
 async function indexImages(
   loaded: LoadedPackage,
   entry: string,
   xml: string,
 ): Promise<IndexedImage[]> {
-  const relsEntry = relationshipsEntry(entry);
-  const relsBytes = loaded.entries.get(relsEntry);
-  if (!relsBytes) return [];
-  const relationships = parseRelationships(new TextDecoder().decode(relsBytes));
+  const relsEntry = relationshipPartFor(entry);
+  const relationships = new Map(loaded.graph.relationshipsFor(entry).map((relationship) => [relationship.id, relationship]));
   const result: IndexedImage[] = [];
   let imageIndex = 0;
   for (const match of xml.matchAll(/r:embed\s*=\s*(?:"([^"]+)"|'([^']+)')/g)) {
     const relationshipId = match[1] ?? match[2];
     const target = relationships.get(relationshipId);
-    const mediaEntry = target ? resolveRelationshipTarget(relsEntry, target) : undefined;
+    const mediaEntry = target?.targetMode === "Internal" ? target.resolvedPart : undefined;
     const media = mediaEntry ? loaded.entries.get(mediaEntry) : undefined;
     if (!mediaEntry || !media) continue;
     const before = xml.slice(Math.max(0, match.index - 1500), match.index);

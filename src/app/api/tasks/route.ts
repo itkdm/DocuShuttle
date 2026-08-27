@@ -13,13 +13,20 @@ const requestSchema = z.object({
   goal: z.string().trim().max(8_000).default(""),
 });
 
-export async function GET() {
+const listQuerySchema = z.object({
+  offset: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+});
+
+export async function GET(request: Request) {
   const started = performance.now();
   try {
+    const query = listQuerySchema.parse(Object.fromEntries(new URL(request.url).searchParams));
     const { client, user } = await requireSupabaseUser();
-    const tasks = await new ListTasks(new SupabaseTaskRepository(client)).execute(user.id);
-    logger.info("tasks.list.completed", { durationMs: performance.now() - started, taskCount: tasks.length });
-    return NextResponse.json({ tasks });
+    const tasks = await new ListTasks(new SupabaseTaskRepository(client)).execute(user.id, { limit: query.limit + 1, offset: query.offset });
+    const hasMore = tasks.length > query.limit;
+    logger.info("tasks.list.completed", { durationMs: performance.now() - started, taskCount: Math.min(tasks.length, query.limit), offset: query.offset, limit: query.limit, hasMore });
+    return NextResponse.json({ tasks: tasks.slice(0, query.limit), nextOffset: hasMore ? query.offset + query.limit : null, hasMore });
   } catch (error) {
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") {
       return NextResponse.json({ code: error.message }, { status: 401 });

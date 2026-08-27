@@ -14,7 +14,7 @@ import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
 import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserAgentLoopResult, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
 import { useConversationStore } from "./conversation-store";
-import { listBrowserTasks, loadBrowserTaskWorkspace } from "@/modules/tasks/browser-tasks";
+import { listBrowserTasks, loadBrowserTaskWorkspace, type TaskPage } from "@/modules/tasks/browser-tasks";
 import type { TaskSummary } from "@/modules/tasks/domain";
 import { taskIdFromPathname, taskUrl } from "@/modules/tasks/task-url";
 import { ensureAnonymousSession } from "@/infrastructure/supabase/browser";
@@ -52,6 +52,8 @@ export function Workbench() {
   const [notice, setNotice] = useState("请选择真实 DOCX；首页保持空白，打开历史任务才会恢复文档和对话");
   const [taskId, setTaskId] = useState<string>();
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [nextTaskOffset, setNextTaskOffset] = useState<number | null>(null);
+  const [loadingMoreTasks, setLoadingMoreTasks] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [run, setRun] = useState<AgentRun>();
   const [proposalSummary, setProposalSummary] = useState<string>();
@@ -69,7 +71,7 @@ export function Workbench() {
   const [conversationCursor, setConversationCursor] = useState<string | null>(null);
   const [loadingEarlierMessages, setLoadingEarlierMessages] = useState(false);
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>("default");
-  const taskListRequestRef = useRef<Promise<TaskSummary[]> | undefined>(undefined);
+  const taskListRequestRef = useRef<Promise<TaskPage> | undefined>(undefined);
 
   const resetWorkspace = useCallback(() => {
     loadedTaskIdRef.current = undefined;
@@ -100,7 +102,11 @@ export function Workbench() {
 
   const refreshTaskList = async () => {
     if (taskListRequestRef.current) {
-      try { setTasks(await taskListRequestRef.current); } catch { setTasks([]); }
+      try {
+        const page = await taskListRequestRef.current;
+        setTasks(page.tasks);
+        setNextTaskOffset(page.nextOffset);
+      } catch { setTasks([]); }
       return;
     }
     const request = (async () => {
@@ -109,11 +115,27 @@ export function Workbench() {
     })();
     taskListRequestRef.current = request;
     try {
-      setTasks(await request);
+      const page = await request;
+      setTasks(page.tasks);
+      setNextTaskOffset(page.nextOffset);
     } catch {
       setTasks([]);
+      setNextTaskOffset(null);
     } finally {
       taskListRequestRef.current = undefined;
+    }
+  };
+
+  const loadMoreTasks = async () => {
+    if (nextTaskOffset === null || loadingMoreTasks) return;
+    setLoadingMoreTasks(true);
+    try {
+      await ensureAnonymousSession();
+      const page = await listBrowserTasks(nextTaskOffset);
+      setTasks((current) => [...current, ...page.tasks]);
+      setNextTaskOffset(page.nextOffset);
+    } finally {
+      setLoadingMoreTasks(false);
     }
   };
 
@@ -639,7 +661,7 @@ export function Workbench() {
       {versionsOpen && <div className="version-popover" role="dialog" aria-label="版本历史"><div className="version-heading"><div><span className="eyebrow">不可变历史</span><h2>版本记录</h2></div><button className="icon-button" onClick={() => setVersionsOpen(false)} aria-label="关闭版本记录"><X size={16} /></button></div><p>恢复会创建新版本，不会删除后续记录。</p><ol>{versions.map((version) => <li key={version.id} className={version.current ? "current" : ""}><span className="version-node">{version.current ? <Check size={12} /> : version.id.slice(1)}</span><div><strong>{version.label}</strong><small>{version.id} · {version.actor} · {version.time}</small></div>{!version.current && <button onClick={() => restoreVersion(version.id)}><RotateCcw size={12} /> 恢复</button>}</li>)}</ol></div>}
 
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
-        {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
+        {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} onLoadMoreTasks={loadMoreTasks} hasMoreTasks={nextTaskOffset !== null} loadingMoreTasks={loadingMoreTasks} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
         <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} proposal={proposal} onChoose={chooseWorkingDocument} onDecide={decide} proposalSummary={proposalSummary} /></div>
         {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} liveEvents={liveEvents} timelineHistory={timelineHistory} onLoopApproval={decideLoop} conversation={conversation} onCollapse={() => setRightOpen(false)} onRun={runAgent} onRetry={runAgent} onCancel={cancelRun} onDecide={decide} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
@@ -648,7 +670,7 @@ export function Workbench() {
 
       {mobilePanel !== "none" && <div className="mobile-sheet" role="dialog" aria-modal="true" aria-label={mobilePanel === "agent" ? "移动审批" : mobilePanel === "outline" ? "源文档" : "版本历史"}><div className="sheet-handle" /><button className="sheet-close" onClick={() => setMobilePanel("none")} aria-label="关闭"><X size={18} /></button>
         {mobilePanel === "agent" && <div className="mobile-approval"><span className="eyebrow">{awaitingFinalReview ? "需要确认" : "Agent 工作区"}</span><h2>{awaitingFinalReview ? "确认最终版本" : "确认局部改写建议"}</h2><p>{proposalSummary ?? "请先打开文档并让 Agent 生成修改计划。"}</p><div>{awaitingFinalReview ? <button className="mobile-approve" onClick={() => { void finalReview("approved"); setMobilePanel("none"); }}><Check size={16} /> 确认交付</button> : <button className="mobile-approve" onClick={() => { void decide("accepted"); setMobilePanel("none"); }} disabled={!proposalSummary}><Check size={16} /> 批准并应用</button>}<button onClick={() => { void decide("rejected"); setMobilePanel("none"); }} disabled={!proposalSummary}>拒绝</button></div></div>}
-        {mobilePanel === "outline" && <div className="mobile-sources"><span className="eyebrow">任务输入</span><h2>源文档</h2>{assets.length ? assets.map((asset) => <div key={asset.kind}><FilePlus2 size={17} /><span><strong>{asset.kind === "template" ? "空白模板" : "完成示例"}</strong><small>{asset.name} · {asset.size}</small></span><Check size={15} /></div>) : <p>先选择空白模板或完成示例，再开始一个任务。</p>}<TaskList tasks={tasks} activeTaskId={taskId} onSelectTask={(id) => { openTask(id); setMobilePanel("none"); }} onCreateTask={() => { startNewTask(); setMobilePanel("none"); }} /></div>}
+        {mobilePanel === "outline" && <div className="mobile-sources"><span className="eyebrow">任务输入</span><h2>源文档</h2>{assets.length ? assets.map((asset) => <div key={asset.kind}><FilePlus2 size={17} /><span><strong>{asset.kind === "template" ? "空白模板" : "完成示例"}</strong><small>{asset.name} · {asset.size}</small></span><Check size={15} /></div>) : <p>先选择空白模板或完成示例，再开始一个任务。</p>}<TaskList tasks={tasks} activeTaskId={taskId} onSelectTask={(id) => { openTask(id); setMobilePanel("none"); }} onCreateTask={() => { startNewTask(); setMobilePanel("none"); }} onLoadMore={loadMoreTasks} hasMore={nextTaskOffset !== null} loadingMore={loadingMoreTasks} /></div>}
           {mobilePanel === "versions" && <div className="mobile-versions"><span className="eyebrow">不会覆盖历史</span><h2>版本</h2>{versions.slice(0, 4).map((version) => <button key={version.id} onClick={() => { if (!version.current) void restoreVersion(version.id); }}><span>{version.id}</span><div><strong>{version.label}</strong><small>{version.time} · {version.actor}</small></div>{!version.current && <RotateCcw size={14} />}</button>)}</div>}
       </div>}
       <div className="sr-only" role="status" aria-live="polite">{notice}</div><div className="toast" aria-hidden="true"><span className="toast-dot" />{notice}</div>

@@ -7,6 +7,9 @@ interface TaskListProps {
   onSelectTask: (taskId: string) => void;
   onCreateTask: () => void;
   heading?: boolean;
+  onLoadMore?: () => void;
+  hasMore?: boolean;
+  loadingMore?: boolean;
 }
 
 function formatTaskTime(iso: string) {
@@ -15,7 +18,7 @@ function formatTaskTime(iso: string) {
   return date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-export function TaskList({ tasks, activeTaskId, onSelectTask, onCreateTask, heading = true }: TaskListProps) {
+export function TaskList({ tasks, activeTaskId, onSelectTask, onCreateTask, heading = true, onLoadMore, hasMore = false, loadingMore = false }: TaskListProps) {
   return (
     <section className="task-list" aria-label="任务列表">
       {heading && (
@@ -51,6 +54,7 @@ export function TaskList({ tasks, activeTaskId, onSelectTask, onCreateTask, head
           ))}
         </ol>
       )}
+      {onLoadMore && hasMore && <button className="task-load-more" type="button" onClick={onLoadMore} disabled={loadingMore}>{loadingMore ? "正在加载…" : "加载更多任务"}</button>}
     </section>
   );
 }

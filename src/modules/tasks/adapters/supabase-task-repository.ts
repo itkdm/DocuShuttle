@@ -80,14 +80,18 @@ export class SupabaseTaskRepository implements TaskRepositoryPort {
     };
   }
 
-  async listByOwner(ownerUserId: string): Promise<TaskSummary[]> {
+  async listByOwner(ownerUserId: string, options: { limit?: number; offset?: number } = {}): Promise<TaskSummary[]> {
+    // Allow the list use case to fetch one sentinel row for hasMore while the
+    // public API still caps a page at 50 summaries.
+    const limit = Math.min(Math.max(options.limit ?? 20, 1), 51);
+    const offset = Math.max(options.offset ?? 0, 0);
     const result = await this.client
       .from("tasks")
       .select("id, title, status, updated_at, source_files(role, original_name)")
       .eq("owner_user_id", ownerUserId)
       .neq("status", "archived")
       .order("updated_at", { ascending: false })
-      .limit(50);
+      .range(offset, offset + limit - 1);
     fail("Unable to list tasks", result.error);
     return (result.data ?? []).map((row) => {
       const sources = ((row.source_files as Array<{ role: string; original_name: string }> | null) ?? [])

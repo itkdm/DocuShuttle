@@ -2,6 +2,8 @@
 
 import type { TaskSummary, TaskWorkspace } from "./domain";
 
+export type TaskPage = { tasks: TaskSummary[]; nextOffset: number | null; hasMore: boolean };
+
 const json = async <T>(url: string): Promise<T> => {
   const started = performance.now();
   let response: Response;
@@ -17,8 +19,8 @@ const json = async <T>(url: string): Promise<T> => {
   return body;
 };
 
-export const listBrowserTasks = async () =>
-  (await json<{ tasks: TaskSummary[] }>("/api/tasks")).tasks;
+export const listBrowserTasks = async (offset = 0, limit = 20) =>
+  json<TaskPage>(`/api/tasks?offset=${offset}&limit=${limit}`);
 
 export const loadBrowserTaskWorkspace = async (taskId: string) =>
   (await json<{ workspace: TaskWorkspace }>(`/api/tasks/${taskId}`)).workspace;

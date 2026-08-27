@@ -6,7 +6,7 @@ export interface TaskRepositoryPort {
     title: string;
     goal: string;
   }): Promise<TaskRecord>;
-  listByOwner(ownerUserId: string): Promise<TaskSummary[]>;
+  listByOwner(ownerUserId: string, options?: { limit?: number; offset?: number }): Promise<TaskSummary[]>;
   getWorkspace(taskId: string, ownerUserId: string): Promise<{
     task: TaskRecord;
     sources: TaskSourceRecord[];

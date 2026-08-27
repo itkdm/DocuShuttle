@@ -57,14 +57,15 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
     signal?: AbortSignal;
     onTextDelta?: (text: string) => void;
   }): Promise<AgentModelDecision> {
-    const timer = createTimer("agent.model", { provider: "openai-compatible", model: this.options.model, inputMessageCount: input.messages.length, toolCount: input.tools.length });
+    const inputCharacterCount = input.messages.reduce((total, message) => total + message.content.length, 0);
+    const timer = createTimer("agent.model", { provider: "openai-compatible", model: this.options.model, inputMessageCount: input.messages.length, inputCharacterCount, toolCount: input.tools.length });
     logger.info("agent.model.started", timer.metadata);
     let firstTokenMs: number | undefined;
     const onTextDelta = input.onTextDelta ? (text: string) => {
       if (firstTokenMs === undefined) { firstTokenMs = timer.elapsed(); timer.mark("first_token"); logger.info("agent.model.first_token", { ...timer.metadata, firstTokenMs }); }
       input.onTextDelta?.(text);
     } : undefined;
-    const complete = (decision: AgentModelDecision) => { logger.info("agent.model.completed", { ...timer.metadata, durationMs: timer.elapsed(), firstTokenMs, outcome: "success", toolCallNames: decision.kind === "tool_calls" ? decision.calls.map((call) => call.name) : [] }); return decision; };
+    const complete = (decision: AgentModelDecision, usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }) => { logger.info("agent.model.completed", { ...timer.metadata, durationMs: timer.elapsed(), firstTokenMs, outcome: "success", ...(usage ?? {}), toolCallNames: decision.kind === "tool_calls" ? decision.calls.map((call) => call.name) : [] }); return decision; };
     // ask_user is a control-plane tool: the model may explicitly suspend the
     // same conversation when required information is missing. It is converted
     // back to the runner's durable HITL decision rather than executed as a
@@ -124,17 +125,18 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
             onTextDelta(delta);
           }
           const toolCalls = await response.toolCalls;
+          const usage = await response.usage;
           if (toolCalls.length > 0) {
             const ask = toolCalls.find((call) => call.toolName === "ask_user");
             if (ask && typeof ask.input === "object" && ask.input !== null && "text" in ask.input) {
-              return complete({ kind: "ask_user", text: String((ask.input as { text: unknown }).text) });
+              return complete({ kind: "ask_user", text: String((ask.input as { text: unknown }).text) }, usage);
             }
             return complete({
               kind: "tool_calls",
               calls: toolCalls.map((call) => ({ id: call.toolCallId, name: call.toolName, input: call.input })),
-            });
+            }, usage);
           }
-          return complete({ kind: "message", text: streamedText || "我暂时没有足够信息继续，请补充一下目标。" });
+          return complete({ kind: "message", text: streamedText || "我暂时没有足够信息继续，请补充一下目标。" }, usage);
         } catch (error) {
           lastError = error;
           if (attempt === 0 && streamedText.length === 0 && !input.signal?.aborted) {
@@ -149,18 +151,19 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
       throw error;
     }
     const response = await generateText(request);
+    const usage = response.usage;
     if (response.toolCalls.length > 0) {
       const ask = response.toolCalls.find((call) => call.toolName === "ask_user");
       if (ask && typeof ask.input === "object" && ask.input !== null && "text" in ask.input) {
-        return complete({ kind: "ask_user", text: String((ask.input as { text: unknown }).text) });
+        return complete({ kind: "ask_user", text: String((ask.input as { text: unknown }).text) }, usage);
       }
       return complete({
         kind: "tool_calls",
         calls: response.toolCalls.map((call) => ({ id: call.toolCallId, name: call.toolName, input: call.input })),
-      });
+      }, usage);
     }
     const text = response.text || "I need more information to continue.";
-    return complete({ kind: "message", text });
+    return complete({ kind: "message", text }, usage);
   }
 }
 

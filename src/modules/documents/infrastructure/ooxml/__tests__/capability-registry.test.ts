@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { capabilitiesFor, featureAdapterRegistry } from "../capability-registry";
+import { capabilityCatalog } from "../capability-catalog";
 
 describe("OOXML capability registry", () => {
   it("exposes a provider-neutral feature adapter registry", () => {
     expect(featureAdapterRegistry.list()).toEqual(["textbox", "content-control", "field", "tracked-revision", "cross-run-text", "nested-table-container", "shared-media"]);
     expect(featureAdapterRegistry.matching({ kind: "paragraph", textBox: true }).map(({ featureId }) => featureId)).toEqual(["textbox"]);
+  });
+
+  it("keeps every guarded adapter represented in the conformance catalog", () => {
+    const catalogIds = new Set(capabilityCatalog.map(({ featureId }) => featureId));
+    expect(featureAdapterRegistry.list().every((featureId) => catalogIds.has(featureId))).toBe(true);
   });
   it("marks text boxes and nested containers guarded while keeping reads supported", () => {
     expect(capabilitiesFor("paragraph", { textBox: true })).toContainEqual(expect.objectContaining({ operation: "read", state: "supported" }));

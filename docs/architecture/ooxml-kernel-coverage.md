@@ -57,6 +57,7 @@
 | 包模型 | `package-model.ts` |
 | OPC 关系图 | `opc-graph.ts` / `relationship-utils.ts` |
 | Feature Adapter Registry | `feature-adapter-registry.ts` / `capability-registry.ts` |
+| Conformance Catalog | `capability-catalog.ts` |
 | 节点索引 | `inspector.ts` |
 | 字符串 XML | `xml.ts` |
 | 打开 vs 写入 | `diagnostic-policy.ts` |

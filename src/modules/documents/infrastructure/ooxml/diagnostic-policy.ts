@@ -12,6 +12,7 @@ const CAPABILITY_CODES = new Set([
   "REVISION_PRESENT",
   "CONTENT_CONTROL_PRESENT",
   "BOOKMARK_PRESENT",
+  "SIGNED_PACKAGE_GUARDED",
 ]);
 
 export function isCapabilityDiagnostic(diagnostic: DocumentDiagnostic): boolean {

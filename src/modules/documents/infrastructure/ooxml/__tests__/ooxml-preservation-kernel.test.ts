@@ -403,6 +403,14 @@ describe("OoxmlPreservationKernel", () => {
     })).rejects.toMatchObject({ code: "SOURCE_PACKAGE_INVALID" });
   });
 
+  it("opens signed packages as preserved but refuses mutation", async () => {
+    const bytes = await createDocx({ "_xmlsignatures/sig1.xml": "<Signature/>" });
+    const kernel = new OoxmlPreservationKernel();
+    const inspected = await kernel.inspect(bytes);
+    expect(inspected.diagnostics).toContainEqual(expect.objectContaining({ code: "SIGNED_PACKAGE_GUARDED", severity: "warning" }));
+    await expect(kernel.mutate(bytes, { expectedRevision: inspected.manifest.revision, operations: [] })).rejects.toMatchObject({ code: "SIGNED_PACKAGE_GUARDED" });
+  });
+
   it("validates image signatures and plain-text control policy", async () => {
     const bytes = await createDocx();
     const kernel = new OoxmlPreservationKernel();

@@ -202,6 +202,20 @@ function detectMacroDiagnostics(
   return diagnostics;
 }
 
+function detectSignatureDiagnostics(
+  entries: ReadonlyMap<string, Uint8Array>,
+  texts: ReadonlyMap<string, string>,
+): DocumentDiagnostic[] {
+  const diagnostics: DocumentDiagnostic[] = [];
+  const signatureParts = [...entries.keys()].filter((path) => /(^|\/)_(?:xml)?signatures?\/|(^|\/)sig\d+\.xml$/i.test(path));
+  for (const entry of signatureParts) diagnostics.push({ severity: "warning", code: "SIGNED_PACKAGE_GUARDED", message: "The package contains an OPC digital signature; PaperDuck preserves it but will not mutate the signed package.", entry });
+  for (const [path, xml] of texts) {
+    if (!path.endsWith(".rels")) continue;
+    if (/digital[-/]signature|signatureOrigin/i.test(xml)) diagnostics.push({ severity: "warning", code: "SIGNED_PACKAGE_GUARDED", message: "The package declares an OPC digital signature; PaperDuck preserves it but will not mutate the signed package.", entry: path });
+  }
+  return diagnostics;
+}
+
 export async function loadPackage(bytes: Uint8Array): Promise<LoadedPackage> {
   preflightZipPackage(bytes);
   let zip: JSZip;
@@ -268,6 +282,7 @@ export async function loadPackage(bytes: Uint8Array): Promise<LoadedPackage> {
 
   diagnostics.push(...validateRelationships(entries, texts));
   diagnostics.push(...detectMacroDiagnostics(entries, texts));
+  diagnostics.push(...detectSignatureDiagnostics(entries, texts));
   const contentTypes = parseContentTypes(texts.get("[Content_Types].xml") ?? "");
   for (const path of entries.keys()) {
     if (path === "[Content_Types].xml") continue;

@@ -287,6 +287,7 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
     const diagnostics = [...loaded.diagnostics, ...indexed.diagnostics];
     const blocking = blockingPackageErrors(diagnostics);
     if (blocking.length > 0) throw new DocumentKernelError("SOURCE_PACKAGE_INVALID", "Refusing to plan against an invalid OOXML package.", blocking);
+    if (diagnostics.some((diagnostic) => diagnostic.code === "SIGNED_PACKAGE_GUARDED")) throw new DocumentKernelError("SIGNED_PACKAGE_GUARDED", "Signed packages are preserved but cannot be mutated.");
     if (loaded.manifest.revision !== request.expectedRevision) throw new DocumentKernelError("REVISION_PRECONDITION_FAILED", "The source package revision differs from expectedRevision.");
     const targets: string[] = [];
     const changedParts = new Set<string>();
@@ -355,6 +356,7 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
         blocking,
       );
     }
+    if (sourceDiagnostics.some((diagnostic) => diagnostic.code === "SIGNED_PACKAGE_GUARDED")) throw new DocumentKernelError("SIGNED_PACKAGE_GUARDED", "Signed packages are preserved but cannot be mutated.");
     if (loaded.manifest.revision !== request.expectedRevision) {
       throw new DocumentKernelError(
         "REVISION_PRECONDITION_FAILED",

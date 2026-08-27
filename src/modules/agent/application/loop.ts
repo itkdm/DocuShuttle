@@ -305,6 +305,7 @@ export class AgentLoopRunner {
         if (!tool) {
           checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: `Unknown agent tool: ${call.name}` }), toolCallId: call.id, toolName: call.name });
           emit({ type: "tool.failed", callId: call.id, name: call.name, error: `Unknown agent tool: ${call.name}` });
+          await this.store.save(runId, checkpoint);
           continue;
         }
         let input: unknown;
@@ -314,6 +315,7 @@ export class AgentLoopRunner {
           const message = error instanceof Error ? error.message : "Tool input validation failed";
           checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: message }), toolCallId: call.id, toolName: call.name });
           emit({ type: "tool.failed", callId: call.id, name: call.name, error: message });
+          await this.store.save(runId, checkpoint);
           continue;
         }
         if (tool.requiresApproval && checkpoint.permissionMode !== "full") {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTimeline, mergeTimelineEvents, sanitizeForDisplay } from "./agent-timeline";
+import { buildTimeline, isTimelineActive, mergeTimelineEvents, sanitizeForDisplay } from "./agent-timeline";
 
 describe("Agent execution timeline", () => {
   it("keeps the original turn when resumed events arrive", () => {
@@ -77,6 +77,14 @@ describe("Agent execution timeline", () => {
   it("renders cancellation as a terminal timeline status", () => {
     const items = buildTimeline([{ type: "turn.cancelled", text: "本轮操作已取消。" }]);
     expect(items).toEqual([{ kind: "status", id: "turn.cancelled-0", state: "cancelled", text: "本轮操作已取消。" }]);
+  });
+
+  it("does not mark an approval checkpoint as actively running", () => {
+    const events = [
+      { type: "model.delta", text: "我准备修改。" },
+      { type: "approval.required", callId: "call-6", name: "apply_text_change", input: {} },
+    ] as never;
+    expect(isTimelineActive(events, buildTimeline(events))).toBe(false);
   });
 
   it("redacts secrets from expandable tool details", () => {

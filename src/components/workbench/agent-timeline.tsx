@@ -70,6 +70,13 @@ export function mergeTimelineEvents(previous: readonly AgentEvent[], incoming: r
   return result;
 }
 
+export function isTimelineActive(events: readonly AgentEvent[], items: readonly TimelineItem[]): boolean {
+  if (events.some((event) => event.type === "completed" || event.type === "turn.failed" || event.type === "turn.cancelled")) return false;
+  if (items.some((item) => item.kind === "tool" && item.state === "running")) return true;
+  const last = events.at(-1)?.type;
+  return last === "model.started" || last === "model.delta";
+}
+
 export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
   const items: TimelineItem[] = [];
   const toolIndex = new Map<string, number>();
@@ -151,8 +158,7 @@ function StateIcon({ state }: { state: ToolState }) {
 
 export function AgentTimeline({ events, onApproval, deciding = false, onCancel }: { events: readonly AgentEvent[]; onApproval?: (choice: "approved" | "rejected") => void | Promise<void>; deciding?: boolean; onCancel?: () => void | Promise<void> }) {
   const items = buildTimeline(events);
-  const terminal = events.some((event) => event.type === "completed" || event.type === "turn.failed" || event.type === "turn.cancelled");
-  const active = !terminal && (items.some((item) => item.kind === "tool" && item.state === "running") || events.some((event) => event.type === "model.started" || event.type === "model.delta"));
+  const active = isTimelineActive(events, items);
   return <div className="agent-timeline">
     {active && onCancel && <div className="timeline-run-toolbar"><span><LoaderCircle size={13} className="event-spinner" />正在运行</span><button type="button" onClick={() => void onCancel()}><StopCircle size={13} />取消运行</button></div>}
     {items.map((item) => {

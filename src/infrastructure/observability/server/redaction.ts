@@ -1,4 +1,4 @@
-const SECRET_KEYS = /api[_-]?key|authorization|cookie|token|secret|password|signed[_-]?url|prompt|content|body|bytes|base64/i;
+const SECRET_KEYS = /^(api[_-]?key|authorization|cookie|token|access[_-]?token|refresh[_-]?token|secret|password|signed[_-]?url|prompt|content|body|bytes|base64)$/i;
 const PREVIEW_ENABLED = process.env.NODE_ENV === "development" && process.env.PAPERDUCK_LOG_CONTENT === "preview";
 const MAX_PREVIEW = 120;
 

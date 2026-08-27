@@ -162,6 +162,33 @@ describe("AgentLoopRunner", () => {
     expect(result.checkpoint.messages.filter((message) => message.role === "tool")).toHaveLength(2);
   });
 
+  it("does not persist unpaired tool calls across an approval boundary", async () => {
+    const store = new MemoryStore();
+    const read: AgentTool = { ...inspectTool, name: "read_context" };
+    const apply: AgentTool = {
+      name: "apply_change",
+      description: "Apply a document change.",
+      inputSchema: z.object({ nodeId: z.string() }),
+      requiresApproval: true,
+      async execute() { return { revision: "r-2" }; },
+    };
+    const model: AgentModelPort = { decide: async ({ messages }) => messages.some((message) => message.role === "tool")
+      ? { kind: "message", text: "已完成。" }
+      : { kind: "tool_calls", calls: [
+        { id: "read-1", name: "read_context", input: { query: "target" } },
+        { id: "apply-1", name: "apply_change", input: { nodeId: "p-1" } },
+        { id: "unreached-1", name: "read_context", input: { query: "later" } },
+      ] } };
+    const paused = await new AgentLoopRunner(model, store, [read, apply]).run("run-approval-boundary", "修改文档");
+    expect(paused.checkpoint.status).toBe("awaiting_user");
+    expect(paused.checkpoint.pendingApproval?.callId).toBe("apply-1");
+    const assistantCalls = paused.checkpoint.messages.flatMap((message) => message.toolCalls ?? []);
+    expect(assistantCalls.map((call) => call.id)).toEqual(["read-1", "apply-1"]);
+    expect(assistantCalls.some((call) => call.id === "unreached-1")).toBe(false);
+    const resumed = await new AgentLoopRunner(model, store, [read, apply]).resume("run-approval-boundary", "approved");
+    expect(resumed.checkpoint.status).toBe("completed");
+  });
+
   it("allows the model to revisit a tool and change route after its result", async () => {
     const calls: string[] = [];
     let step = 0;

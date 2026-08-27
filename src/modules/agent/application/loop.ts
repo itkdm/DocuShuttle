@@ -225,7 +225,6 @@ export class AgentLoopRunner {
         await this.store.save(runId, checkpoint);
         return { checkpoint, events };
       }
-      checkpoint.messages.push({ role: "assistant", content: "", toolCalls: decision.calls });
       for (const call of decision.calls) {
         checkpoint.toolCallCount += 1;
         if (checkpoint.toolCallCount > this.maxToolCalls) {
@@ -238,6 +237,11 @@ export class AgentLoopRunner {
           onEvent?.(failureMessage); onEvent?.(failureEvent);
           return { checkpoint, events };
         }
+        // Keep each assistant tool-call message paired with the result that
+        // follows it. If a later call needs approval, calls after that
+        // boundary are intentionally left for the next model decision rather
+        // than persisting unpaired tool-call IDs into the transcript.
+        checkpoint.messages.push({ role: "assistant", content: "", toolCalls: [call] });
         const tool = this.tools.find((candidate) => candidate.name === call.name);
         if (!tool) {
           checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: `Unknown agent tool: ${call.name}` }), toolCallId: call.id, toolName: call.name });

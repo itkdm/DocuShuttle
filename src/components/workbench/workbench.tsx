@@ -148,68 +148,70 @@ export function Workbench() {
         setRun(undefined);
         setProposalSummary(undefined);
         setAwaitingFinalReview(false);
-        // UI history is durable conversation data, independent from the
-        // compacted model checkpoint. Hydrate it before restoring the latest
-        // run so a refresh never loses earlier turns.
-        try {
-          const durable = await loadBrowserConversationMessages(workspace.task.id);
-          if (!abort.signal.aborted) {
-            durableConversationLoaded = durable.messages.length > 0;
-            setConversationCursor(durable.nextCursor);
-            setConversation(durable.messages.flatMap((message) => {
-              const text = message.parts.find((part) => part.type === "text")?.text;
-              if (!text || (message.role !== "user" && message.role !== "assistant")) return [];
-              return [{ id: message.id, role: message.role === "user" ? "user" as const : "agent" as const, text, status: message.delivery_status ?? "sent" }];
-            }));
-          }
-        } catch {
-          // Older/local databases may not have the projection yet; the run
-          // checkpoint fallback below still restores a usable conversation.
+        // These projections are independent after the workspace identity is
+        // known. Fetch them concurrently so a slow document download or
+        // Supabase history query does not block the other panels from
+        // becoming interactive on refresh.
+        const [durableResult, documentResult, inspectionResult, versionsResult, resumedResult, resumedLoopResult, historyResult] = await Promise.allSettled([
+          loadBrowserConversationMessages(workspace.task.id),
+          workspace.workingDocumentId ? loadCurrentTaskDocument(workspace.task.id, workspace.fileName) : Promise.resolve(undefined),
+          workspace.workingDocumentId ? inspectBrowserTaskDocument(workspace.task.id) : Promise.resolve(undefined),
+          workspace.workingDocumentId ? loadBrowserDocumentVersions(workspace.task.id) : Promise.resolve(undefined),
+          workspace.latestRunId ? loadBrowserAgentRun(workspace.latestRunId) : Promise.resolve(undefined),
+          workspace.latestRunId ? loadBrowserAgentLoop(workspace.latestRunId) : Promise.resolve(undefined),
+          loadBrowserAgentTaskTimeline(workspace.task.id),
+        ]);
+        if (abort.signal.aborted) return;
+        const durable = durableResult.status === "fulfilled" ? durableResult.value : undefined;
+        if (durable) {
+          durableConversationLoaded = durable.messages.length > 0;
+          setConversationCursor(durable.nextCursor);
+          setConversation(durable.messages.flatMap((message) => {
+            const text = message.parts.find((part) => part.type === "text")?.text;
+            if (!text || (message.role !== "user" && message.role !== "assistant")) return [];
+            return [{ id: message.id, role: message.role === "user" ? "user" as const : "agent" as const, text, status: message.delivery_status ?? "sent" }];
+          }));
         }
-        if (workspace.workingDocumentId) {
-          const document = await loadCurrentTaskDocument(workspace.task.id, workspace.fileName);
-          if (abort.signal.aborted) return;
+        if (documentResult.status === "fulfilled" && documentResult.value) {
+          const document = documentResult.value;
           setDocumentLoad({ status: "ready", document: { file: document.file, bytes: document.bytes } });
           setCurrentRevision(document.version.revision);
-          const inspection = await inspectBrowserTaskDocument(workspace.task.id);
-          if (abort.signal.aborted) return;
-          setImageNodes(inspection.images);
-          setParagraphCount(inspection.counts.paragraphs);
-          setTableCellCount(inspection.counts.tableCells);
-          await refreshVersions(workspace.task.id);
-        } else {
+        } else if (!workspace.workingDocumentId) {
           setDocumentLoad({ status: "empty" });
           setVersions(initialVersions);
         }
-        if (workspace.latestRunId) {
-          const resumed = await loadBrowserAgentRun(workspace.latestRunId);
-          if (abort.signal.aborted) return;
+        if (inspectionResult.status === "fulfilled" && inspectionResult.value) {
+          const inspection = inspectionResult.value;
+          setImageNodes(inspection.images);
+          setParagraphCount(inspection.counts.paragraphs);
+          setTableCellCount(inspection.counts.tableCells);
+        }
+        if (versionsResult.status === "fulfilled" && versionsResult.value) {
+          const history = versionsResult.value;
+          setVersions(history.versions.map((version) => ({
+            id: version.id,
+            versionNumber: version.version_number,
+            label: version.origin === "import" ? "导入并通过结构检查" : version.origin === "agent" ? "Agent 写入并通过重开校验" : version.origin === "restore" ? "从历史版本恢复" : "用户创建的版本",
+            time: new Date(version.created_at).toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
+            actor: version.origin === "agent" ? "纸上鸭" : "你",
+            current: version.id === history.currentVersionId,
+          })));
+        }
+        const resumed = resumedResult.status === "fulfilled" ? resumedResult.value : undefined;
+        const resumedLoop = resumedLoopResult.status === "fulfilled" ? resumedLoopResult.value : undefined;
+        if (resumed) {
           setRun(resumed);
-          try {
-            const resumedLoop = await loadBrowserAgentLoop(workspace.latestRunId);
-            if (abort.signal.aborted) return;
+          if (resumedLoop) {
             setLoopResult(resumedLoop);
             setLiveEvents((items) => mergeTimelineEvents(items, resumedLoop.events));
             if (!durableConversationLoaded) setConversation(conversationFromLoop(resumedLoop.checkpoint.messages));
-          } catch {
-            setLoopResult(undefined);
-            setProposalSummary(resumed.proposal?.summary);
-          }
+          } else setLoopResult(undefined);
           setAwaitingFinalReview(resumed.status === "awaiting_review");
           const resumedIsActive = ["queued", "analyzing", "generating", "applying", "validating"].includes(resumed.status);
           setStage(resumed.status === "awaiting_scope_confirmation" || resumed.status === "awaiting_review" ? "awaiting" : resumed.status === "completed" ? "complete" : resumedIsActive ? "analyzing" : "idle");
-        } else {
-          setStage("idle");
-        }
-        try {
-          const history = await loadBrowserAgentTaskTimeline(workspace.task.id);
-          const historicalEvents = history.runs
-            .filter((item) => item.id !== workspace.latestRunId && ["completed", "failed", "cancelled"].includes(item.checkpoint?.status ?? item.status))
-            .flatMap((item) => item.events);
-          setTimelineHistory(historicalEvents);
-        } catch {
-          setTimelineHistory([]);
-        }
+        } else setStage("idle");
+        const history = historyResult.status === "fulfilled" ? historyResult.value : undefined;
+        setTimelineHistory(history ? history.runs.filter((item) => item.id !== workspace.latestRunId && ["completed", "failed", "cancelled"].includes(item.checkpoint?.status ?? item.status)).flatMap((item) => item.events) : []);
         loadedTaskIdRef.current = workspace.task.id;
         setNotice(workspace.workingDocumentId ? "已打开这个任务的最新文档和对话" : "已打开历史任务；请继续上传文档");
       } catch (error) {

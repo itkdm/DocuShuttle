@@ -66,9 +66,15 @@ const eventChannel = (event: AgentEvent) => {
 
 export function mergeTimelineEvents(previous: readonly AgentEvent[], incoming: readonly AgentEvent[]): AgentEvent[] {
   const result = [...previous];
-  const seen = new Set(previous.map((event, index) => eventId(event, `${event.type}:${index}:${event.callId ?? ""}:${event.text ?? ""}`)));
-  incoming.forEach((event, index) => {
-    const key = eventId(event, `${event.type}:${index}:${event.callId ?? ""}:${event.text ?? ""}`);
+  const identity = (event: AgentEvent) => {
+    const sequence = (event as { sequence?: unknown }).sequence;
+    if (typeof sequence === "number") return `sequence:${sequence}`;
+    const payload = [event.type, event.callId ?? "", event.name ?? "", event.timestamp ?? "", event.text ?? "", event.error ?? ""];
+    return `fallback:${payload.join("|")}`;
+  };
+  const seen = new Set(previous.map((event) => eventId(event, identity(event))));
+  incoming.forEach((event) => {
+    const key = eventId(event, identity(event));
     if (seen.has(key)) return;
     // The composer adds a local turn.started event before the network request
     // returns. Replace that optimistic item with the durable SSE event instead
@@ -83,7 +89,15 @@ export function mergeTimelineEvents(previous: readonly AgentEvent[], incoming: r
     }
     seen.add(key); result.push(event);
   });
-  return result;
+  return result.map((event, index) => ({ event, index })).sort((a, b) => {
+    const as = (a.event as { sequence?: unknown }).sequence;
+    const bs = (b.event as { sequence?: unknown }).sequence;
+    if (typeof as === "number" && typeof bs === "number") return as - bs || a.index - b.index;
+    const at = a.event.timestamp ? Date.parse(a.event.timestamp) : Number.NaN;
+    const bt = b.event.timestamp ? Date.parse(b.event.timestamp) : Number.NaN;
+    if (Number.isFinite(at) && Number.isFinite(bt) && at !== bt) return at - bt;
+    return a.index - b.index;
+  }).map(({ event }) => event);
 }
 
 export function isTimelineActive(events: readonly AgentEvent[], items: readonly TimelineItem[]): boolean {

@@ -197,6 +197,8 @@ export interface MutationResult {
   manifest: DocumentManifest;
   changedEntries: readonly string[];
   diagnostics: readonly DocumentDiagnostic[];
+  /** Validation evidence for the derived package, when available. */
+  validation?: ValidationReport;
   nodeRemap?: NodeRemap;
 }
 

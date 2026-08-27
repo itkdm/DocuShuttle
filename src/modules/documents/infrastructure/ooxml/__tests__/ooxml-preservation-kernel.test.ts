@@ -110,6 +110,7 @@ describe("OoxmlPreservationKernel", () => {
     expect(result.bytes).toEqual(bytes);
     expect(result.manifest).toEqual(inspected.manifest);
     expect(result.changedEntries).toEqual([]);
+    expect(result.validation?.valid).toBe(true);
     expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: "NO_OP_PRESERVED" }));
   });
 
@@ -144,6 +145,8 @@ describe("OoxmlPreservationKernel", () => {
         },
       ],
     });
+
+    expect(result.validation?.valid).toBe(true);
 
     expect(result.changedEntries).toEqual(["word/document.xml", "word/media/image1.png"]);
     expect(await entry(result.bytes, "customXml/item1.bin")).toEqual(unknownBytes);

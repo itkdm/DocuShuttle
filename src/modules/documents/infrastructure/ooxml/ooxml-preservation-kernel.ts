@@ -369,6 +369,7 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
         bytes: Uint8Array.from(bytes),
         manifest,
         changedEntries: [],
+        validation: inspection(loaded, indexed).validation,
         nodeRemap: remapNodeIdentities(manifest.nodes, manifest.nodes),
         diagnostics: [{
           severity: "info",
@@ -457,6 +458,7 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
         bytes: Uint8Array.from(bytes),
         manifest,
         changedEntries: [],
+        validation: inspection(loaded, indexed).validation,
         nodeRemap: remapNodeIdentities(manifest.nodes, manifest.nodes),
         diagnostics: [{
           severity: "info",
@@ -492,6 +494,7 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
       bytes: output,
       manifest,
       changedEntries: [...changedEntries].sort(),
+      validation: inspection(validated, validatedIndex).validation,
       nodeRemap: remapNodeIdentities(manifestWithNodes(loaded.manifest, indexed).nodes, manifest.nodes),
       diagnostics: [
         ...validated.diagnostics,

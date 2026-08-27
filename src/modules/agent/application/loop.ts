@@ -158,6 +158,9 @@ export class AgentLoopRunner {
     while (checkpoint.iterations < this.maxIterations) {
       checkpoint.iterations += 1;
       emit({ type: "model.started", text: "正在整理下一步" });
+      // Persist the observable boundary before entering a potentially long
+      // provider call so a refresh can recover the real in-flight phase.
+      await this.store.save(runId, checkpoint);
       const modelStartedAt = Date.now();
       let decision: AgentModelDecision;
       const modelController = new AbortController();
@@ -236,6 +239,10 @@ export class AgentLoopRunner {
           return { checkpoint, events };
         }
         emit({ type: "tool.started", callId: call.id, name: call.name, input });
+        // Make the side-effect boundary durable before executing the tool.
+        // This is what lets recovery distinguish an in-flight operation from
+        // a run that has not reached the tool yet.
+        await this.store.save(runId, checkpoint);
         const toolStartedAt = Date.now();
         try {
           const output = await tool.execute(input, { runId, callId: call.id, idempotencyKey: `${runId}:${call.id}`, attempt: checkpoint.toolCallCount, signal });

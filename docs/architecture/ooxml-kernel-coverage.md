@@ -179,11 +179,12 @@ export function findElementRanges(xml: string, qualifiedName: string): XmlRange[
 - `set-cell-text` 对内层格生效；外层格若包含内表会 fail closed，不会清空内层内容。
 - 已有 fixture 回归覆盖内层写入与外层容器拒绝；真实实验1.2 的 Word/WPS round-trip 仍是下一验收门槛。
 
-### P3 文本框内文本
+### P3 文本框内文本（识别与防护已完成，写入待 Feature Adapter）
 
 - 识别 `w:txbxContent`（及 `mc:AlternateContent` 里 VML fallback）。
-- 框内段落作为可写节点；若存在 Choice+Fallback 两份文本，**两份一起改**，只改一份会在旧 Word 里看到旧字。
-- 验收：封面标题在框里的模板，Agent 能改标题。
+- 框内段落已作为带 `textbox[n]/p[n]` 路径的可读节点暴露，并标记 `replace-text: guarded`；当前写入仍 fail closed。
+- `mc:AlternateContent` 已诊断并保留，Choice+Fallback 两份文本尚未开放写入；必须由 Feature Adapter 作为 coherence group 一起改。
+- 验收：封面标题在框里的模板能安全读取；可写验收留待 Adapter 完成。
 
 ### P4 内容控件
 

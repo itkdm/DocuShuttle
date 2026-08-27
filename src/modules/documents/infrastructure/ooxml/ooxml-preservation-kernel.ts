@@ -71,6 +71,7 @@ function manifestWithNodes(
       entry: address.entry,
       path: address.path,
       fingerprint: address.fingerprint,
+      ...(address.capabilities ? { capabilities: address.capabilities } : {}),
     })),
     ...index.cells.map(({ address }) => ({
       nodeId: address.nodeId,

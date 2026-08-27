@@ -6,6 +6,7 @@ import type {
   InspectedTableCell,
   ParagraphAddress,
   TableCellAddress,
+  NodeCapability,
 } from "../../domain/types";
 import { sha256, utf8 } from "./hash";
 import {
@@ -77,6 +78,18 @@ function containingCellPath(
   return `${cell.address.path}/p[${earlier}]`;
 }
 
+function containingTextBoxPath(paragraph: XmlRange, xml: string): string | undefined {
+  const boxes = findElementRanges(xml, "w:txbxContent");
+  const box = boxes
+    .map((range, index) => ({ range, index }))
+    .filter(({ range }) => range.start < paragraph.start && range.end > paragraph.end)
+    .sort((left, right) => (left.range.end - left.range.start) - (right.range.end - right.range.start))[0];
+  if (!box) return undefined;
+  const paragraphIndex = findElementRanges(box.range.xml, "w:p")
+    .filter((candidate) => candidate.start < paragraph.start - box.range.start).length;
+  return `textbox[${box.index}]/p[${paragraphIndex}]`;
+}
+
 async function indexCells(
   entry: string,
   xml: string,
@@ -120,13 +133,20 @@ async function indexParagraphs(
       const text = visibleText(range.xml);
       const openTag = range.xml.slice(0, range.xml.indexOf(">") + 1);
       const paraId = attributes(openTag)["w14:paraId"];
-      const path = containingCellPath(range, cells) ?? `p[${index}]`;
+      const textBoxPath = containingTextBoxPath(range, xml);
+      const path = textBoxPath ?? containingCellPath(range, cells) ?? `p[${index}]`;
       const nodeId = await logicalNodeId(
         "paragraph",
         entry,
         path,
         paraId ? `paraId:${paraId}` : path,
       );
+      const capabilities: readonly NodeCapability[] | undefined = textBoxPath ? [{
+        operation: "replace-text",
+        state: "guarded",
+        reasonCode: "TEXTBOX_MUTATION_UNSUPPORTED",
+        reason: "Text box text is readable but requires a coherence-safe feature adapter before writing.",
+      }] : undefined;
       const address: ParagraphAddress = {
         kind: "paragraph",
         nodeId,
@@ -135,6 +155,7 @@ async function indexParagraphs(
         entry,
         path,
         ...(paraId ? { paraId } : {}),
+        ...(capabilities ? { capabilities } : {}),
       };
       return { address, text, range };
     }),
@@ -218,6 +239,10 @@ function unsupportedConstructDiagnostics(entry: string, xml: string): DocumentDi
       message,
       entry,
     }));
+  const textBoxCount = findElementRanges(xml, "w:txbxContent").length;
+  if (textBoxCount > 0) diagnostics.push({ severity: "warning", code: "TEXTBOX_PRESENT", message: `${textBoxCount} text box content region(s) are readable but guarded for mutation.`, entry });
+  const alternateContentCount = findElementRanges(xml, "mc:AlternateContent").length;
+  if (alternateContentCount > 0) diagnostics.push({ severity: "warning", code: "ALTERNATE_CONTENT_PRESENT", message: `${alternateContentCount} AlternateContent group(s) are preserved; editing requires updating Choice and Fallback coherently.`, entry });
   const wordNamespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
   for (const match of xml.matchAll(/xmlns(?::([\w.-]+))?\s*=\s*(?:"([^"]+)"|'([^']+)')/g)) {
     const prefix = match[1];

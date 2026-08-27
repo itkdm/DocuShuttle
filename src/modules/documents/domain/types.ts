@@ -18,6 +18,15 @@ export interface PackageEntryManifest {
 
 export type DocumentNodeKind = "paragraph" | "table-cell" | "image";
 
+export type NodeCapabilityState = "supported" | "guarded" | "unsupported";
+
+export interface NodeCapability {
+  operation: string;
+  state: NodeCapabilityState;
+  reasonCode?: string;
+  reason?: string;
+}
+
 /**
  * Provider-neutral logical identity for a semantic document node.
  *
@@ -30,6 +39,8 @@ export interface DocumentNodeManifest {
   entry: string;
   path: string;
   fingerprint: string;
+  /** Operation-level capability; absent means the default capability registry applies. */
+  capabilities?: readonly NodeCapability[];
 }
 
 export interface DocumentManifest {
@@ -48,6 +59,8 @@ interface StableAddressBase {
   fingerprint: string;
   entry: string;
   path: string;
+  /** Operation-level capability; absent means the default capability registry applies. */
+  capabilities?: readonly NodeCapability[];
 }
 
 export interface ParagraphAddress extends StableAddressBase {

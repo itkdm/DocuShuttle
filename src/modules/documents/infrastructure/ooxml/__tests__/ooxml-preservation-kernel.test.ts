@@ -436,6 +436,8 @@ describe("OoxmlPreservationKernel", () => {
     expect(inspected.diagnostics.filter(({ severity }) => severity === "error")).toEqual([]);
     const nestedCell = inspected.tableCells.find(({ text }) => text === "inner");
     expect(nestedCell).toMatchObject({ text: "inner", address: { path: "tbl[1]/tr[0]/tc[0]/tbl[0]/tr[0]/tc[0]" } });
+    const boxed = inspected.paragraphs.find(({ text, address }) => text === "boxed" && address.path.startsWith("textbox["));
+    expect(boxed).toMatchObject({ address: { path: "textbox[0]/p[0]", capabilities: expect.arrayContaining([expect.objectContaining({ operation: "replace-text", state: "guarded", reasonCode: "TEXTBOX_MUTATION_UNSUPPORTED" })]) } });
 
     const hello = inspected.paragraphs.find((paragraph) => paragraph.text.includes("Hello duck"));
     expect(hello).toBeDefined();
@@ -472,5 +474,17 @@ describe("OoxmlPreservationKernel", () => {
     const inspected = await kernel.inspect(trailing);
     expect(inspected.paragraphs.some((paragraph) => paragraph.text === "Hello duck")).toBe(true);
     expect(inspected.diagnostics.filter(({ severity }) => severity === "error")).toEqual([]);
+  });
+
+  it("reports AlternateContent as a preserved coherence group", async () => {
+    const bytes = await createDocx({
+      "word/document.xml": documentXml.replace(
+        "</w:body>",
+        '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="wps"><w:p><w:r><w:t>choice</w:t></w:r></w:p></mc:Choice><mc:Fallback><w:p><w:r><w:t>fallback</w:t></w:r></w:p></mc:Fallback></mc:AlternateContent></w:body>',
+      ),
+    });
+    const inspected = await new OoxmlPreservationKernel().inspect(bytes);
+    expect(inspected.diagnostics).toContainEqual(expect.objectContaining({ code: "ALTERNATE_CONTENT_PRESENT", severity: "warning" }));
+    expect(inspected.paragraphs.map(({ text }) => text)).toEqual(expect.arrayContaining(["choice", "fallback"]));
   });
 });

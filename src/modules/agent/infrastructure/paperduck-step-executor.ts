@@ -158,10 +158,12 @@ export class PaperDuckStepExecutor implements AgentStepExecutor {
     const generated = parseReceipt<GenerationOutput>(context.run.receipts, "generate");
     const current = await this.loadCurrentDocument(context.run.documentId);
     const source = await this.storage.get(current.objectKey);
-    const result = await this.documents.mutate(source, {
+    const request = {
       expectedRevision: context.run.baseRevision,
-        operations: generated.operations,
-    });
+      operations: generated.operations,
+    } as const;
+    const plan = this.documents.planMutation ? await this.documents.planMutation(source, request) : undefined;
+    const result = await this.documents.mutate(source, request);
     const fileId = crypto.randomUUID();
     const objectKey = buildTaskObjectKey({
       userId: current.ownerUserId,
@@ -187,6 +189,7 @@ export class PaperDuckStepExecutor implements AgentStepExecutor {
         objectKey,
         manifestObjectKey,
         operationLog: generated.operations.map((operation) => ({ kind: operation.kind, rationale: generated.rationale })),
+        riskLevel: plan?.riskLevel,
       }),
       derivedRevision: result.manifest.revision,
     };

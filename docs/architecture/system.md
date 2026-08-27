@@ -32,6 +32,7 @@ Supabase / AI / DOCX adapters
 
 ## 运行与一致性
 
+- 本地开发与线上部署使用同一套产品 UI、路由、Agent 编排和文档处理流程；环境差异只通过服务端配置注入（例如 Supabase、模型网关、公开站点地址和日志级别），不得把“本地版/线上版”作为用户可见的产品状态。
 - 数据库是任务状态真源；SSE 仅传输可重连事件。
 - Agent 由可恢复模型驱动 Tool Loop 组成；每个 turn、tool call 和副作用都有幂等键与持久化 checkpoint。旧短步骤只保留为兼容事务边界，不负责决定语义流程。
 - `working_documents.current_version_id` 通过 revision/CAS 乐观锁推进。

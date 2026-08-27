@@ -41,6 +41,8 @@ const textChangesSchema = z.object({
   })).min(2).max(30),
 });
 
+const planTextChangeSchema = textChangeSchema;
+
 const summarizeInspection = (inspection: DocumentInspection) => ({
   revision: inspection.manifest.revision,
   counts: {
@@ -49,6 +51,7 @@ const summarizeInspection = (inspection: DocumentInspection) => ({
     images: inspection.images.length,
   },
   diagnostics: inspection.diagnostics,
+  validation: inspection.validation,
 });
 
 async function inspectCurrent(
@@ -119,6 +122,24 @@ export function createDocumentTools(
     },
   };
 
+  const planTextChange: AgentTool<typeof planTextChangeSchema> = {
+    name: "plan_text_change",
+    description: "Dry-run one exact text replacement and return the targets, changed parts, risk and validation diagnostics. This never writes the document and does not require approval.",
+    inputSchema: planTextChangeSchema,
+    async execute(input) {
+      const current = await inspectCurrent(documents, working);
+      if (current.inspection.manifest.revision !== input.expectedRevision) throw new Error("DOCUMENT_REVISION_CONFLICT");
+      const paragraph = current.inspection.paragraphs.find(({ address }) => address.nodeId === input.nodeId);
+      const cell = current.inspection.tableCells.find(({ address }) => address.nodeId === input.nodeId);
+      if (!paragraph && !cell) throw new Error("DOCUMENT_REGION_NOT_FOUND");
+      const operation = paragraph
+        ? { kind: "replace-text" as const, address: paragraph.address as ParagraphAddress, expectedText: input.expectedText, replacement: input.replacement, ...(input.formatPolicy ? { formatPolicy: input.formatPolicy } : {}) }
+        : { kind: "set-cell-text" as const, address: cell!.address as TableCellAddress, expectedText: input.expectedText, text: input.replacement };
+      if (!documents.planMutation) throw new Error("DOCUMENT_DRY_RUN_UNAVAILABLE");
+      return documents.planMutation(current.bytes, { expectedRevision: input.expectedRevision, operations: [operation] });
+    },
+  };
+
   const applyTextChange: AgentTool<typeof textChangeSchema> = {
     name: "apply_text_change",
     description: "Apply one exact text replacement to a paragraph or table cell after the user approves it. Creates one immutable derived document version.",
@@ -168,5 +189,5 @@ export function createDocumentTools(
     },
   };
 
-  return [inspectDocument, listRegions, readRegion, applyTextChange, applyTextChanges];
+  return [inspectDocument, listRegions, readRegion, planTextChange, applyTextChange, applyTextChanges];
 }

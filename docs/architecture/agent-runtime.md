@@ -26,9 +26,11 @@ PaperDuck 使用模型驱动的、可恢复的 Tool Loop。模型每一轮都可
 单元保留，避免 OpenAI-compatible 消息失配；摘要不会额外调用模型，也不会把隐藏
 Chain-of-Thought 写入用户界面。完整的用户可见执行过程仍保存在 `trace` 中。
 
-Timeline 可以跨同一任务的多个 run 回放，但新 run 不会未经 revision 校验直接继承
-旧 run 的工具结果。这样历史只用于展示，当前 Agent 决策始终基于当前 run 的事实，
-后续如需跨轮记忆，应在独立的 conversation/context 层显式实现并重新校验文档版本。
+同一任务拥有一个稳定的 conversation/thread；每个用户 turn 创建一个独立、可审计的
+run，但新 run 会从该 conversation 的上一条模型 transcript 继续，并在下一次工具调用
+前重新读取和校验当前文档 revision。Timeline 只负责回放所有 run 的真实事件，不能把
+trace 原样当作模型上下文；模型上下文仍由 checkpoint messages 和上述 compaction policy
+独立维护。
 
 ## 文档工具
 
@@ -42,6 +44,10 @@ Timeline 可以跨同一任务的多个 run 回放，但新 run 不会未经 rev
 
 ## HITL、版本与流式展示
 
-工具需要批准时只保存 interrupt，不占用长连接；批准/拒绝后从 checkpoint 恢复。Token、assistant 消息、工具状态和错误仅用于实时展示，刷新后由持久化事件重放。文档画布只在一次原子版本提交成功后更新，避免半写入 DOCX。
+工具需要批准时只保存 interrupt，不占用长连接；批准/拒绝后从 checkpoint 恢复。模型
+请求补充信息（`ask_user`）也会持久化为独立的用户问题，用户回答后继续同一 run 和
+conversation，而不是创建无上下文的新 run。Token、assistant 消息、工具状态和错误仅
+用于实时展示，刷新后由持久化事件重放。文档画布只在一次原子版本提交成功后更新，
+避免半写入 DOCX。
 
 运行诊断以 `loopCheckpoint.trace` 为事实源：它记录模型边界、公开文本、工具生命周期、审批解决和终态事件，默认保留最近 200 条；服务端异常日志不得记录模型密钥、系统提示词或未脱敏工具详情。

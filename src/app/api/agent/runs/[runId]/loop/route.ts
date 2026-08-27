@@ -51,7 +51,6 @@ async function persistAskUserAnswer(runId: string, message: string, clientMessag
     id: clientMessageId,
     owner_user_id: user.id,
     conversation_id: checkpoint.conversationId,
-    turn_id: runId,
     role: "user",
     parts: [{ type: "text", text: message }],
     run_id: runId,
@@ -77,7 +76,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ runI
     if (durable.error) throw new Error(durable.error.message);
     const events = (durable.data ?? []).map((row) => {
       const event = row.event && typeof row.event === "object" ? row.event as Record<string, unknown> : undefined;
-      return event ? { ...event, sequence: row.sequence, runId, turnId: runId } : undefined;
+      return event ? { ...event, sequence: row.sequence, runId } : undefined;
     }).filter((event) => Boolean(event));
     const response = NextResponse.json({ checkpoint, events, nextSequence: durable.data?.at(-1)?.sequence ?? after });
     logger.info("agent.replay.completed", { runId, afterSequence: after, limit, durableEventCount: durable.data?.length ?? 0, returnedEventCount: events.length, nextSequence: durable.data?.at(-1)?.sequence ?? after, durationMs: performance.now() - started });

@@ -36,7 +36,7 @@ function projectRun(runId: string, messages: readonly BrowserConversationMessage
 export function projectAgentThread(input: { messages: readonly BrowserConversationMessage[]; historicalEvents: readonly AgentEvent[]; activeEvents: readonly AgentEvent[]; activeRunId?: string }): AgentThreadProjection {
   const messagesByRun = new Map<string, BrowserConversationMessage[]>();
   for (const message of input.messages) {
-    const runId = message.turn_id ?? message.run_id ?? input.activeRunId;
+    const runId = message.run_id ?? input.activeRunId;
     if (!runId) continue;
     const list = messagesByRun.get(runId) ?? []; list.push(message); messagesByRun.set(runId, list);
   }

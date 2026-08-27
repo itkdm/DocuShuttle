@@ -158,6 +158,6 @@ describe("Agent execution timeline", () => {
       { type: "model.delta", text: "ok", eventId: "e-1", timestamp: "2026-01-01" },
       { type: "model.delta", text: "untrusted" },
       { type: "unknown.event", eventId: "e-3", timestamp: "2026-01-01" },
-    ], "run-1")).toEqual([{ type: "model.delta", text: "ok", eventId: "e-1", timestamp: "2026-01-01", runId: "run-1", turnId: "run-1" }]);
+    ], "run-1")).toEqual([{ type: "model.delta", text: "ok", eventId: "e-1", timestamp: "2026-01-01", runId: "run-1" }]);
   });
 });

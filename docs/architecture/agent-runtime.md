@@ -14,7 +14,7 @@ PaperDuck 使用模型驱动的、可恢复的 Tool Loop。模型每一轮都可
 - `AgentModelPort` 只负责把消息和工具描述交给模型并解析模型决策，不拥有 Supabase、Storage 或 DOCX 写权限。
 - `AgentTool` 是 provider-neutral 能力，参数必须由 Zod schema 校验；工具执行由应用层注入 `runId`、用户身份和当前文档 revision。
 - 所有写工具都必须经过文档引擎、临时对象、结构校验和 revision CAS；模型不能直接修改数据库或对象存储。
-- `AgentLoopCheckpoint` 持久化消息、工具结果、迭代次数、待审批调用和终态（包括 completed、failed、cancelled），支持故障恢复、重试和前端刷新；取消会追加 `turn.cancelled`，不能被旧循环保存覆盖。
+- `AgentLoopCheckpoint` 只持久化模型恢复所需的 transcript、工具结果、迭代次数、pending interaction 和终态，支持故障恢复与前端刷新；取消会追加 `turn.cancelled`，不能被旧循环保存覆盖。
 - 迭代次数、时间、token 和工具调用数量都有安全预算；工具错误作为结果返回模型，使 Agent 可以解释、重试或向用户提问。
 
 ### 上下文边界与压缩
@@ -42,7 +42,7 @@ run 前 API 会先检查当前 conversation 的 pending interaction；即使两�
 
 当前 Loop 已接入 `inspect_document`、`list_document_regions`、`read_document_region`、`inspect_node_capabilities`、`plan_text_change`、`apply_text_change`、`list_source_documents`、`read_source_document`、`list_document_versions`、`restore_document_version` 和 `export_document`。其中来源资料保持 template/example/auxiliary 语义隔离；`inspect_node_capabilities` 只返回语义节点能力，`plan_text_change` 是不写入的语义化 dry-run，`apply_text_change` 与 `restore_document_version` 是需要确认的副作用工具，导出只记录 immutable version 并返回短期下载地址。写工具即使在完全批准模式也会先执行 dry-run，避免跳过目标、能力和重叠检查。
 
-旧的 `analyze/generate/apply/validate` 仍可作为兼容生命周期和事务执行器，但不能决定 Agent 的语义流程；它们会逐步收敛为上述工具的实现。
+文档写入工具内部继续执行派生 OOXML、重开校验、revision CAS 和 promotion；这些是文档事务边界，不是 Agent 顶层状态。
 
 ## 模型配置
 
@@ -56,4 +56,4 @@ conversation，而不是创建无上下文的新 run。Token、assistant 消息�
 用于实时展示，刷新后由持久化事件重放。文档画布只在一次原子版本提交成功后更新，
 避免半写入 DOCX。
 
-运行诊断以 `loopCheckpoint.trace` 为事实源：它记录模型边界、公开文本、工具生命周期、审批解决和终态事件，默认保留最近 200 条；服务端异常日志不得记录模型密钥、系统提示词或未脱敏工具详情。
+运行诊断以独立 EventStore 为事实源，checkpoint 只保留最近 200 条 bounded trace 作为恢复快照；服务端异常日志不得记录模型密钥、系统提示词或未脱敏工具详情。

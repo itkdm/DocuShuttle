@@ -86,7 +86,7 @@ async function consumeAgentStream(
         if (!raw) continue;
         const data = JSON.parse(raw) as BrowserAgentLoopResult | BrowserAgentLoopResult["events"][number] | { code?: string };
         if (event === "event") {
-          const normalized = { ...data, eventId: String((data as { eventId?: unknown }).eventId ?? crypto.randomUUID()), runId, turnId: runId, timestamp: String((data as { timestamp?: unknown }).timestamp ?? new Date().toISOString()) } as BrowserAgentEvent;
+          const normalized = { ...data, eventId: String((data as { eventId?: unknown }).eventId ?? crypto.randomUUID()), runId, timestamp: String((data as { timestamp?: unknown }).timestamp ?? new Date().toISOString()) } as BrowserAgentEvent;
           const sequence = typeof normalized.sequence === "number" ? normalized.sequence : undefined;
           if (sequence === undefined || sequence > lastSequence) {
             if (sequence !== undefined) lastSequence = sequence;
@@ -105,7 +105,7 @@ async function consumeAgentStream(
       frameCount += 1;
       const data = JSON.parse(frame.data) as BrowserAgentLoopResult | BrowserAgentLoopResult["events"][number] | { code?: string };
       if (frame.event === "event") {
-        const normalized = { ...data, eventId: String((data as { eventId?: unknown }).eventId ?? crypto.randomUUID()), runId, turnId: runId, timestamp: String((data as { timestamp?: unknown }).timestamp ?? new Date().toISOString()) } as BrowserAgentEvent;
+        const normalized = { ...data, eventId: String((data as { eventId?: unknown }).eventId ?? crypto.randomUUID()), runId, timestamp: String((data as { timestamp?: unknown }).timestamp ?? new Date().toISOString()) } as BrowserAgentEvent;
         const sequence = typeof normalized.sequence === "number" ? normalized.sequence : undefined;
         if (sequence === undefined || sequence > lastSequence) { if (sequence !== undefined) lastSequence = sequence; onEvent(normalized); }
       }
@@ -149,7 +149,6 @@ export type BrowserConversationMessage = {
   role: "user" | "assistant" | "tool";
   parts: ReadonlyArray<{ type?: string; text?: string; [key: string]: unknown }>;
   run_id?: string | null;
-  turn_id?: string | null;
   created_at: string;
   message_key: string;
   delivery_status?: "pending" | "sent" | "failed";
@@ -163,7 +162,6 @@ export const loadBrowserConversationMessages = async (taskId: string, before?: s
 export type BrowserAgentEvent = {
   eventId: string;
   runId: string;
-  turnId: string;
   timestamp: string;
   sequence?: number;
 } & ({ type: "turn.started"; text: string; clientMessageId?: string }
@@ -192,14 +190,14 @@ export type BrowserAgentLoopResult = {
   };
   /** Server responses are normalized at the SSE boundary; JSON replay is
    * intentionally validated by the replay adapter before it reaches UI. */
-  events: ReadonlyArray<{ type: string; text?: string; name?: string; error?: string; eventId?: string; sequence?: number; timestamp?: string; runId?: string; turnId?: string; clientMessageId?: string; [key: string]: unknown }>;
+  events: ReadonlyArray<{ type: string; text?: string; name?: string; error?: string; eventId?: string; sequence?: number; timestamp?: string; runId?: string; clientMessageId?: string; [key: string]: unknown }>;
 };
 
 const replayEventTypes = new Set(["turn.started", "model.started", "model.completed", "model.delta", "assistant.message", "tool.started", "tool.completed", "tool.failed", "approval.required", "approval.resolved", "completed", "turn.failed", "turn.cancelled"]);
 export function normalizeReplayEvents(events: BrowserAgentLoopResult["events"], runId: string): BrowserAgentEvent[] {
   return events.flatMap((event) => {
     if (!replayEventTypes.has(event.type) || typeof event.eventId !== "string" || typeof event.timestamp !== "string") return [];
-    return [{ ...event, eventId: event.eventId, runId, turnId: typeof event.turnId === "string" ? event.turnId : runId, timestamp: event.timestamp } as BrowserAgentEvent];
+    return [{ ...event, eventId: event.eventId, runId, timestamp: event.timestamp } as BrowserAgentEvent];
   });
 }
 

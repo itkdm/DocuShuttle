@@ -11,7 +11,7 @@ const schema = z.object({ commandId: z.uuid() });
 export async function POST(request: Request, { params }: { params: Promise<{ runId: string }> }) {
   try {
     const { runId } = await params;
-    const input = schema.parse(await request.json());
+    schema.parse(await request.json());
     const { client } = await requireSupabaseUser();
     await new SupabaseAgentLoopStore(client).markCancelled?.(runId);
     const run = await new SupabaseAgentRunStore(client).load(runId);

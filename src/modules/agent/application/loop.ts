@@ -64,6 +64,10 @@ export type AgentLoopCheckpoint = {
 export type AgentLoopStore = {
   load(runId: string): Promise<AgentLoopCheckpoint | undefined>;
   save(runId: string, checkpoint: AgentLoopCheckpoint): Promise<void>;
+  /** Append execution facts independently from the recovery snapshot. */
+  appendEvents?(runId: string, events: readonly AgentLoopEvent[]): Promise<void>;
+  /** Persist only user-visible conversation semantics, never tool transcripts. */
+  appendAssistantMessage?(runId: string, message: { id: string; text: string }): Promise<void>;
   /** Refresh the server-side lease while a provider/tool call is in flight. */
   heartbeat?(runId: string): Promise<boolean>;
   claimPendingApproval?(runId: string, callId: string): Promise<AgentLoopCheckpoint | undefined>;
@@ -231,6 +235,10 @@ export class AgentLoopRunner {
       events.push(traceEvent);
       this.observe(runId, traceEvent);
       checkpoint.trace = [...(checkpoint.trace ?? []), traceEvent].slice(-200);
+      void this.store.appendEvents?.(runId, [traceEvent]);
+      if (traceEvent.type === "assistant.message" && traceEvent.text) {
+        void this.store.appendAssistantMessage?.(runId, { id: traceEvent.eventId ?? crypto.randomUUID(), text: traceEvent.text });
+      }
       if (notify) onEvent?.(traceEvent);
       return traceEvent;
     };
@@ -398,6 +406,10 @@ export class AgentLoopRunner {
       events.push(traceEvent);
       this.observe(runId, traceEvent);
       checkpoint.trace = [...(checkpoint.trace ?? []), traceEvent].slice(-200);
+      void this.store.appendEvents?.(runId, [traceEvent]);
+      if (traceEvent.type === "assistant.message" && traceEvent.text) {
+        void this.store.appendAssistantMessage?.(runId, { id: traceEvent.eventId ?? crypto.randomUUID(), text: traceEvent.text });
+      }
       if (notify) onEvent?.(traceEvent);
       return traceEvent;
     };

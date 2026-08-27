@@ -27,10 +27,10 @@ interface AgentPanelProps {
   imageBusy?: boolean;
   run?: AgentRun;
   loopResult?: BrowserAgentLoopResult;
-  liveEvents?: BrowserAgentLoopResult["events"];
-  timelineHistory?: BrowserAgentLoopResult["events"];
+  activeEvents?: BrowserAgentLoopResult["events"];
+  historicalEvents?: BrowserAgentLoopResult["events"];
   onLoopApproval?: (choice: "approved" | "rejected") => void | Promise<void>;
-  conversation?: ReadonlyArray<ConversationMessage>;
+  messages?: ReadonlyArray<ConversationMessage>;
   permissionMode: AgentPermissionMode;
   onPermissionModeChange: (mode: AgentPermissionMode) => void;
   onLoadEarlier?: () => void;
@@ -86,7 +86,7 @@ function CustomSelect({ value, options, onChange, disabled, icon }: { value: str
   );
 }
 
-export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDecide, workspaceReady, proposalSummary, awaitingFinalReview, onFinalReview, imageCandidates = [], onApplyImage, imageBusy, run, conversation = [], loopResult, liveEvents = [], timelineHistory = [], onLoopApproval, permissionMode, onPermissionModeChange, imageNodes = [], imageTargetNodeId, imagePrompt, onImageTargetNodeIdChange, onImagePromptChange, onGenerateImages, onLoadEarlier, hasEarlierMessages = false, loadingEarlierMessages = false, loadingWorkspace = false }: AgentPanelProps) {
+export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDecide, workspaceReady, proposalSummary, awaitingFinalReview, onFinalReview, imageCandidates = [], onApplyImage, imageBusy, run, messages = [], loopResult, activeEvents = [], historicalEvents = [], onLoopApproval, permissionMode, onPermissionModeChange, imageNodes = [], imageTargetNodeId, imagePrompt, onImageTargetNodeIdChange, onImagePromptChange, onGenerateImages, onLoadEarlier, hasEarlierMessages = false, loadingEarlierMessages = false, loadingWorkspace = false }: AgentPanelProps) {
   const [prompt, setPrompt] = useState("");
   const [deciding, setDeciding] = useState(false);
   const [imageToolOpen, setImageToolOpen] = useState(false);
@@ -95,11 +95,11 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const stickToBottomRef = useRef(true);
   const prependHeightRef = useRef<number | null>(null);
-  const currentTimeline = liveEvents.length ? liveEvents : loopResult?.events ?? [];
-  const timelineEvents = [...timelineHistory, ...currentTimeline];
+  const currentTimeline = activeEvents.length ? activeEvents : loopResult?.events ?? [];
+  const timelineEvents = [...historicalEvents, ...currentTimeline];
   const turns = projectAgentThread({
-    messages: conversation.map((message, index) => ({ id: message.id ?? `local:${index}`, role: message.role === "agent" ? "assistant" as const : "user" as const, parts: [{ type: "text", text: message.text }], run_id: message.runId ?? null, created_at: message.createdAt ?? "", message_key: message.id ?? `local:${index}`, delivery_status: message.status })),
-    historicalEvents: timelineHistory,
+    messages: messages.map((message, index) => ({ id: message.id ?? `local:${index}`, role: message.role === "agent" ? "assistant" as const : "user" as const, parts: [{ type: "text", text: message.text }], run_id: message.runId ?? null, created_at: message.createdAt ?? "", message_key: message.id ?? `local:${index}`, delivery_status: message.status })),
+    historicalEvents,
     activeEvents: currentTimeline,
     activeRunId: run?.id,
   }).turns;
@@ -122,7 +122,7 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
     if (!element || previousHeight === null) return;
     element.scrollTop += element.scrollHeight - previousHeight;
     prependHeightRef.current = null;
-  }, [conversation.length]);
+  }, [messages.length]);
   useEffect(() => {
     const element = promptRef.current;
     if (!element) return;
@@ -156,7 +156,7 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
           {awaitingFinalReview && <div className="scope-card"><span className="scope-kicker">最终版本复核</span><strong>新版本已通过 OOXML 重开校验</strong><p>中央画布已切换到生成后的真实 DOCX。确认后完成任务；拒绝会保留审计记录。</p><div className="scope-actions"><button className="primary-small" onClick={() => onFinalReview("approved")}><Check size={14} /> 确认交付</button><button onClick={() => onFinalReview("rejected")}>拒绝版本</button></div></div>}
           {imageNodes.length > 0 && <div className="scope-card image-tool-card"><button type="button" className="image-tool-toggle" onClick={() => setImageToolOpen((open) => !open)} aria-expanded={imageToolOpen}><span><span className="scope-kicker">图片工具</span><strong>生成图片候选</strong></span><ChevronDown size={16} className={imageToolOpen ? "rotate" : ""} /></button>{imageToolOpen && <div className="image-tool-body"><p>选择图片节点并生成候选；候选不会自动写回文档。</p><label>目标图片<select value={imageTargetNodeId} onChange={(event) => onImageTargetNodeIdChange(event.target.value)} disabled={imageBusy}><option value="">请选择图片节点</option>{imageNodes.map((node, index) => <option key={node.nodeId} value={node.nodeId}>图片 {index + 1} · {node.nodeId.slice(0, 12)}</option>)}</select></label><label>图片描述<textarea value={imagePrompt} onChange={(event) => onImagePromptChange(event.target.value)} placeholder="例如：简洁的三模块系统结构图" rows={2} disabled={imageBusy} /></label><button type="button" className="primary-small" onClick={() => void onGenerateImages()} disabled={imageBusy || !imageTargetNodeId.trim() || !imagePrompt.trim()}>{imageBusy ? "生成中…" : "生成图片候选"}</button></div>}</div>}
           {imageCandidates.length > 0 && <div className="scope-card image-candidate-card"><span className="scope-kicker">图片候选</span><strong>选择要应用的候选</strong><p>候选不会自动写回；选择后仍会按当前权限策略执行。</p>{imageCandidates.map((candidate) => <button key={candidate.id} onClick={() => onApplyImage(candidate)} disabled={imageBusy}><Image src={candidate.downloadUrl} alt="图片候选" width={240} height={140} unoptimized /><span>应用此候选</span></button>)}</div>}
-          {stage !== "idle" && stage !== "awaiting" && !timelineEvents.length && <div className="progress-card"><div className="progress-top"><strong>{stage === "complete" ? "已完成" : liveEvents.at(-1) ? eventSummary(liveEvents.at(-1)!) : "正在准备"}</strong><span>{stage === "complete" ? "完成" : "进行中"}</span></div><small>{stage === "complete" ? "结果已保存为新的文档版本" : "执行过程会实时显示在上方对话时间线"}</small>{stage !== "complete" && <button className="cancel-run" onClick={onCancel}><StopCircle size={13} /> 取消</button>}</div>}
+          {stage !== "idle" && stage !== "awaiting" && !timelineEvents.length && <div className="progress-card"><div className="progress-top"><strong>{stage === "complete" ? "已完成" : currentTimeline.at(-1) ? eventSummary(currentTimeline.at(-1)!) : "正在准备"}</strong><span>{stage === "complete" ? "完成" : "进行中"}</span></div><small>{stage === "complete" ? "结果已保存为新的文档版本" : "执行过程会实时显示在上方对话时间线"}</small>{stage !== "complete" && <button className="cancel-run" onClick={onCancel}><StopCircle size={13} /> 取消</button>}</div>}
         {showScrollToBottom && <button type="button" className="scroll-to-bottom" onClick={() => { const element = contentRef.current; if (!element) return; element.scrollTo({ top: element.scrollHeight, behavior: "smooth" }); stickToBottomRef.current = true; setShowScrollToBottom(false); }} aria-label="回到底部">↓ 回到底部</button>}
       </div>
       <div className="agent-composer">

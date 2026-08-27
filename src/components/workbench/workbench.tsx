@@ -63,7 +63,7 @@ export function Workbench() {
   const [imageNodes, setImageNodes] = useState<BrowserImageNode[]>([]);
   const [paragraphCount, setParagraphCount] = useState(0);
   const [tableCellCount, setTableCellCount] = useState(0);
-  const { conversation, setConversation, loopResult, setLoopResult, liveEvents, setLiveEvents, timelineHistory, setTimelineHistory } = useConversationStore();
+  const { messages, setMessages, loopResult, setLoopResult, activeEvents, setActiveEvents, historicalEvents, setHistoricalEvents } = useConversationStore();
   const [conversationCursor, setConversationCursor] = useState<string | null>(null);
   const [loadingEarlierMessages, setLoadingEarlierMessages] = useState(false);
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>("default");
@@ -89,12 +89,12 @@ export function Workbench() {
     setImageNodes([]);
     setParagraphCount(0);
     setTableCellCount(0);
-    setConversation([]);
+    setMessages([]);
     setLoopResult(undefined);
-    setLiveEvents([]);
-    setTimelineHistory([]);
+    setActiveEvents([]);
+    setHistoricalEvents([]);
     setNotice("请选择真实 DOCX，或从左侧打开一个历史任务");
-  }, [setConversation, setLoopResult, setLiveEvents, setTimelineHistory]);
+  }, [setMessages, setLoopResult, setActiveEvents, setHistoricalEvents]);
 
   const refreshTaskList = async () => {
     if (taskListRequestRef.current) {
@@ -171,11 +171,11 @@ export function Workbench() {
         )));
         setTaskId(workspace.task.id);
         setWorkspaceReady(Boolean(workspace.workingDocumentId));
-        setConversation([]);
+        setMessages([]);
         setConversationCursor(null);
         setLoopResult(undefined);
-        setLiveEvents([]);
-        setTimelineHistory([]);
+        setActiveEvents([]);
+        setHistoricalEvents([]);
         setRun(undefined);
         setProposalSummary(undefined);
         setAwaitingFinalReview(false);
@@ -196,7 +196,7 @@ export function Workbench() {
         if (durable) {
           durableConversationLoaded = durable.messages.length > 0;
           setConversationCursor(durable.nextCursor);
-          setConversation(projectAgentThread({ messages: durable.messages, historicalEvents: [], activeEvents: [] }).turns.flatMap((turn) => [
+          setMessages(projectAgentThread({ messages: durable.messages, historicalEvents: [], activeEvents: [] }).turns.flatMap((turn) => [
             { id: turn.user.id, role: "user" as const, text: turn.user.content, runId: turn.runId, status: turn.user.deliveryStatus },
             ...(turn.assistant.finalContent ? [{ id: turn.assistant.messageId, role: "agent" as const, text: turn.assistant.finalContent, runId: turn.runId, status: "sent" as const }] : []),
           ]));
@@ -232,8 +232,8 @@ export function Workbench() {
           setRun(resumed);
           if (resumedLoop) {
             setLoopResult(resumedLoop);
-            setLiveEvents((items) => mergeTimelineEvents(items, resumedLoop.events));
-            if (!durableConversationLoaded) setConversation([]);
+            setActiveEvents((items) => mergeTimelineEvents(items, resumedLoop.events));
+            if (!durableConversationLoaded) setMessages([]);
           } else setLoopResult(undefined);
           setAwaitingFinalReview(resumed.status === "awaiting_review");
           const resumedIsActive = ["queued", "analyzing", "generating", "applying", "validating"].includes(resumed.status);
@@ -242,7 +242,7 @@ export function Workbench() {
         // Completed-run history is intentionally loaded by the independent
         // background effect below; it must not delay the first usable render
         // of the current document and conversation.
-        setTimelineHistory([]);
+        setHistoricalEvents([]);
         loadedTaskIdRef.current = workspace.task.id;
         setNotice(workspace.workingDocumentId ? "已打开这个任务的最新文档和对话" : "已打开历史任务；请继续上传文档");
       } catch (error) {
@@ -253,7 +253,7 @@ export function Workbench() {
       }
     })();
     return () => abort.abort();
-  }, [routeTaskId, resetWorkspace, setConversation, setLiveEvents, setLoopResult, setTimelineHistory]);
+  }, [routeTaskId, resetWorkspace, setMessages, setActiveEvents, setLoopResult, setHistoricalEvents]);
 
   // Load completed runs independently from the document bootstrap. A large
   // DOCX preview can take several seconds; the conversation history should
@@ -267,12 +267,12 @@ export function Workbench() {
       const historicalEvents = history.runs
         .filter((item) => item.id !== run?.id && ["completed", "failed", "cancelled"].includes(item.checkpoint?.status ?? item.status))
         .flatMap((item) => item.events);
-      setTimelineHistory(historicalEvents);
+      setHistoricalEvents(historicalEvents);
     }).catch(() => {
-      if (!cancelled) setTimelineHistory([]);
+      if (!cancelled) setHistoricalEvents([]);
     });
     return () => { cancelled = true; };
-  }, [taskId, run?.id, setTimelineHistory]);
+  }, [taskId, run?.id, setHistoricalEvents]);
 
   async function loadEarlierConversationMessages() {
     if (!taskId || !conversationCursor || loadingEarlierMessages) return;
@@ -284,7 +284,7 @@ export function Workbench() {
         if (!text || (message.role !== "user" && message.role !== "assistant")) return [];
         return [{ id: message.id, role: message.role === "user" ? "user" as const : "agent" as const, text, runId: message.run_id ?? undefined, createdAt: message.created_at, status: message.delivery_status ?? "sent" }];
       });
-      setConversation((items) => [...older, ...items]);
+      setMessages((items) => [...older, ...items]);
       setConversationCursor(page.nextCursor);
     } finally {
       setLoadingEarlierMessages(false);
@@ -310,7 +310,7 @@ export function Workbench() {
         let current = await decideBrowserAgentRun(run.id, decision === "accepted" ? "approved" : "rejected");
         setRun(current);
         if (decision === "rejected") {
-          setConversation((items) => [...items, { role: "agent", text: "我会保留当前文档，不写入这次建议。" }]);
+          setMessages((items) => [...items, { role: "agent", text: "我会保留当前文档，不写入这次建议。" }]);
           setStage("idle");
           setNotice("修改计划已拒绝，文档版本保持不变");
           return;
@@ -329,16 +329,16 @@ export function Workbench() {
         await refreshVersions(taskId);
         setAwaitingFinalReview(true);
         setStage("awaiting");
-        setConversation((items) => [...items, { role: "agent", text: "范围已确认。新版本已写入并通过 DOCX 重开校验，请进行最终复核。" }]);
+          setMessages((items) => [...items, { role: "agent", text: "范围已确认。新版本已写入并通过 DOCX 重开校验，请进行最终复核。" }]);
         setNotice("新版本已显示在画布中，等待最终复核");
       } catch (error) {
-        setConversation((items) => [...items, { role: "agent", text: error instanceof Error ? `这次执行没有完成：${error.message}` : "这次执行没有完成，请重试。" }]);
+          setMessages((items) => [...items, { role: "agent", text: error instanceof Error ? `这次执行没有完成：${error.message}` : "这次执行没有完成，请重试。" }]);
         setStage("idle");
         setNotice(error instanceof Error ? error.message : "Agent 执行失败，可从检查点重试");
       }
       return;
     }
-    setConversation((items) => [...items, { role: "agent", text: "请先打开一份 DOCX，建立文档工作区后我就可以开始处理。" }]);
+    setMessages((items) => [...items, { role: "agent", text: "请先打开一份 DOCX，建立文档工作区后我就可以开始处理。" }]);
     setNotice("请先打开一份 DOCX，建立文档工作区");
   };
 
@@ -348,7 +348,7 @@ export function Workbench() {
       return;
     }
     const localMessageId = crypto.randomUUID();
-    setConversation((items) => [...items, { id: localMessageId, role: "user", text: prompt, status: "pending" }]);
+    setMessages((items) => [...items, { id: localMessageId, role: "user", text: prompt, status: "pending" }]);
     setStage("analyzing");
     setNotice(`纸上鸭正在处理你的请求：“${prompt.slice(0, 24)}${prompt.length > 24 ? "…" : ""}”`);
     setAwaitingFinalReview(false);
@@ -363,15 +363,15 @@ export function Workbench() {
       // the explicit approval controls.
       const startsFreshRun = !run || stage !== "awaiting" || run.status === "cancelled" || run.status === "completed" || run.status === "failed";
       if (startsFreshRun) {
-        const previousEvents = liveEvents.length ? liveEvents : loopResult?.events ?? [];
-        if (previousEvents.length) setTimelineHistory((items) => mergeTimelineEvents(items, previousEvents));
-        setLiveEvents([]);
+        const previousEvents = activeEvents.length ? activeEvents : loopResult?.events ?? [];
+        if (previousEvents.length) setHistoricalEvents((items) => mergeTimelineEvents(items, previousEvents));
+        setActiveEvents([]);
         setLoopResult(undefined);
       }
       // Show the user's turn immediately. The server emits the durable
       // turn.started event shortly afterwards; mergeTimelineEvents replaces
       // this local item when that event arrives.
-      setLiveEvents((items) => mergeTimelineEvents(items, [{
+      setActiveEvents((items) => mergeTimelineEvents(items, [{
         type: "turn.started",
         eventId: `local:${crypto.randomUUID()}`,
         timestamp: new Date().toISOString(),
@@ -382,13 +382,13 @@ export function Workbench() {
       activeRunForRecovery = activeRun;
       setRun(activeRun);
       const result = await runBrowserAgentLoopStream(activeRun.id, prompt, permissionMode, (event) => {
-        setLiveEvents((items) => mergeTimelineEvents(items, [event]));
+        setActiveEvents((items) => mergeTimelineEvents(items, [event]));
         if (event.type === "model.delta") setNotice("纸上鸭正在回复");
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
       }, abortController.signal, localMessageId);
       setLoopResult(result);
-      setLiveEvents((items) => mergeTimelineEvents(items, result.events));
-      setConversation((items) => items.map((item) => item.id === localMessageId ? { ...item, status: result.checkpoint.status === "failed" ? "failed" : "sent" } : item));
+      setActiveEvents((items) => mergeTimelineEvents(items, result.events));
+      setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, status: result.checkpoint.status === "failed" ? "failed" : "sent" } : item));
       if (result.checkpoint.status === "failed") {
         // The failed checkpoint already contains the user-facing assistant
         // message and turn.failed event. Keep the unified Timeline as the
@@ -398,7 +398,7 @@ export function Workbench() {
         return;
       }
       const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
-      if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
+      if (replies.length) setMessages((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text, runId: activeRun.id }))]);
       const wrote = result.events.some((event) => event.type === "tool.completed" && (event.name === "apply_text_change" || event.name === "apply_text_changes"));
       if (wrote && taskId) {
         // A document mutation is not user-visible until the immutable version
@@ -429,7 +429,7 @@ export function Workbench() {
         try {
           const recovered = await loadBrowserAgentLoop(runToRecover.id);
           setLoopResult(recovered);
-          setLiveEvents((items) => mergeTimelineEvents(items, recovered.events));
+          setActiveEvents((items) => mergeTimelineEvents(items, recovered.events));
           if (recovered.checkpoint.pendingApproval || recovered.checkpoint.pendingUserQuestion) {
             setStage("awaiting");
             setNotice(recovered.checkpoint.pendingApproval ? "Agent 已完成读取并请求写入确认" : "Agent 正在等待你的回答");
@@ -443,14 +443,14 @@ export function Workbench() {
         } catch { /* preserve the original error below */ }
       }
       const failureMessage = error instanceof Error ? error.message : "这次分析没有完成，请重试。";
-      setConversation((items) => items.map((item) => item.id === localMessageId ? { ...item, status: "failed" } : item));
-      setLiveEvents((items) => mergeTimelineEvents(items, [{
+      setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, status: "failed" } : item));
+      setActiveEvents((items) => mergeTimelineEvents(items, [{
         type: "turn.failed",
         eventId: `local:failed:${crypto.randomUUID()}`,
         timestamp: new Date().toISOString(),
         error: failureMessage,
       }]));
-      setConversation((items) => [...items, { role: "agent", text: error instanceof Error ? `这次分析没有完成：${error.message}` : "这次分析没有完成，请重试。" }]);
+      setMessages((items) => [...items, { role: "agent", text: error instanceof Error ? `这次分析没有完成：${error.message}` : "这次分析没有完成，请重试。" }]);
       setStage("idle");
       setNotice(error instanceof Error ? error.message : "Agent 分析失败");
     } finally {
@@ -465,13 +465,13 @@ export function Workbench() {
     agentAbortRef.current = abortController;
     try {
       const result = await resumeBrowserAgentLoopStream(run.id, choice, (event) => {
-        setLiveEvents((items) => mergeTimelineEvents(items, [event]));
+        setActiveEvents((items) => mergeTimelineEvents(items, [event]));
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
       }, abortController.signal);
       setLoopResult(result);
-      setLiveEvents((items) => mergeTimelineEvents(items, result.events));
+      setActiveEvents((items) => mergeTimelineEvents(items, result.events));
       const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
-      if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
+      if (replies.length) setMessages((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text, runId: run.id }))]);
       if (result.checkpoint.status === "completed") {
         setProposalSummary(undefined);
         const wrote = result.events.some((event) => event.type === "tool.completed" && (event.name === "apply_text_change" || event.name === "apply_text_changes"));
@@ -489,14 +489,14 @@ export function Workbench() {
         setNotice("Agent 需要你的下一步决定");
       } else if (result.checkpoint.status === "failed") {
         const finalText = result.checkpoint.finalText ?? "Agent 执行失败";
-        setConversation((items) => [...items, { role: "agent", text: finalText }]);
+        setMessages((items) => [...items, { role: "agent", text: finalText, runId: run.id }]);
         setStage("idle");
         setNotice(finalText);
       }
     } catch (error) {
       if (abortController.signal.aborted) return;
       const message = error instanceof Error ? error.message : "Agent 恢复失败";
-      setConversation((items) => [...items, { role: "agent", text: `这次执行没有完成：${message}` }]);
+      setMessages((items) => [...items, { role: "agent", text: `这次执行没有完成：${message}`, runId: run.id }]);
       setStage("idle");
       setNotice(message);
     } finally {
@@ -527,8 +527,8 @@ export function Workbench() {
       const bytes = await readDocxFile(file);
       setLoopResult(undefined);
       if (creatingNewTask) {
-        setConversation([]);
-        setLiveEvents([]);
+        setMessages([]);
+        setActiveEvents([]);
         setRun(undefined);
         setProposalSummary(undefined);
         setAwaitingFinalReview(false);
@@ -632,7 +632,7 @@ export function Workbench() {
       setRun(reviewed);
       setAwaitingFinalReview(false);
       setStage(choice === "approved" ? "complete" : "idle");
-      setConversation((items) => [...items, { role: "agent", text: choice === "approved" ? "最终版本已确认，任务完成。" : "这版结果已拒绝；历史版本保持不变。" }]);
+      setMessages((items) => [...items, { role: "agent", text: choice === "approved" ? "最终版本已确认，任务完成。" : "这版结果已拒绝；历史版本保持不变。", runId: run.id }]);
       setNotice(choice === "approved" ? "最终版本已确认，任务完成" : "最终版本已拒绝，决定已记录");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "最终复核失败");
@@ -666,7 +666,7 @@ export function Workbench() {
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
         {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} onLoadMoreTasks={loadMoreTasks} hasMoreTasks={nextTaskOffset !== null} loadingMoreTasks={loadingMoreTasks} loadingTasks={loadingTasks} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
         <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} proposal={proposal} onChoose={chooseWorkingDocument} onDecide={decide} proposalSummary={proposalSummary} /></div>
-        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} liveEvents={liveEvents} timelineHistory={timelineHistory} onLoopApproval={decideLoop} conversation={conversation} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onDecide={decide} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} loadingWorkspace={Boolean(routeTaskId && documentLoad.status === "loading")} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
+        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onDecide={decide} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} loadingWorkspace={Boolean(routeTaskId && documentLoad.status === "loading")} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 
       <div className="mobile-dock" aria-label="移动端工作台导航"><button onClick={() => setMobilePanel("outline")} className={mobilePanel === "outline" ? "active" : ""}><FilePlus2 size={18} /><span>文档</span></button><button onClick={() => setMobilePanel("agent")} className={mobilePanel === "agent" ? "active" : ""}><Sparkles size={18} /><span>审批</span><i>1</i></button><button onClick={() => setMobilePanel("versions")} className={mobilePanel === "versions" ? "active" : ""}><History size={18} /><span>版本</span></button><button onClick={downloadCurrent}><Download size={18} /><span>下载</span></button></div>

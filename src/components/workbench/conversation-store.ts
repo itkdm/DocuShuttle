@@ -3,27 +3,29 @@ import type { BrowserAgentLoopResult } from "@/modules/agent/browser-runtime";
 
 export type ConversationMessage = { id?: string; role: "user" | "agent"; text: string; runId?: string; createdAt?: string; status?: "pending" | "sent" | "failed" };
 type Event = BrowserAgentLoopResult["events"][number];
-type State = { conversation: ConversationMessage[]; loopResult?: BrowserAgentLoopResult; liveEvents: Event[]; timelineHistory: Event[] };
+type Updater<T> = T | ((value: T) => T);
+type State = { messages: ConversationMessage[]; loopResult?: BrowserAgentLoopResult; activeEvents: Event[]; historicalEvents: Event[] };
 type Action =
-  | { type: "conversation.set"; value: ConversationMessage[] | ((value: ConversationMessage[]) => ConversationMessage[]) }
+  | { type: "messages.set"; value: Updater<ConversationMessage[]> }
   | { type: "loop.set"; value?: BrowserAgentLoopResult }
-  | { type: "live.set"; value: Event[] | ((value: Event[]) => Event[]) }
-  | { type: "history.set"; value: Event[] | ((value: Event[]) => Event[]) };
+  | { type: "active-events.set"; value: Updater<Event[]> }
+  | { type: "historical-events.set"; value: Updater<Event[]> };
 
-const initialState: State = { conversation: [], liveEvents: [], timelineHistory: [] };
+const apply = <T,>(current: T, value: Updater<T>) => typeof value === "function" ? (value as (value: T) => T)(current) : value;
+const initialState: State = { messages: [], activeEvents: [], historicalEvents: [] };
 
 function reducer(state: State, action: Action): State {
-  if (action.type === "conversation.set") return { ...state, conversation: typeof action.value === "function" ? action.value(state.conversation) : action.value };
+  if (action.type === "messages.set") return { ...state, messages: apply(state.messages, action.value) };
   if (action.type === "loop.set") return { ...state, loopResult: action.value };
-  if (action.type === "live.set") return { ...state, liveEvents: typeof action.value === "function" ? action.value(state.liveEvents) : action.value };
-  return { ...state, timelineHistory: typeof action.value === "function" ? action.value(state.timelineHistory) : action.value };
+  if (action.type === "active-events.set") return { ...state, activeEvents: apply(state.activeEvents, action.value) };
+  return { ...state, historicalEvents: apply(state.historicalEvents, action.value) };
 }
 
 export function useConversationStore() {
   const [state, dispatch] = useReducer(reducer, initialState);
-  const setConversation = useCallback((value: ConversationMessage[] | ((value: ConversationMessage[]) => ConversationMessage[])) => dispatch({ type: "conversation.set", value }), []);
+  const setMessages = useCallback((value: Updater<ConversationMessage[]>) => dispatch({ type: "messages.set", value }), []);
   const setLoopResult = useCallback((value?: BrowserAgentLoopResult) => dispatch({ type: "loop.set", value }), []);
-  const setLiveEvents = useCallback((value: Event[] | ((value: Event[]) => Event[])) => dispatch({ type: "live.set", value }), []);
-  const setTimelineHistory = useCallback((value: Event[] | ((value: Event[]) => Event[])) => dispatch({ type: "history.set", value }), []);
-  return { ...state, setConversation, setLoopResult, setLiveEvents, setTimelineHistory };
+  const setActiveEvents = useCallback((value: Updater<Event[]>) => dispatch({ type: "active-events.set", value }), []);
+  const setHistoricalEvents = useCallback((value: Updater<Event[]>) => dispatch({ type: "historical-events.set", value }), []);
+  return { ...state, setMessages, setLoopResult, setActiveEvents, setHistoricalEvents };
 }

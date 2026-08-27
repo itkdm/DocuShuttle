@@ -101,6 +101,8 @@ export function findElementRanges(xml: string, qualifiedName: string): XmlRange[
 - `set-cell-text`：替换整个单元格可见文本。
 - `replace-image`：同 content-type 替换 media part。
 
+内核同时提供不写入字节的 `planMutation` dry-run：先整体解析并校验所有 target，返回目标 node、受影响 part、风险级别和预期后置条件，供 Agent 预览/HITL 使用；真正的 `mutate` 仍在同一套解析结果上执行原子补丁和重开校验。
+
 写入前 `assertSafeTextContainer`：若该节点 XML 内出现域、修订、内容控件、文本框、altChunk、object，拒绝这一次操作，不影响其他节点。
 
 补丁完成后：只改声明过的 entry → 重新 `loadPackage` → 未改 entry 哈希必须相同 → 再核对目标语义。

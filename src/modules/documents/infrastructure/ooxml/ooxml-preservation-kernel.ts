@@ -290,6 +290,13 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
     if (loaded.manifest.revision !== request.expectedRevision) throw new DocumentKernelError("REVISION_PRECONDITION_FAILED", "The source package revision differs from expectedRevision.");
     const targets: string[] = [];
     const changedParts = new Set<string>();
+    const plannedRanges = new Map<string, Array<{ start: number; end: number }>>();
+    const addRange = (entry: string, start: number, end: number) => {
+      const ranges = plannedRanges.get(entry) ?? [];
+      if (ranges.some((range) => start < range.end && range.start < end)) throw new DocumentKernelError("OVERLAPPING_OPERATIONS", "Mutation plan contains overlapping source ranges.");
+      ranges.push({ start, end });
+      plannedRanges.set(entry, ranges);
+    };
     let riskLevel: MutationPlan["riskLevel"] = "low";
     const expectedPostconditions: string[] = [];
     for (const operation of request.operations) {
@@ -298,14 +305,16 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
         const target = indexed.paragraphs.find((candidate) => addressMatches(candidate, operation));
         if (!target) throw new DocumentKernelError("ADDRESS_NOT_FOUND", "Paragraph address was not found.");
         ensureAddressPrecondition(target, operation);
-        textPatch(target, operation);
+        const patch = textPatch(target, operation);
+        addRange(target.address.entry, patch.start, patch.end);
         targets.push(target.address.nodeId); changedParts.add(target.address.entry);
         expectedPostconditions.push(`${target.address.nodeId}.text == ${JSON.stringify(operation.replacement)}`);
       } else if (operation.kind === "set-cell-text") {
         const target = indexed.cells.find((candidate) => addressMatches(candidate, operation));
         if (!target) throw new DocumentKernelError("ADDRESS_NOT_FOUND", "Table cell address was not found.");
         ensureAddressPrecondition(target, operation);
-        cellPatch(target, operation);
+        const patch = cellPatch(target, operation);
+        addRange(target.address.entry, patch.start, patch.end);
         targets.push(target.address.nodeId); changedParts.add(target.address.entry);
         expectedPostconditions.push(`${target.address.nodeId}.text == ${JSON.stringify(operation.text)}`);
       } else {
@@ -316,6 +325,7 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
         if (target.address.mediaReferenceCount > 1) throw new DocumentKernelError("SHARED_MEDIA_PART_UNSUPPORTED", "The selected image part is shared by multiple drawings; V1 refuses a fan-out replacement.");
         if (operation.contentType && operation.contentType !== target.contentType) throw new DocumentKernelError("IMAGE_CONTENT_TYPE_CHANGE_UNSUPPORTED", "V1 only replaces an image with the existing package part content type.");
         assertSupportedImage(operation.bytes, target.contentType);
+        if (changedParts.has(target.address.mediaEntry)) throw new DocumentKernelError("OVERLAPPING_OPERATIONS", "Mutation plan targets the same image part more than once.");
         targets.push(target.address.nodeId); changedParts.add(target.address.mediaEntry); riskLevel = "medium";
         expectedPostconditions.push(`${target.address.nodeId}.fingerprint == sha256(newImage)`);
       }

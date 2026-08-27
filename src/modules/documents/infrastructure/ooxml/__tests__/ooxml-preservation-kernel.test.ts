@@ -35,6 +35,20 @@ describe("OoxmlPreservationKernel", () => {
     expect(plan.diagnostics[0]?.code).toBe("MUTATION_PLAN_READY");
     expect(bytes).toEqual(original);
   });
+
+  it("rejects overlapping source ranges during planning", async () => {
+    const bytes = await createDocx();
+    const kernel = new OoxmlPreservationKernel();
+    const inspection = await kernel.inspect(bytes);
+    const paragraph = inspection.paragraphs[0];
+    await expect(kernel.planMutation!(bytes, {
+      expectedRevision: inspection.manifest.revision,
+      operations: [
+        { kind: "replace-text", address: paragraph.address, expectedText: paragraph.text, replacement: "one" },
+        { kind: "replace-text", address: paragraph.address, expectedText: paragraph.text, replacement: "two" },
+      ],
+    })).rejects.toMatchObject({ code: "OVERLAPPING_OPERATIONS" });
+  });
   it("inspects manifest, stable addresses, relationships, and package integrity", async () => {
     const bytes = await createDocx();
     const kernel = new OoxmlPreservationKernel();

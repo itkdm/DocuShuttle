@@ -49,9 +49,11 @@ describe("AgentLoopRunner", () => {
     const paused = await runner.run("run-2", "修改正文");
     expect(paused.checkpoint.status).toBe("awaiting_user");
     expect(paused.events.some((event) => event.type === "approval.required")).toBe(true);
-    const resumed = await runner.resume("run-2", "approved");
+    const streamed: string[] = [];
+    const resumed = await runner.resume("run-2", "approved", undefined, (event) => streamed.push(event.type));
     expect(resumed.checkpoint.status).toBe("completed");
     expect(resumed.checkpoint.messages.some((message) => message.toolName === "apply_change" && message.content.includes("revision"))).toBe(true);
+    expect(streamed).toContain("assistant.message");
   });
 
   it("allows explicitly selected full autonomy to execute approval tools", async () => {
@@ -180,6 +182,14 @@ describe("AgentLoopRunner", () => {
     expect(result.checkpoint.status).toBe("awaiting_user");
     expect(result.checkpoint.finalText).toBeUndefined();
     expect(result.events.some((event) => event.type === "assistant.message")).toBe(true);
+  });
+
+  it("exposes a terminal safety-budget failure in the timeline", async () => {
+    const model: AgentModelPort = { decide: async () => ({ kind: "tool_calls", calls: [{ id: crypto.randomUUID(), name: "inspect_document", input: { query: "again" } }] }) };
+    const result = await new AgentLoopRunner(model, new MemoryStore(), [inspectTool], 12, 1).run("run-budget", "持续检查");
+    expect(result.checkpoint.status).toBe("failed");
+    expect(result.events.at(-2)).toMatchObject({ type: "assistant.message" });
+    expect(result.events.at(-1)).toMatchObject({ type: "turn.failed" });
   });
 
   it("feeds a rejected approval back to the model for a different response", async () => {

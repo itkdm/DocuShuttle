@@ -79,8 +79,7 @@ function containingCellPath(
   return `${cell.address.path}/p[${earlier}]`;
 }
 
-function containingTextBoxPath(paragraph: XmlRange, xml: string): string | undefined {
-  const boxes = findElementRanges(xml, "w:txbxContent");
+function containingTextBoxPath(paragraph: XmlRange, boxes: readonly XmlRange[]): string | undefined {
   const box = boxes
     .map((range, index) => ({ range, index }))
     .filter(({ range }) => range.start < paragraph.start && range.end > paragraph.end)
@@ -127,6 +126,7 @@ async function indexParagraphs(
   xml: string,
   revision: string,
   cells: readonly IndexedCell[],
+  textBoxes: readonly XmlRange[],
 ): Promise<IndexedParagraph[]> {
   const paragraphs = findElementRanges(xml, "w:p");
   return Promise.all(
@@ -134,7 +134,7 @@ async function indexParagraphs(
       const text = visibleText(range.xml);
       const openTag = range.xml.slice(0, range.xml.indexOf(">") + 1);
       const paraId = attributes(openTag)["w14:paraId"];
-      const textBoxPath = containingTextBoxPath(range, xml);
+      const textBoxPath = containingTextBoxPath(range, textBoxes);
       const path = textBoxPath ?? containingCellPath(range, cells) ?? `p[${index}]`;
       const nodeId = await logicalNodeId(
         "paragraph",
@@ -285,7 +285,7 @@ export async function indexDocument(loaded: LoadedPackage): Promise<DocumentInde
     const indexedCells = await indexCells(entry, xml, loaded.manifest.revision);
     cells.push(...indexedCells);
     paragraphs.push(
-      ...(await indexParagraphs(entry, xml, loaded.manifest.revision, indexedCells)),
+      ...(await indexParagraphs(entry, xml, loaded.manifest.revision, indexedCells, findElementRanges(xml, "w:txbxContent"))),
     );
     images.push(...(await indexImages(loaded, entry, xml)));
     diagnostics.push(...unsupportedConstructDiagnostics(entry, xml));

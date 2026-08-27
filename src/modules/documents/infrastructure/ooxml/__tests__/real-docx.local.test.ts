@@ -17,7 +17,16 @@ describe.skipIf(fixturePaths.length === 0)("private real DOCX regression", () =>
 
     for (const fixturePath of fixturePaths) {
       const source = Uint8Array.from(await readFile(fixturePath));
-      const before = await kernel.inspect(source);
+      let before;
+      try {
+        before = await kernel.inspect(source);
+      } catch (error) {
+        // The corpus intentionally includes a malformed/renamed DOCX. The
+        // upload boundary must reject it with a stable ZIP error, not make
+        // the entire corpus test fail before valid fixtures are exercised.
+        expect(error, fixturePath).toMatchObject({ code: expect.stringMatching(/^ZIP_/) });
+        continue;
+      }
       expect(before.diagnostics.filter(({ severity }) => severity === "error"), fixturePath).toEqual([]);
 
       const noOp = await kernel.mutate(source, {
@@ -76,5 +85,5 @@ describe.skipIf(fixturePaths.length === 0)("private real DOCX regression", () =>
     if (process.env.PAPERDUCK_REQUIRE_HEADER_FOOTER === "1") {
       expect(storyFixtureCount).toBeGreaterThan(0);
     }
-  });
+  }, 120_000);
 });

@@ -252,7 +252,11 @@ export function Workbench() {
     const abortController = new AbortController();
     agentAbortRef.current = abortController;
     try {
-      const startsFreshRun = !run || run.status === "cancelled";
+      // A completed/failed run is an immutable execution record, not a
+      // conversation handle for the next user turn. Start a new run for the
+      // next request; only an active approval checkpoint may be resumed by
+      // the explicit approval controls.
+      const startsFreshRun = !run || stage !== "awaiting" || run.status === "cancelled" || run.status === "completed" || run.status === "failed";
       if (startsFreshRun) {
         setLiveEvents([]);
         setLoopResult(undefined);

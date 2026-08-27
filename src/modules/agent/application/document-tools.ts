@@ -55,21 +55,6 @@ const summarizeInspection = (inspection: DocumentInspection) => ({
   validation: inspection.validation,
 });
 
-async function inspectCurrent(
-  documents: DocumentEnginePort,
-  working: WorkingDocumentAccessPort,
-): Promise<{ bytes: Uint8Array; inspection: DocumentInspection }> {
-  const current = await working.load();
-  const inspection = await documents.inspect(current.bytes);
-  if (inspection.manifest.revision !== current.revision) {
-    throw new Error("WORKING_DOCUMENT_REVISION_MISMATCH");
-  }
-  if (blockingPackageErrors(inspection.diagnostics).length > 0) {
-    throw new Error("WORKING_DOCUMENT_INSPECTION_FAILED");
-  }
-  return { bytes: current.bytes, inspection };
-}
-
 async function planIfAvailable(
   documents: DocumentEnginePort,
   bytes: Uint8Array,
@@ -82,12 +67,34 @@ export function createDocumentTools(
   documents: DocumentEnginePort,
   working: WorkingDocumentAccessPort,
 ): readonly AgentTool[] {
+  // A single model turn may inspect the same revision through several tools.
+  // Parsing a DOCX is relatively expensive, so memoize only within this tool
+  // registry instance. The cache is revision-scoped and is invalidated after
+  // every successful commit; it never crosses requests or document versions.
+  let cachedInspection: { bytes: Uint8Array; inspection: DocumentInspection; revision: string } | undefined;
+  const inspectCurrent = async (): Promise<{ bytes: Uint8Array; inspection: DocumentInspection }> => {
+    const current = await working.load();
+    if (cachedInspection?.revision === current.revision) {
+      return { bytes: cachedInspection.bytes, inspection: cachedInspection.inspection };
+    }
+    const inspection = await documents.inspect(current.bytes);
+    if (inspection.manifest.revision !== current.revision) {
+      throw new Error("WORKING_DOCUMENT_REVISION_MISMATCH");
+    }
+    if (blockingPackageErrors(inspection.diagnostics).length > 0) {
+      throw new Error("WORKING_DOCUMENT_INSPECTION_FAILED");
+    }
+    cachedInspection = { bytes: current.bytes, inspection, revision: current.revision };
+    return { bytes: current.bytes, inspection };
+  };
+  const invalidateInspection = () => { cachedInspection = undefined; };
+
   const inspectDocument: AgentTool<typeof emptySchema> = {
     name: "inspect_document",
     description: "Read the current Word document structure, counts, diagnostics and revision without modifying it.",
     inputSchema: emptySchema,
     async execute() {
-      const { inspection } = await inspectCurrent(documents, working);
+      const { inspection } = await inspectCurrent();
       return summarizeInspection(inspection);
     },
   };
@@ -97,7 +104,7 @@ export function createDocumentTools(
     description: "List one bounded page (maximum 80) of stable document nodes and short text previews. Use offset to inspect another page; do not request the entire document unless necessary.",
     inputSchema: regionListSchema,
     async execute(input) {
-      const { inspection } = await inspectCurrent(documents, working);
+      const { inspection } = await inspectCurrent();
       const matched = inspection.manifest.nodes.filter((node) => input.kind === "all" || node.kind === input.kind);
       const nodes = matched.slice(input.offset, input.offset + input.limit);
       const textByNodeId = new Map([
@@ -129,7 +136,7 @@ export function createDocumentTools(
     description: "Read the current text for one stable paragraph or table-cell node.",
     inputSchema: regionReadSchema,
     async execute(input) {
-      const { inspection } = await inspectCurrent(documents, working);
+      const { inspection } = await inspectCurrent();
       const paragraph = inspection.paragraphs.find(({ address }) => address.nodeId === input.nodeId);
       if (paragraph) return { revision: inspection.manifest.revision, nodeId: input.nodeId, kind: "paragraph", text: paragraph.text };
       const cell = inspection.tableCells.find(({ address }) => address.nodeId === input.nodeId);
@@ -143,7 +150,7 @@ export function createDocumentTools(
     description: "Read the supported, guarded or unsupported operations for one semantic document node without modifying it.",
     inputSchema: capabilitySchema,
     async execute(input) {
-      const { inspection } = await inspectCurrent(documents, working);
+      const { inspection } = await inspectCurrent();
       const node = inspection.manifest.nodes.find((candidate) => candidate.nodeId === input.nodeId);
       if (!node) throw new Error("DOCUMENT_REGION_NOT_FOUND");
       const text = inspection.paragraphs.find(({ address }) => address.nodeId === input.nodeId)?.text
@@ -163,7 +170,7 @@ export function createDocumentTools(
     description: "Dry-run one exact text replacement and return the targets, changed parts, risk and validation diagnostics. This never writes the document and does not require approval.",
     inputSchema: planTextChangeSchema,
     async execute(input) {
-      const current = await inspectCurrent(documents, working);
+      const current = await inspectCurrent();
       if (current.inspection.manifest.revision !== input.expectedRevision) throw new Error("DOCUMENT_REVISION_CONFLICT");
       const paragraph = current.inspection.paragraphs.find(({ address }) => address.nodeId === input.nodeId);
       const cell = current.inspection.tableCells.find(({ address }) => address.nodeId === input.nodeId);
@@ -199,7 +206,7 @@ export function createDocumentTools(
     requiresApproval: true,
     inputSchema: textChangeSchema,
     async execute(input) {
-      const current = await inspectCurrent(documents, working);
+      const current = await inspectCurrent();
       if (current.inspection.manifest.revision !== input.expectedRevision) throw new Error("DOCUMENT_REVISION_CONFLICT");
       const paragraph = current.inspection.paragraphs.find(({ address }) => address.nodeId === input.nodeId);
       const cell = current.inspection.tableCells.find(({ address }) => address.nodeId === input.nodeId);
@@ -212,6 +219,7 @@ export function createDocumentTools(
       const validated = await documents.validate(mutation.bytes);
       if (blockingPackageErrors(validated.diagnostics).length > 0) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
       const committed = await working.commit({ expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
+      invalidateInspection();
       return {
         nodeId: input.nodeId,
         previousRevision: input.expectedRevision,
@@ -229,7 +237,7 @@ export function createDocumentTools(
     requiresApproval: true,
     inputSchema: textChangesSchema,
     async execute(input) {
-      const current = await inspectCurrent(documents, working);
+      const current = await inspectCurrent();
       if (current.inspection.manifest.revision !== input.expectedRevision) throw new Error("DOCUMENT_REVISION_CONFLICT");
       const seen = new Set<string>();
       const operations = input.changes.map((change) => {
@@ -247,6 +255,7 @@ export function createDocumentTools(
       const validated = await documents.validate(mutation.bytes);
       if (blockingPackageErrors(validated.diagnostics).length > 0) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
       const committed = await working.commit({ expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
+      invalidateInspection();
       return {
         changedCount: input.changes.length,
         nodeIds: input.changes.map((change) => change.nodeId),

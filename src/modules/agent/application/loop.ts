@@ -291,31 +291,39 @@ export class AgentLoopRunner {
     if (!tool) throw new Error(`Unknown agent tool: ${pending.name}`);
     const input = tool.inputSchema.parse(pending.input);
     const events: AgentLoopEvent[] = [];
-    const emit = (event: AgentLoopEvent) => {
+    const emit = (event: AgentLoopEvent, notify = true) => {
       const traceEvent = { ...event, eventId: event.eventId ?? crypto.randomUUID(), timestamp: event.timestamp ?? new Date().toISOString() } as AgentLoopEvent;
       events.push(traceEvent);
       checkpoint.trace = [...(checkpoint.trace ?? []), traceEvent].slice(-200);
-      onEvent?.(traceEvent);
+      if (notify) onEvent?.(traceEvent);
+      return traceEvent;
     };
-    emit({ type: "tool.started", callId: pending.callId, name: pending.name, input: summarizeTraceValue(input) });
+    const startedEvent = emit({ type: "tool.started", callId: pending.callId, name: pending.name, input: summarizeTraceValue(input) }, false);
     // Persist the approval claim and the operation start before side effects.
     // If the request is interrupted, the trace tells us exactly whether a
     // write was started, completed, or needs safe investigation.
     await this.store.save(runId, checkpoint);
+    onEvent?.(startedEvent);
     if (approval === "approved") {
       const toolStartedAt = Date.now();
       try {
         const output = await tool.execute(input, { runId, callId: pending.callId, idempotencyKey: `${runId}:${pending.callId}`, attempt: checkpoint.toolCallCount, signal });
         checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval, output }), toolCallId: pending.callId, toolName: pending.name });
-        emit({ type: "tool.completed", callId: pending.callId, name: pending.name, output: summarizeTraceValue({ ...((output && typeof output === "object") ? output : { value: output }), durationMs: Date.now() - toolStartedAt }) });
+        const completedEvent = emit({ type: "tool.completed", callId: pending.callId, name: pending.name, output: summarizeTraceValue({ ...((output && typeof output === "object") ? output : { value: output }), durationMs: Date.now() - toolStartedAt }) }, false);
+        await this.store.save(runId, checkpoint);
+        onEvent?.(completedEvent);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Tool execution failed";
         checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval, error: message }), toolCallId: pending.callId, toolName: pending.name });
-        emit({ type: "tool.failed", callId: pending.callId, name: pending.name, error: message, durationMs: Date.now() - toolStartedAt });
+        const failedEvent = emit({ type: "tool.failed", callId: pending.callId, name: pending.name, error: message, durationMs: Date.now() - toolStartedAt }, false);
+        await this.store.save(runId, checkpoint);
+        onEvent?.(failedEvent);
       }
     } else {
       checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: "rejected", reason: "The user rejected this action." }), toolCallId: pending.callId, toolName: pending.name });
-      emit({ type: "tool.failed", callId: pending.callId, name: pending.name, error: "User rejected the tool call." });
+      const rejectedEvent = emit({ type: "tool.failed", callId: pending.callId, name: pending.name, error: "User rejected the tool call." }, false);
+      await this.store.save(runId, checkpoint);
+      onEvent?.(rejectedEvent);
     }
     await this.store.save(runId, checkpoint);
     const continuation = await this.runWithPermission(runId, "", checkpoint.permissionMode ?? "default", signal, onEvent);

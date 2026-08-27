@@ -33,7 +33,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     const state = { ...row.state, version: nextVersion, status, loopCheckpoint: checkpoint };
     const updated = await this.client
       .from("agent_runs")
-      .update({ state, status, resume_cursor: checkpoint, lock_version: nextVersion, updated_at: new Date().toISOString(), lease_expires_at: ["analyzing", "applying", "validating", "awaiting_scope_confirmation"].includes(status) ? new Date(Date.now() + 120_000).toISOString() : null })
+      .update({ state, status, resume_cursor: checkpoint, lock_version: nextVersion, updated_at: new Date().toISOString(), lease_expires_at: ["analyzing", "applying", "validating"].includes(status) ? new Date(Date.now() + 120_000).toISOString() : null })
       .eq("id", runId)
       .eq("lock_version", row.lock_version)
       // The legacy cancel command owns the terminal cancelled state. Never

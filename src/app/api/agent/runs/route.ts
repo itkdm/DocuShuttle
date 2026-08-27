@@ -59,7 +59,10 @@ export async function POST(request: Request) {
     const activeStatus = [
       "queued", "analyzing", "awaiting_scope_confirmation", "generating", "applying", "validating", "awaiting_review",
     ].includes(latest.data?.status as string);
-    const leaseExpired = activeStatus && latest.data?.lease_expires_at && new Date(latest.data.lease_expires_at as string).getTime() <= Date.now();
+    // HITL waits are intentionally lease-less: a user may take hours to
+    // answer. Only an invocation phase can become stale and be reclaimed.
+    const leaseManagedStatus = ["queued", "analyzing", "generating", "applying", "validating"].includes(latest.data?.status as string);
+    const leaseExpired = leaseManagedStatus && latest.data?.lease_expires_at && new Date(latest.data.lease_expires_at as string).getTime() <= Date.now();
     if (leaseExpired && latest.data?.id) {
       const reclaimed = await client.rpc("reclaim_stale_agent_run", { p_run_id: latest.data.id });
       if (reclaimed.error) throw new Error(`Unable to reclaim stale agent run: ${reclaimed.error.message}`);

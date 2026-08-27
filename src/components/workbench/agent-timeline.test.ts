@@ -23,7 +23,7 @@ describe("Agent execution timeline", () => {
       { type: "model.delta", eventId: "m2", text: "我已找到目标。" },
       { type: "assistant.message", eventId: "a1", text: "我已找到目标。" },
     ]);
-    expect(items.map((item) => item.kind)).toEqual(["user", "thought", "tool", "thought"]);
+    expect(items.map((item) => item.kind)).toEqual(["user", "thought", "tool", "message"]);
     expect(items[2]).toMatchObject({ kind: "tool", id: "call-1", state: "completed" });
   });
 
@@ -44,5 +44,13 @@ describe("Agent execution timeline", () => {
     ]);
     expect(items[0]).toMatchObject({ kind: "tool", state: "completed", durationMs: 320 });
     expect(items[1]).toMatchObject({ kind: "status", state: "completed", text: "已完成本轮处理" });
+  });
+
+  it("renders a streamed final answer as an assistant message", () => {
+    const items = buildTimeline([
+      { type: "model.delta", text: "文档共有 3 个段落。" },
+      { type: "completed", text: "文档共有 3 个段落。" },
+    ]);
+    expect(items[0]).toMatchObject({ kind: "message", text: "文档共有 3 个段落。" });
   });
 });

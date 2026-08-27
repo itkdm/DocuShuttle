@@ -63,19 +63,25 @@ export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
   const items: TimelineItem[] = [];
   const toolIndex = new Map<string, number>();
   let streamedText = "";
+  let streamedIndex: number | undefined;
   for (const event of events) {
     const id = eventId(event, `${event.type}-${items.length}`);
     if (event.type === "turn.started" && eventText(event)) items.push({ kind: "user", id, text: eventText(event)! });
     else if (event.type === "model.delta" && eventText(event)) {
       streamedText += eventText(event)!;
       const previous = items.at(-1);
-      if (previous?.kind === "thought") previous.text = streamedText;
-      else items.push({ kind: "thought", id, text: streamedText });
+      if (previous?.kind === "thought" && streamedIndex === items.length - 1) previous.text = streamedText;
+      else { streamedIndex = items.length; items.push({ kind: "thought", id, text: streamedText }); }
     } else if (event.type === "assistant.message" && eventText(event)) {
-      if (eventText(event) !== streamedText) items.push({ kind: "message", id, text: eventText(event)! });
+      const streamed = streamedIndex === undefined ? undefined : items[streamedIndex];
+      if (streamed?.kind === "thought" && eventText(event) === streamedText) {
+        items[streamedIndex!] = { kind: "message", id: streamed.id, text: eventText(event)! };
+      } else if (eventText(event) !== streamedText) items.push({ kind: "message", id, text: eventText(event)! });
       streamedText = "";
+      streamedIndex = undefined;
     } else if (event.type === "tool.started" && eventName(event) && eventCallId(event)) {
       streamedText = "";
+      streamedIndex = undefined;
       toolIndex.set(eventCallId(event)!, items.length);
       items.push({ kind: "tool", id: eventCallId(event)!, name: eventName(event)!, state: "running", input: event.input });
     } else if (event.type === "tool.completed" && eventName(event)) {
@@ -93,9 +99,15 @@ export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
       const index = toolIndex.get(callId);
       if (index === undefined) items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "approval", input: event.input });
       else { const item = items[index]; if (item.kind === "tool") item.state = "approval"; }
-    } else if (event.type === "completed") items.push({ kind: "status", id, state: "completed", text: eventText(event) ?? "本轮已完成" });
-    else if (event.type === "turn.failed") items.push({ kind: "status", id, state: "failed", text: eventError(event) ?? "本轮未完成" });
+    } else if (event.type === "completed") {
+      const streamed = streamedIndex === undefined ? undefined : items[streamedIndex];
+      if (streamed?.kind === "thought") items[streamedIndex!] = { kind: "message", id: streamed.id, text: streamed.text };
+      streamedText = ""; streamedIndex = undefined;
+      items.push({ kind: "status", id, state: "completed", text: eventText(event) ?? "本轮已完成" });
+    } else if (event.type === "turn.failed") items.push({ kind: "status", id, state: "failed", text: eventError(event) ?? "本轮未完成" });
   }
+  // A disconnected/partial stream may not include assistant.message yet;
+  // keep the visible text as a thought until a terminal event arrives.
   return items;
 }
 

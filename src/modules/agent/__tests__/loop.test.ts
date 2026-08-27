@@ -103,6 +103,31 @@ describe("AgentLoopRunner", () => {
     expect((await store.load())?.status).toBe("failed");
   });
 
+  it("persists the model boundary before a provider returns", async () => {
+    const store = new MemoryStore();
+    const result = await new AgentLoopRunner({
+      decide: async () => ({ kind: "message", text: "已完成。" }),
+    }, store, []).run("run-model-boundary", "检查");
+    expect(result.checkpoint.status).toBe("completed");
+    expect((await store.load())?.trace?.some((event) => event.type === "model.started")).toBe(true);
+  });
+
+  it("persists the tool boundary before executing a side effect", async () => {
+    const store = new MemoryStore();
+    let boundarySeen = false;
+    const tool: AgentTool = { ...inspectTool, async execute() {
+      boundarySeen = (await store.load())?.trace?.some((event) => event.type === "tool.started") ?? false;
+      return { ok: true };
+    } };
+    const result = await new AgentLoopRunner({
+      decide: async ({ messages }) => messages.some((message) => message.role === "tool")
+        ? { kind: "message", text: "已完成。" }
+        : { kind: "tool_calls", calls: [{ id: "boundary-tool", name: "inspect_document", input: { query: "headings" } }] },
+    }, store, [tool]).run("run-tool-boundary", "读取");
+    expect(result.checkpoint.status).toBe("completed");
+    expect(boundarySeen).toBe(true);
+  });
+
   it("keeps a completed session conversational for a later user turn", async () => {
     const model: AgentModelPort = { decide: async ({ messages }) => ({
       kind: "message",

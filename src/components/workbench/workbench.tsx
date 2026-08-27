@@ -152,14 +152,13 @@ export function Workbench() {
         // known. Fetch them concurrently so a slow document download or
         // Supabase history query does not block the other panels from
         // becoming interactive on refresh.
-        const [durableResult, documentResult, inspectionResult, versionsResult, resumedResult, resumedLoopResult, historyResult] = await Promise.allSettled([
+        const [durableResult, documentResult, inspectionResult, versionsResult, resumedResult, resumedLoopResult] = await Promise.allSettled([
           loadBrowserConversationMessages(workspace.task.id),
           workspace.workingDocumentId ? loadCurrentTaskDocument(workspace.task.id, workspace.fileName) : Promise.resolve(undefined),
           workspace.workingDocumentId ? inspectBrowserTaskDocument(workspace.task.id) : Promise.resolve(undefined),
           workspace.workingDocumentId ? loadBrowserDocumentVersions(workspace.task.id) : Promise.resolve(undefined),
           workspace.latestRunId ? loadBrowserAgentRun(workspace.latestRunId) : Promise.resolve(undefined),
           workspace.latestRunId ? loadBrowserAgentLoop(workspace.latestRunId) : Promise.resolve(undefined),
-          loadBrowserAgentTaskTimeline(workspace.task.id),
         ]);
         if (abort.signal.aborted) return;
         const durable = durableResult.status === "fulfilled" ? durableResult.value : undefined;
@@ -210,8 +209,10 @@ export function Workbench() {
           const resumedIsActive = ["queued", "analyzing", "generating", "applying", "validating"].includes(resumed.status);
           setStage(resumed.status === "awaiting_scope_confirmation" || resumed.status === "awaiting_review" ? "awaiting" : resumed.status === "completed" ? "complete" : resumedIsActive ? "analyzing" : "idle");
         } else setStage("idle");
-        const history = historyResult.status === "fulfilled" ? historyResult.value : undefined;
-        setTimelineHistory(history ? history.runs.filter((item) => item.id !== workspace.latestRunId && ["completed", "failed", "cancelled"].includes(item.checkpoint?.status ?? item.status)).flatMap((item) => item.events) : []);
+        // Completed-run history is intentionally loaded by the independent
+        // background effect below; it must not delay the first usable render
+        // of the current document and conversation.
+        setTimelineHistory([]);
         loadedTaskIdRef.current = workspace.task.id;
         setNotice(workspace.workingDocumentId ? "已打开这个任务的最新文档和对话" : "已打开历史任务；请继续上传文档");
       } catch (error) {
@@ -619,7 +620,7 @@ export function Workbench() {
     <main className="workbench-app">
       <a className="skip-link" href="#document-canvas">跳到文档</a>
       <header className="topbar">
-        <button className="brand-lockup" type="button" onClick={startNewTask} aria-label="回到空白工作台"><PaperDuckMark /><div><strong>纸上鸭</strong><span>把 Word 真正做完</span></div></button>
+        <button className="brand-lockup" type="button" onClick={startNewTask} aria-label="回到空白工作台"><PaperDuckMark /><div><strong>纸上鸭</strong><span>放心写，嘎嘎改</span></div></button>
         <div className="document-identity"><span className="doc-chip">DOCX</span><div><strong>{documentLoad.status === "ready" ? documentLoad.document.file.name : "尚未载入文档"}</strong><span><Cloud size={12} /> {workspaceReady ? "工作区已保存" : "选择文件开始"}</span></div></div>
         <div className="top-actions"><button className="quiet-action" onClick={() => setVersionsOpen((open) => !open)} aria-expanded={versionsOpen}><History size={16} /><span>版本 {versions.find((version) => version.current)?.versionNumber ?? 0}</span><ChevronDown size={13} /></button><button className="export-button" onClick={downloadCurrent} disabled={documentLoad.status !== "ready" || !workspaceReady}><Download size={16} /> 下载当前文件</button><button className="mobile-menu" onClick={() => setMobilePanel(mobilePanel === "none" ? "agent" : "none")} aria-label="打开工作台菜单"><Menu size={20} /></button></div>
       </header>

@@ -74,7 +74,13 @@ export async function GET(request: Request, { params }: { params: Promise<{ runI
       const event = row.event && typeof row.event === "object" ? row.event as Record<string, unknown> : undefined;
       return event ? { ...event, sequence: row.sequence } : undefined;
     }).filter((event) => Boolean(event));
-    return NextResponse.json({ checkpoint, events: events.length ? events : checkpoint.trace ?? [], nextSequence: durable.data?.at(-1)?.sequence ?? after });
+    // A cursor request is an incremental replay contract: when no durable
+    // rows exist after the cursor, return an empty batch rather than falling
+    // back to the whole checkpoint trace (which has no stable sequence and
+    // would duplicate already-consumed events). The legacy trace fallback is
+    // only safe for an initial, cursor-less load.
+    const replay = events.length || after > 0 ? events : checkpoint.trace ?? [];
+    return NextResponse.json({ checkpoint, events: replay, nextSequence: durable.data?.at(-1)?.sequence ?? after });
   } catch (error) {
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
     return NextResponse.json({ code: "AGENT_LOOP_LOAD_FAILED" }, { status: 500 });

@@ -1,4 +1,4 @@
-import { AlertCircle, Check, ChevronRight, LoaderCircle, Shield } from "lucide-react";
+import { AlertCircle, Check, ChevronRight, LoaderCircle, Shield, StopCircle } from "lucide-react";
 import type { BrowserAgentLoopResult } from "@/modules/agent/browser-runtime";
 import { renderAgentMarkdown } from "./agent-markdown";
 
@@ -149,9 +149,12 @@ function StateIcon({ state }: { state: ToolState }) {
   return <Check size={14} />;
 }
 
-export function AgentTimeline({ events, onApproval, deciding = false }: { events: readonly AgentEvent[]; onApproval?: (choice: "approved" | "rejected") => void | Promise<void>; deciding?: boolean }) {
+export function AgentTimeline({ events, onApproval, deciding = false, onCancel }: { events: readonly AgentEvent[]; onApproval?: (choice: "approved" | "rejected") => void | Promise<void>; deciding?: boolean; onCancel?: () => void | Promise<void> }) {
   const items = buildTimeline(events);
+  const terminal = events.some((event) => event.type === "completed" || event.type === "turn.failed" || event.type === "turn.cancelled");
+  const active = !terminal && (items.some((item) => item.kind === "tool" && item.state === "running") || events.some((event) => event.type === "model.started" || event.type === "model.delta"));
   return <div className="agent-timeline">
+    {active && onCancel && <div className="timeline-run-toolbar"><span><LoaderCircle size={13} className="event-spinner" />正在运行</span><button type="button" onClick={() => void onCancel()}><StopCircle size={13} />取消运行</button></div>}
     {items.map((item) => {
       if (item.kind === "user") return <div className="timeline-message user" key={item.id}><div className="message-meta"><span>你</span><strong>你的目标</strong></div><p>{item.text}</p></div>;
       if (item.kind === "thought") return <div className="timeline-thought" key={item.id}><span className="timeline-label">纸上鸭</span><p className="agent-rich-text">{renderAgentMarkdown(item.text)}</p></div>;

@@ -179,6 +179,9 @@ button:focus-visible, textarea:focus-visible, label:has(input:focus-visible) { o
 .agent-md-quote { border-left: 2px solid var(--duck); padding-left: 10px; color: var(--muted); }
 .agent-md-code { margin: 8px 0; padding: 9px 10px; border-radius: 6px; background: #f1f1eb; overflow-x: auto; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
 .agent-timeline { display: grid; gap: 10px; }
+.timeline-run-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: #fffdf2; color: var(--muted); font-size: 10px; }
+.timeline-run-toolbar span { display: inline-flex; align-items: center; gap: 6px; }
+.timeline-run-toolbar button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; color: var(--red); cursor: pointer; font-size: 10px; }
 .timeline-message, .timeline-thought { padding: 12px 14px; border: 1px solid var(--line); background: white; border-radius: 10px; }
 .timeline-message.user { background: #eef6fb; border-color: #c9dce9; }
 .timeline-message p, .timeline-thought p { margin: 8px 0 0; white-space: pre-wrap; line-height: 1.65; }

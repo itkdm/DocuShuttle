@@ -97,7 +97,7 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
         <button className="icon-button" onClick={onCollapse} aria-label="收起 Agent 面板"><PanelRightClose size={17} /></button>
       </div>
       <div className="agent-content">
-        {timelineEvents.length > 0 ? <AgentTimeline events={timelineEvents} onApproval={onLoopApproval} deciding={deciding} /> : <>
+        {timelineEvents.length > 0 ? <AgentTimeline events={timelineEvents} onApproval={onLoopApproval} deciding={deciding} onCancel={stage !== "idle" && stage !== "awaiting" && stage !== "complete" ? onCancel : undefined} /> : <>
       {conversation.length === 0 && <div className="agent-message duck-message"><div className="message-meta"><span>鸭</span><strong>纸上鸭</strong><small>准备就绪</small></div><p>我可以帮你理解、修改和导出当前 Word 文档。直接告诉我目标；默认模式会在写入前请你确认。</p></div>}
           {conversation.map((message, index) => <div className={`agent-message conversation-message ${message.role}`} key={`${message.role}-${index}`}><div className="message-meta"><span>{message.role === "user" ? "你" : "鸭"}</span><strong>{message.role === "user" ? "你的目标" : "纸上鸭"}</strong><small>{message.role === "user" ? "刚刚" : "实时回复"}</small></div><p className="agent-rich-text">{message.role === "agent" ? renderAgentMarkdown(message.text) : message.text}</p></div>)}
         </>}

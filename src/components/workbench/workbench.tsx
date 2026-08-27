@@ -277,11 +277,12 @@ export function Workbench() {
     }
     setConversation((items) => [...items, { role: "user", text: prompt }]);
     setStage("analyzing");
-    setNotice(`纸上鸭正在分析：“${prompt.slice(0, 24)}${prompt.length > 24 ? "…" : ""}”`);
+    setNotice(`纸上鸭正在处理你的请求：“${prompt.slice(0, 24)}${prompt.length > 24 ? "…" : ""}”`);
     setAwaitingFinalReview(false);
     setProposalSummary(undefined);
     const abortController = new AbortController();
     agentAbortRef.current = abortController;
+    let activeRunForRecovery: AgentRun | undefined;
     try {
       // A completed/failed run is an immutable execution record, not a
       // conversation handle for the next user turn. Start a new run for the
@@ -295,6 +296,7 @@ export function Workbench() {
         setLoopResult(undefined);
       }
       const activeRun = startsFreshRun ? await createBrowserAgentRun(taskId, prompt) : run;
+      activeRunForRecovery = activeRun;
       setRun(activeRun);
       const result = await runBrowserAgentLoopStream(activeRun.id, prompt, permissionMode, (event) => {
         setLiveEvents((items) => mergeTimelineEvents(items, [event]));
@@ -305,7 +307,14 @@ export function Workbench() {
       setLiveEvents((items) => mergeTimelineEvents(items, result.events));
       const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
       if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
-      if (result.checkpoint.status === "failed") throw new Error(result.checkpoint.finalText ?? "Agent Loop 未完成");
+      if (result.checkpoint.status === "failed") {
+        // The failed checkpoint already contains the user-facing assistant
+        // message and turn.failed event. Keep the unified Timeline as the
+        // source of truth instead of appending a second fallback message.
+        setStage("idle");
+        setNotice(result.checkpoint.finalText ?? "这次请求没有完成，请稍后重试。");
+        return;
+      }
       const wrote = result.events.some((event) => event.type === "tool.completed" && (event.name === "apply_text_change" || event.name === "apply_text_changes"));
       if (wrote && taskId) {
         // A document mutation is not user-visible until the immutable version
@@ -327,9 +336,10 @@ export function Workbench() {
       // A model/provider can fail after the loop has durably saved an approval
       // checkpoint. Recover that checkpoint so the user sees the real next
       // action instead of a misleading generic failure message.
-      if (run) {
+      const runToRecover = activeRunForRecovery ?? run;
+      if (runToRecover) {
         try {
-          const recovered = await loadBrowserAgentLoop(run.id);
+          const recovered = await loadBrowserAgentLoop(runToRecover.id);
           if (recovered.checkpoint.pendingApproval) {
             setLoopResult(recovered);
             setStage("awaiting");

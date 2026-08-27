@@ -2,6 +2,7 @@
 
 import type { AgentRun } from "./domain/model";
 import type { AgentPermissionMode } from "./application/loop";
+import { SseParser } from "./browser/sse-parser";
 
 type AgentResponse = { run: AgentRun };
 type AdvanceResponse = { kind: string; run: AgentRun };
@@ -62,13 +63,13 @@ async function consumeAgentStream(
     throw new Error(body.message ?? body.code ?? `HTTP_${response.status}`);
   }
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+  const parser = new SseParser();
   let finalResult: BrowserAgentLoopResult | undefined;
   let chunkCount = 0;
   let frameCount = 0;
   let bytesReceived = 0;
   let firstEventMs: number | undefined;
+  let lastSequence = 0;
   const started = performance.now();
   try {
     while (true) {
@@ -77,22 +78,37 @@ async function consumeAgentStream(
     chunkCount += 1;
     bytesReceived += next.value.byteLength;
     firstEventMs ??= performance.now() - started;
-    buffer += decoder.decode(next.value, { stream: true });
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
-      for (const frame of frames) {
-        const event = /^event: (.+)$/m.exec(frame)?.[1];
-        const raw = /^data: (.+)$/m.exec(frame)?.[1];
-        if (!event || !raw) continue;
+      for (const frame of parser.push(next.value)) {
+        const event = frame.event;
+        const raw = frame.data;
+        if (!event) continue;
         frameCount += 1;
+        if (!raw) continue;
         const data = JSON.parse(raw) as BrowserAgentLoopResult | BrowserAgentLoopResult["events"][number] | { code?: string };
-        if (event === "event") onEvent(data as BrowserAgentLoopResult["events"][number]);
+        if (event === "event") {
+          const sequence = typeof (data as { sequence?: unknown }).sequence === "number" ? (data as { sequence: number }).sequence : undefined;
+          if (sequence === undefined || sequence > lastSequence) {
+            if (sequence !== undefined) lastSequence = sequence;
+            onEvent(data as BrowserAgentLoopResult["events"][number]);
+          }
+        }
         if (event === "result") finalResult = data as BrowserAgentLoopResult;
         if (event === "error") {
           const code = (data as { code?: string }).code;
           throw new Error(userFacingError(code, "这次请求没有完成，请稍后重试。"));
         }
       }
+    }
+    for (const frame of parser.flush()) {
+      if (!frame.event || !frame.data) continue;
+      frameCount += 1;
+      const data = JSON.parse(frame.data) as BrowserAgentLoopResult | BrowserAgentLoopResult["events"][number] | { code?: string };
+      if (frame.event === "event") {
+        const sequence = typeof (data as { sequence?: unknown }).sequence === "number" ? (data as { sequence: number }).sequence : undefined;
+        if (sequence === undefined || sequence > lastSequence) { if (sequence !== undefined) lastSequence = sequence; onEvent(data as BrowserAgentLoopResult["events"][number]); }
+      }
+      if (frame.event === "result") finalResult = data as BrowserAgentLoopResult;
+      if (frame.event === "error") throw new Error(userFacingError((data as { code?: string }).code, "这次请求没有完成，请稍后重试。"));
     }
   } catch (error) {
     logBrowserEvent({ event: "client.sse.failed", firstEventMs, chunkCount, frameCount, bytesReceived, finalResultReceived: Boolean(finalResult) });

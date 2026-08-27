@@ -38,8 +38,7 @@ describe("Agent execution timeline", () => {
       historicalEvents: [],
       activeEvents: [{ eventId: "event-1", type: "turn.started", text: "请检查", clientMessageId: "message-1", runId: "run-1" }],
     });
-    expect(projection.messages[0]).toMatchObject({ id: "message-1", runId: "run-1" });
-    expect(projection.events[0]).toMatchObject({ clientMessageId: "message-1", runId: "run-1" });
+    expect(projection.turns[0]).toMatchObject({ id: "run-1", runId: "run-1", user: { id: "message-1" } });
   });
 
   it("orders replayed events by sequence within a run without mixing runs", () => {
@@ -128,5 +127,28 @@ describe("Agent execution timeline", () => {
 
   it("redacts secrets from expandable tool details", () => {
     expect(sanitizeForDisplay({ apiKey: "secret", nested: { password: "pw", value: "ok" } })).toEqual({ apiKey: "[已隐藏]", nested: { password: "[已隐藏]", value: "ok" } });
+  });
+
+  it("coalesces deltas and keeps activity inside one turn", () => {
+    const projection = projectAgentThread({
+      messages: [{ id: "u-1", role: "user", parts: [{ type: "text", text: "检查文档" }], run_id: "run-1", created_at: "2026-01-01", message_key: "u-1" }],
+      historicalEvents: [],
+      activeEvents: [
+        { type: "turn.started", eventId: "e-1", runId: "run-1", text: "检查文档" },
+        { type: "model.delta", eventId: "e-2", runId: "run-1", text: "先" },
+        { type: "model.delta", eventId: "e-3", runId: "run-1", text: "检查" },
+        { type: "tool.started", eventId: "e-4", runId: "run-1", callId: "call-1", name: "inspect_document", input: {} },
+        { type: "tool.completed", eventId: "e-5", runId: "run-1", callId: "call-1", name: "inspect_document", output: {} },
+        { type: "assistant.message", eventId: "e-6", runId: "run-1", text: "已完成" },
+      ],
+    });
+    expect(projection.turns).toHaveLength(1);
+    expect(projection.turns[0].assistant.streamingContent).toBe("先检查");
+    expect(projection.turns[0].assistant.activities).toHaveLength(1);
+  });
+
+  it("keeps equal prompts in separate turns", () => {
+    const messages = ["run-1", "run-2"].map((runId, index) => ({ id: `u-${index}`, role: "user" as const, parts: [{ type: "text", text: "继续" }], run_id: runId, created_at: "2026-01-01", message_key: `u-${index}` }));
+    expect(projectAgentThread({ messages, historicalEvents: [], activeEvents: [] }).turns).toHaveLength(2);
   });
 });

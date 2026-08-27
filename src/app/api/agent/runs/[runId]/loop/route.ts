@@ -134,6 +134,9 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
     let streamFailed = false;
     const stream = new ReadableStream({
       async start(controller) {
+        const heartbeat = setInterval(() => {
+          if (!request.signal.aborted) controller.enqueue(encoder.encode(": ping\n\n"));
+        }, 12_000);
         const send = (event: string, data: unknown) => {
           const payload = encoder.encode(eventPayload(event, data));
           firstEventMs ??= performance.now() - started;
@@ -148,6 +151,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
           streamFailed = true;
           send("error", { code: error instanceof Error ? error.message : "AGENT_LOOP_FAILED" });
         } finally {
+          clearInterval(heartbeat);
           logger.info(streamFailed || request.signal.aborted ? "agent.stream.failed" : "agent.stream.completed", { runId, firstEventMs, eventCount, bytesSent, aborted: request.signal.aborted, completed: !streamFailed && !request.signal.aborted });
           controller.close();
         }

@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentPanel } from "./agent-panel";
 import { mergeTimelineEvents } from "./agent-timeline";
-import { projectAgentThread, projectLegacyConversation } from "./agent-thread-projection";
+import { projectAgentThread } from "./agent-thread-projection";
 import { DocumentCanvas } from "./document-canvas";
 import { OutlinePanel } from "./outline-panel";
 import { PaperDuckMark } from "./paperduck-mark";
@@ -13,7 +13,7 @@ import { TaskList } from "./task-list";
 import { formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
-import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserAgentLoopResult, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
 import { useConversationStore } from "./conversation-store";
 import { listBrowserTasks, loadBrowserTaskWorkspace, type TaskPage } from "@/modules/tasks/browser-tasks";
 import type { TaskSummary } from "@/modules/tasks/domain";
@@ -27,10 +27,6 @@ const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
   { id: "pending", label: "等待导入文档", time: "当前", actor: "纸上鸭", versionNumber: 0, current: true },
 ];
-function conversationFromLoop(messages: BrowserAgentLoopResult["checkpoint"]["messages"]) {
-  return projectLegacyConversation(messages);
-}
-
 export function Workbench() {
   const pathname = usePathname();
   const router = useRouter();
@@ -200,12 +196,10 @@ export function Workbench() {
         if (durable) {
           durableConversationLoaded = durable.messages.length > 0;
           setConversationCursor(durable.nextCursor);
-          setConversation(projectAgentThread({ messages: durable.messages, historicalEvents: [], activeEvents: [] }).messages.map((message) => ({
-            id: message.id,
-            role: message.role,
-            text: message.text,
-            status: message.status,
-          })));
+          setConversation(projectAgentThread({ messages: durable.messages, historicalEvents: [], activeEvents: [] }).turns.flatMap((turn) => [
+            { id: turn.user.id, role: "user" as const, text: turn.user.content, status: turn.user.deliveryStatus },
+            ...(turn.assistant.finalContent ? [{ id: turn.assistant.messageId, role: "agent" as const, text: turn.assistant.finalContent, status: "sent" as const }] : []),
+          ]));
         }
         if (documentResult.status === "fulfilled" && documentResult.value) {
           const document = documentResult.value;
@@ -239,7 +233,7 @@ export function Workbench() {
           if (resumedLoop) {
             setLoopResult(resumedLoop);
             setLiveEvents((items) => mergeTimelineEvents(items, resumedLoop.events));
-            if (!durableConversationLoaded) setConversation(conversationFromLoop(resumedLoop.checkpoint.messages));
+            if (!durableConversationLoaded) setConversation([]);
           } else setLoopResult(undefined);
           setAwaitingFinalReview(resumed.status === "awaiting_review");
           const resumedIsActive = ["queued", "analyzing", "generating", "applying", "validating"].includes(resumed.status);
@@ -439,6 +433,11 @@ export function Workbench() {
           if (recovered.checkpoint.pendingApproval || recovered.checkpoint.pendingUserQuestion) {
             setStage("awaiting");
             setNotice(recovered.checkpoint.pendingApproval ? "Agent 已完成读取并请求写入确认" : "Agent 正在等待你的回答");
+            return;
+          }
+          if (["running", "completed"].includes(recovered.checkpoint.status)) {
+            setStage(recovered.checkpoint.status === "completed" ? "idle" : "analyzing");
+            setNotice(recovered.checkpoint.status === "completed" ? "连接恢复，已收到本轮结果" : "连接中断，Agent 仍在服务端运行；已恢复执行记录");
             return;
           }
         } catch { /* preserve the original error below */ }

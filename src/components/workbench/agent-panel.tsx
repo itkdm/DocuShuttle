@@ -5,9 +5,9 @@ import type { AgentStage, ProposalState } from "./types";
 import type { BrowserAgentLoopResult, BrowserImageCandidate, BrowserImageNode } from "@/modules/agent/browser-runtime";
 import type { AgentRun } from "@/modules/agent";
 import type { AgentPermissionMode } from "@/modules/agent/application/loop";
-import { mergeTimelineEvents } from "./agent-timeline";
 import type { ConversationMessage } from "./conversation-store";
 import { AgentThread } from "./agent-thread";
+import { projectAgentThread } from "./agent-thread-projection";
 
 interface AgentPanelProps {
   stage: AgentStage; proposal: ProposalState; onCollapse: () => void;
@@ -86,7 +86,7 @@ function CustomSelect({ value, options, onChange, disabled, icon }: { value: str
   );
 }
 
-export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDecide, workspaceReady, proposalSummary, awaitingFinalReview, onFinalReview, imageCandidates = [], onApplyImage, imageBusy, conversation = [], loopResult, liveEvents = [], timelineHistory = [], onLoopApproval, permissionMode, onPermissionModeChange, imageNodes = [], imageTargetNodeId, imagePrompt, onImageTargetNodeIdChange, onImagePromptChange, onGenerateImages, onLoadEarlier, hasEarlierMessages = false, loadingEarlierMessages = false, loadingWorkspace = false }: AgentPanelProps) {
+export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDecide, workspaceReady, proposalSummary, awaitingFinalReview, onFinalReview, imageCandidates = [], onApplyImage, imageBusy, run, conversation = [], loopResult, liveEvents = [], timelineHistory = [], onLoopApproval, permissionMode, onPermissionModeChange, imageNodes = [], imageTargetNodeId, imagePrompt, onImageTargetNodeIdChange, onImagePromptChange, onGenerateImages, onLoadEarlier, hasEarlierMessages = false, loadingEarlierMessages = false, loadingWorkspace = false }: AgentPanelProps) {
   const [prompt, setPrompt] = useState("");
   const [deciding, setDeciding] = useState(false);
   const [imageToolOpen, setImageToolOpen] = useState(false);
@@ -96,7 +96,13 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
   const stickToBottomRef = useRef(true);
   const prependHeightRef = useRef<number | null>(null);
   const currentTimeline = liveEvents.length ? liveEvents : loopResult?.events ?? [];
-  const timelineEvents = mergeTimelineEvents(timelineHistory, currentTimeline);
+  const timelineEvents = [...timelineHistory, ...currentTimeline];
+  const turns = projectAgentThread({
+    messages: conversation.map((message, index) => ({ id: message.id ?? `local:${index}`, role: message.role === "agent" ? "assistant" as const : "user" as const, parts: [{ type: "text", text: message.text }], run_id: run?.id ?? null, created_at: "", message_key: message.id ?? `local:${index}`, delivery_status: message.status })),
+    historicalEvents: timelineHistory,
+    activeEvents: currentTimeline,
+    activeRunId: run?.id,
+  }).turns;
   const latestTimelineEvent = timelineEvents.at(-1);
   const latestTimelineEventId = latestTimelineEvent?.eventId;
   const latestTimelineText = latestTimelineEvent?.text;
@@ -143,8 +149,8 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
         <button className="icon-button" onClick={onCollapse} aria-label="收起 Agent 面板"><PanelRightClose size={17} /></button>
       </div>
       <div className="agent-content" ref={contentRef} onScroll={handleContentScroll}>
-        <AgentThread conversation={conversation} events={timelineEvents} loadingWorkspace={loadingWorkspace} hasEarlierMessages={hasEarlierMessages} onLoadEarlier={() => { prependHeightRef.current = contentRef.current?.scrollHeight ?? null; onLoadEarlier?.(); }} loadingEarlierMessages={loadingEarlierMessages} onApproval={onLoopApproval} deciding={deciding} onCancel={stage !== "idle" && stage !== "awaiting" && stage !== "complete" ? onCancel : undefined} />
-        {conversation.length === 0 && !loadingWorkspace && timelineEvents.length === 0 && <div className="assistant-turn assistant-empty"><div className="assistant-byline"><span className="agent-avatar">鸭</span><strong>纸上鸭</strong><small>准备就绪</small></div><p>我可以帮你理解、修改和导出当前 Word 文档。直接告诉我目标；默认模式会在写入前请你确认。</p></div>}
+        <AgentThread turns={turns} loadingWorkspace={loadingWorkspace} hasEarlierMessages={hasEarlierMessages} onLoadEarlier={() => { prependHeightRef.current = contentRef.current?.scrollHeight ?? null; onLoadEarlier?.(); }} loadingEarlierMessages={loadingEarlierMessages} onApproval={onLoopApproval} deciding={deciding} />
+        {turns.length === 0 && !loadingWorkspace && <div className="assistant-turn assistant-empty"><div className="assistant-byline"><span className="agent-avatar">鸭</span><strong>纸上鸭</strong><small>准备就绪</small></div><p>我可以帮你理解、修改和导出当前 Word 文档。直接告诉我目标；默认模式会在写入前请你确认。</p></div>}
           {proposalSummary && !awaitingFinalReview && !loopResult?.checkpoint.pendingApproval && <div className="scope-card"><span className="scope-kicker">等待范围确认</span><strong>Agent 修改计划</strong><p>{proposalSummary}</p>{proposal === "pending" ? <div className="scope-actions"><button className="primary-small" onClick={() => onDecide("accepted")}><Check size={14} /> 批准并应用</button><button onClick={() => onDecide("rejected")}>拒绝</button></div> : <span className="decision-note">{proposal === "accepted" ? "范围已冻结，正在安全写入" : "已拒绝，原文不变"}</span>}</div>}
           {loopResult?.checkpoint.pendingApproval && !timelineEvents.some((event) => event.type === "approval.required" && event.callId === loopResult.checkpoint.pendingApproval?.callId) && <div className="scope-card"><span className="scope-kicker">需要你的确认</span><strong>准备执行：{loopResult.checkpoint.pendingApproval.name}</strong><p>Agent 已生成明确的修改参数。批准后会写入文档并生成新版本。</p><div className="scope-actions"><button className="primary-small" onClick={() => void handleLoopApproval("approved")} disabled={deciding}>{deciding ? "执行中…" : <><Check size={14} /> 批准并执行</>}</button><button onClick={() => void handleLoopApproval("rejected")} disabled={deciding}>{deciding ? "处理中…" : "拒绝"}</button></div></div>}
           {awaitingFinalReview && <div className="scope-card"><span className="scope-kicker">最终版本复核</span><strong>新版本已通过 OOXML 重开校验</strong><p>中央画布已切换到生成后的真实 DOCX。确认后完成任务；拒绝会保留审计记录。</p><div className="scope-actions"><button className="primary-small" onClick={() => onFinalReview("approved")}><Check size={14} /> 确认交付</button><button onClick={() => onFinalReview("rejected")}>拒绝版本</button></div></div>}

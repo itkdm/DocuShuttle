@@ -258,6 +258,23 @@ button:focus-visible, textarea:focus-visible, label:has(input:focus-visible) { o
 .agent-activity-body .timeline-tool { border: 0; border-bottom: 1px solid #ecebe4; border-radius: 0; background: transparent; box-shadow: none; }
 .agent-activity-body .timeline-tool:last-child { border-bottom: 0; }
 .agent-activity-body .timeline-thought { padding-left: 0 !important; }
+.agent-turn { display: grid; gap: 10px; margin: 12px 0 18px; }
+.agent-turn > .assistant-turn { margin-top: 0; }
+.agent-activity-body .agent-tool-item { display: flex; align-items: center; gap: 8px; min-height: 35px; padding: 7px 0; border-bottom: 1px solid #ecebe4; font-size: 12px; }
+.agent-tool-item:last-child { border-bottom: 0; }
+.agent-tool-icon { display: grid; place-items: center; flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%; color: #657b68; background: #e8f1e9; }
+.agent-tool-item.running .agent-tool-icon { color: var(--duck-dark); background: #fff7d4; }
+.agent-tool-item.approval .agent-tool-icon { color: #8d6d13; background: #fff1b9; }
+.agent-tool-item.failed .agent-tool-icon { color: var(--red); background: #fff0ed; }
+.agent-tool-item > div:not(.agent-approval-actions) { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.agent-tool-item strong { font-size: 12px; font-weight: 650; }
+.agent-tool-item small { color: var(--muted); font-size: 10px; }
+.agent-tool-item details { margin-left: auto; }
+.agent-tool-item details summary { cursor: pointer; color: var(--muted); font-size: 10px; }
+.agent-tool-item pre { max-width: 240px; max-height: 140px; overflow: auto; margin: 6px 0 0; white-space: pre-wrap; font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.agent-approval-actions { display: flex; gap: 6px; margin-left: auto; }
+.agent-activity-note { padding: 7px 0; color: #62675e; font-size: 12px; }
+.agent-turn-error { display: flex; align-items: center; gap: 7px; padding: 9px 11px; color: var(--red); background: #fff2ef; border: 1px solid #f0d5d0; border-radius: 8px; font-size: 12px; }
 .agent-heading-actions { display: flex; align-items: center; gap: 10px; }
 .custom-select { position: relative; display: inline-flex; }
 .custom-select button { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; background: transparent; border: 0; color: var(--muted); font-size: 9px; cursor: pointer; border-radius: 4px; width: auto; height: auto; }

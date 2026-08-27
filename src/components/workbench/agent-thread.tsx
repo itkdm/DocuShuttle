@@ -1,27 +1,22 @@
-import type { BrowserAgentLoopResult } from "@/modules/agent/browser-runtime";
-import type { ConversationMessage } from "./conversation-store";
-import { AgentTimeline } from "./agent-timeline";
+import { AlertCircle, Check, LoaderCircle, Shield } from "lucide-react";
 import { renderAgentMarkdown } from "./agent-markdown";
+import type { AgentActivity, AgentThreadTurn } from "./agent-thread-projection";
 
-type AgentEvent = BrowserAgentLoopResult["events"][number];
+const toolLabel = (name: string) => ({ inspect_document: "查找文档区域", list_document_regions: "查找文档区域", read_document_region: "读取目标内容", apply_text_change: "修改当前文档", apply_text_changes: "批量修改文档", inspect_node_capabilities: "检查节点能力" }[name] ?? "执行文档操作");
 
-export function AgentThread({ conversation, events, loadingWorkspace, hasEarlierMessages, onLoadEarlier, loadingEarlierMessages, onApproval, deciding, onCancel }: {
-  conversation: readonly ConversationMessage[];
-  events: readonly AgentEvent[];
-  loadingWorkspace: boolean;
-  hasEarlierMessages: boolean;
-  onLoadEarlier?: () => void;
-  loadingEarlierMessages: boolean;
-  onApproval?: (choice: "approved" | "rejected") => void | Promise<void>;
-  deciding: boolean;
-  onCancel?: () => void | Promise<void>;
-}) {
-  return <div className="agent-thread">
-    {hasEarlierMessages && onLoadEarlier && <button className="load-earlier" onClick={onLoadEarlier} disabled={loadingEarlierMessages}>{loadingEarlierMessages ? "正在加载更早消息…" : "加载更早消息"}</button>}
-    {loadingWorkspace && <div className="assistant-turn assistant-loading" aria-live="polite"><div className="assistant-byline"><span className="agent-avatar">鸭</span><strong>纸上鸭</strong><small>正在打开</small></div><p>正在恢复这个任务的文档和对话…</p></div>}
-    {(events.length === 0 ? conversation : []).map((message) => <div className={`thread-message ${message.role}`} key={message.id ?? `${message.role}:${message.text}`}>
-      {message.role === "user" ? <div className="user-bubble"><span className="thread-label">你的目标</span><p>{message.text}</p></div> : <div className="assistant-turn"><div className="assistant-byline"><span className="agent-avatar">鸭</span><strong>纸上鸭</strong>{message.status === "pending" && <small>正在发送…</small>}</div><div className="agent-rich-text">{renderAgentMarkdown(message.text)}</div></div>}
-    </div>)}
-    {events.length > 0 && <AgentTimeline events={events} onApproval={onApproval} deciding={deciding} onCancel={onCancel} />}
-  </div>;
+function Activity({ activity, onApproval, deciding }: { activity: AgentActivity; onApproval?: (choice: "approved" | "rejected") => void | Promise<void>; deciding: boolean }) {
+  if (activity.type === "note") return <div className="agent-activity-note">{renderAgentMarkdown(activity.text)}</div>;
+  const icon = activity.state === "running" ? <LoaderCircle size={13} className="event-spinner" /> : activity.state === "failed" ? <AlertCircle size={13} /> : activity.state === "approval" ? <Shield size={13} /> : <Check size={13} />;
+  const detail = activity.state === "approval" ? "等待你的确认" : activity.state === "failed" ? activity.error ?? "未完成" : activity.state === "running" ? "处理中" : "已完成";
+  return <div className={`agent-tool-item ${activity.state}`}><span className="agent-tool-icon">{icon}</span><div><strong>{toolLabel(activity.name)}</strong><small>{detail}{activity.durationMs !== undefined && ` · ${activity.durationMs}ms`}</small></div>{(activity.input !== undefined || activity.output !== undefined || activity.error) && <details><summary>技术详情</summary><small><code>{activity.name}</code></small><pre>{activity.error ?? JSON.stringify(activity.output ?? activity.input, null, 2)}</pre></details>}{activity.state === "approval" && onApproval && <div className="agent-approval-actions"><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并执行</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div>}</div>;
+}
+
+function Turn({ turn, onApproval, deciding }: { turn: AgentThreadTurn; onApproval?: (choice: "approved" | "rejected") => void | Promise<void>; deciding: boolean }) {
+  const assistant = turn.assistant;
+  const content = assistant.finalContent ?? assistant.streamingContent;
+  return <section className="agent-turn" aria-label="Agent 对话回合"><div className="user-bubble"><span className="thread-label">你的目标</span><p>{turn.user.content}</p></div><div className="assistant-turn"><div className="assistant-byline"><span className="agent-avatar">鸭</span><strong>纸上鸭</strong><small>{assistant.status === "running" ? "正在处理" : assistant.status === "awaiting_approval" ? "等待确认" : assistant.status === "failed" ? "未完成" : "回复"}</small></div>{assistant.activities.length > 0 && <details className="agent-activity" open={assistant.status === "running" || assistant.status === "awaiting_approval"}><summary><span className="agent-activity-icon"><Check size={13} /></span><span>执行过程</span><small>{assistant.status === "running" ? "正在处理" : `已完成 ${assistant.activities.filter((item) => item.type === "tool").length} 个步骤`}</small></summary><div className="agent-activity-body">{assistant.activities.map((activity) => <Activity key={activity.id} activity={activity} onApproval={onApproval} deciding={deciding} />)}</div></details>}{content && <div className="agent-rich-text">{renderAgentMarkdown(content)}</div>}{assistant.status === "failed" && !content && <div className="agent-turn-error"><AlertCircle size={14} />这次请求没有完成，请稍后重试。</div>}</div></section>;
+}
+
+export function AgentThread({ turns, loadingWorkspace, hasEarlierMessages, onLoadEarlier, loadingEarlierMessages, onApproval, deciding }: { turns: readonly AgentThreadTurn[]; loadingWorkspace: boolean; hasEarlierMessages: boolean; onLoadEarlier?: () => void; loadingEarlierMessages: boolean; onApproval?: (choice: "approved" | "rejected") => void | Promise<void>; deciding: boolean }) {
+  return <div className="agent-thread" role="log" aria-live="polite">{hasEarlierMessages && onLoadEarlier && <button className="load-earlier" onClick={onLoadEarlier} disabled={loadingEarlierMessages}>{loadingEarlierMessages ? "正在加载更早消息…" : "加载更早消息"}</button>}{loadingWorkspace && <div className="assistant-turn assistant-loading"><div className="assistant-byline"><span className="agent-avatar">鸭</span><strong>纸上鸭</strong><small>正在打开</small></div><p>正在恢复这个任务的文档和对话…</p></div>}{turns.map((turn) => <Turn key={turn.id} turn={turn} onApproval={onApproval} deciding={deciding} />)}</div>;
 }

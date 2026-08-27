@@ -126,6 +126,8 @@ Feature Adapter Registry 提供统一生命周期钩子：recognition、semantic
 | 实验1.2.docx | 287 段、3 表、2 处嵌套、1 个 `w:object` | 可以 | 正文段落可写；嵌套信息表不能当单元格写；嵌入对象不写 |
 | 实验6.docx | ZIP 尾部填充 / 包不完整 | 视包完整性 | 填充已放行；缺主文档的包仍拒绝 |
 
+当前仓库中的 real-docx regression 已对 5 份合法 corpus 执行 OPEN、NO-OP、两轮 targeted mutation 和 REOPEN；另 1 份扩展名为 `.docx` 但不是 ZIP 的样本会被稳定地以 `ZIP_*` 错误拒绝。完整回归在本机约 26 秒，已将测试超时设置为 120 秒，并缓存 inspector 的文本框范围扫描。
+
 中国高校实验报告、申请表、封面页的高频结构正好是：**表中表、文本框标题、偶尔 OLE 公式**。这是目标用户，不是边角。
 
 ## 5. 业界对照

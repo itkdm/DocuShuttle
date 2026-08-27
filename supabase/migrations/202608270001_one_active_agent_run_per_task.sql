@@ -8,5 +8,3 @@ create unique index if not exists agent_runs_one_active_per_task_idx
     'queued', 'analyzing', 'awaiting_scope_confirmation', 'generating',
     'applying', 'validating', 'awaiting_review'
   );
-
-*** Delete File: D:\develop\project\纸上鸭\supabase\migrations\202608260010_one_active_agent_run_per_task.sql

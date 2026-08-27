@@ -136,7 +136,24 @@ export function createDocumentTools(
         ? { kind: "replace-text" as const, address: paragraph.address as ParagraphAddress, expectedText: input.expectedText, replacement: input.replacement, ...(input.formatPolicy ? { formatPolicy: input.formatPolicy } : {}) }
         : { kind: "set-cell-text" as const, address: cell!.address as TableCellAddress, expectedText: input.expectedText, text: input.replacement };
       if (!documents.planMutation) throw new Error("DOCUMENT_DRY_RUN_UNAVAILABLE");
-      return documents.planMutation(current.bytes, { expectedRevision: input.expectedRevision, operations: [operation] });
+      const plan = await documents.planMutation(current.bytes, { expectedRevision: input.expectedRevision, operations: [operation] });
+      return {
+        baseRevision: plan.baseRevision,
+        targets: plan.targets,
+        operations: plan.operations.map((planned) => ({
+          kind: planned.kind,
+          nodeId: planned.address.nodeId,
+          ...(planned.kind === "replace-text"
+            ? { expectedText: planned.expectedText, replacement: planned.replacement }
+            : planned.kind === "set-cell-text"
+              ? { expectedText: planned.expectedText, replacement: planned.text }
+              : {}),
+        })),
+        affectedPartCount: plan.changedParts.length,
+        riskLevel: plan.riskLevel,
+        expectedPostconditions: plan.expectedPostconditions,
+        diagnostics: plan.diagnostics,
+      };
     },
   };
 

@@ -18,6 +18,13 @@ import { attributes, findElementRanges, visibleText, type XmlRange } from "./xml
 import { flattenLosslessXml, parseLosslessXml, type LosslessXmlNode } from "./lossless-xml";
 import { capabilitiesFor } from "./capability-registry";
 
+function storyForEntry(entry: string, textBox = false): string {
+  if (textBox) return "textbox";
+  if (entry === "word/document.xml") return "main";
+  const match = /word\/(header|footer)\d+\.xml$/.exec(entry);
+  return match ? match[1] : "unknown";
+}
+
 /** Deterministic logical identity independent of visible text and revision. */
 async function logicalNodeId(
   kind: "paragraph" | "table-cell" | "image",
@@ -106,7 +113,7 @@ async function indexCells(
         const cell = cells[cellIndex];
         const path = `${tablePath}/tr[${rowIndex}]/tc[${cellIndex}]`;
         const text = visibleText(cell.rawSource);
-        const address: TableCellAddress = { kind: "table-cell", nodeId: await logicalNodeId("table-cell", entry, path), sourceRevision: revision, fingerprint: await sha256(utf8(text)), entry, path, capabilities: capabilitiesFor("table-cell", { containsNestedTable: cell.children.some((child) => child.name === "w:tbl") }) };
+        const address: TableCellAddress = { kind: "table-cell", nodeId: await logicalNodeId("table-cell", entry, path), sourceRevision: revision, fingerprint: await sha256(utf8(text)), entry, path, locator: { revision, entry, story: storyForEntry(entry), semanticPath: path, sourceSpans: [[cell.start, cell.end]] }, capabilities: capabilitiesFor("table-cell", { containsNestedTable: cell.children.some((child) => child.name === "w:tbl") }) };
         result.push({ address, text, range: toRange(cell) });
         const nestedTables = cell.children.filter((child) => child.name === "w:tbl");
         for (let nestedIndex = 0; nestedIndex < nestedTables.length; nestedIndex += 1) {
@@ -151,6 +158,8 @@ async function indexParagraphs(
         entry,
         path,
         ...(paraId ? { paraId } : {}),
+        ...(paraId ? { nativeIdentity: { kind: "w14:paraId", value: paraId, scope: entry } } : {}),
+        locator: { revision, entry, story: storyForEntry(entry, Boolean(textBoxPath)), semanticPath: path, sourceSpans: [[range.start, range.end]], ...(paraId ? { nativeHints: [{ kind: "w14:paraId", value: paraId, scope: entry }] } : {}) },
         ...(capabilities ? { capabilities } : {}),
       };
       return { address, text, range };
@@ -206,6 +215,8 @@ async function indexImages(
       relationshipId,
       mediaEntry,
       mediaReferenceCount: 1,
+      nativeIdentity: docPr.id ? { kind: "wp:docPr.id", value: docPr.id, scope: entry } : undefined,
+      locator: { revision: loaded.manifest.revision, entry, story: storyForEntry(entry), semanticPath: path, sourceSpans: [[match.index ?? 0, (match.index ?? 0) + match[0].length]], nativeHints: [{ kind: "relationship", value: relationshipId, scope: relsEntry }, ...(docPr.id ? [{ kind: "wp:docPr.id", value: docPr.id, scope: entry }] : [])] },
       ...(docPr.id ? { drawingId: docPr.id } : {}),
     };
     result.push({

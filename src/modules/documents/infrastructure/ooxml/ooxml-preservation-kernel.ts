@@ -29,6 +29,7 @@ import {
   textNodes,
 } from "./xml";
 import { capabilitiesFor } from "./capability-registry";
+import { remapNodeIdentities } from "./node-identity";
 
 interface EntryPatch {
   start: number;
@@ -72,6 +73,8 @@ function manifestWithNodes(
       entry: address.entry,
       path: address.path,
       fingerprint: address.fingerprint,
+      nativeIdentity: address.nativeIdentity,
+      locator: address.locator,
       capabilities: address.capabilities ?? capabilitiesFor(address.kind),
     })),
     ...index.cells.map(({ address }) => ({
@@ -80,6 +83,8 @@ function manifestWithNodes(
       entry: address.entry,
       path: address.path,
       fingerprint: address.fingerprint,
+      nativeIdentity: address.nativeIdentity,
+      locator: address.locator,
     })),
     ...index.images.map(({ address }) => ({
       nodeId: address.nodeId,
@@ -87,6 +92,8 @@ function manifestWithNodes(
       entry: address.entry,
       path: address.path,
       fingerprint: address.fingerprint,
+      nativeIdentity: address.nativeIdentity,
+      locator: address.locator,
     })),
   ];
   return { ...manifest, nodes };
@@ -312,10 +319,12 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
       );
     }
     if (request.operations.length === 0) {
+      const manifest = manifestWithNodes(loaded.manifest, indexed);
       return {
         bytes: Uint8Array.from(bytes),
-        manifest: manifestWithNodes(loaded.manifest, indexed),
+        manifest,
         changedEntries: [],
+        nodeRemap: remapNodeIdentities(manifest.nodes, manifest.nodes),
         diagnostics: [{
           severity: "info",
           code: "NO_OP_PRESERVED",
@@ -398,10 +407,12 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
     }
 
     if (stagedText.size === 0 && stagedBinary.size === 0) {
+      const manifest = manifestWithNodes(loaded.manifest, indexed);
       return {
         bytes: Uint8Array.from(bytes),
-        manifest: manifestWithNodes(loaded.manifest, indexed),
+        manifest,
         changedEntries: [],
+        nodeRemap: remapNodeIdentities(manifest.nodes, manifest.nodes),
         diagnostics: [{
           severity: "info",
           code: "NO_OP_PRESERVED",
@@ -431,10 +442,12 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
     await assertUntouchedEntries(loaded, validated, changedEntries);
     const validatedIndex = await indexDocument(validated);
     await verifyMutationOutcomes(indexed, validatedIndex, request.operations);
+    const manifest = manifestWithNodes(validated.manifest, validatedIndex);
     return {
       bytes: output,
-      manifest: manifestWithNodes(validated.manifest, validatedIndex),
+      manifest,
       changedEntries: [...changedEntries].sort(),
+      nodeRemap: remapNodeIdentities(manifestWithNodes(loaded.manifest, indexed).nodes, manifest.nodes),
       diagnostics: [
         ...validated.diagnostics,
         {

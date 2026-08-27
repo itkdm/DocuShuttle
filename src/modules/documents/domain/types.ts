@@ -27,6 +27,23 @@ export interface NodeCapability {
   reason?: string;
 }
 
+/** Identity hints supplied by the native OOXML format (never written by PaperDuck). */
+export interface NativeIdentity {
+  kind: string;
+  value: string;
+  scope?: string;
+}
+
+/** A revision-scoped locator; unlike nodeId it is expected to move after edits. */
+export interface NodeLocator {
+  revision: string;
+  entry: string;
+  story: string;
+  semanticPath: string;
+  sourceSpans: readonly [number, number][];
+  nativeHints?: readonly NativeIdentity[];
+}
+
 /**
  * Provider-neutral logical identity for a semantic document node.
  *
@@ -39,6 +56,8 @@ export interface DocumentNodeManifest {
   entry: string;
   path: string;
   fingerprint: string;
+  nativeIdentity?: NativeIdentity;
+  locator?: NodeLocator;
   /** Operation-level capability; absent means the default capability registry applies. */
   capabilities?: readonly NodeCapability[];
 }
@@ -57,6 +76,8 @@ interface StableAddressBase {
   sourceRevision: string;
   /** Fingerprint of the addressed semantic object, not of the whole package. */
   fingerprint: string;
+  nativeIdentity?: NativeIdentity;
+  locator?: NodeLocator;
   entry: string;
   path: string;
   /** Operation-level capability; absent means the default capability registry applies. */
@@ -155,6 +176,16 @@ export interface MutationResult {
   manifest: DocumentManifest;
   changedEntries: readonly string[];
   diagnostics: readonly DocumentDiagnostic[];
+  nodeRemap?: NodeRemap;
+}
+
+export interface NodeRemap {
+  retained: readonly string[];
+  moved: readonly string[];
+  changed: readonly string[];
+  inserted: readonly string[];
+  deleted: readonly string[];
+  ambiguous: readonly string[];
 }
 
 export class DocumentKernelError extends Error {

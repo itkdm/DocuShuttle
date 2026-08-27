@@ -89,7 +89,9 @@ export function findElementRanges(xml: string, qualifiedName: string): XmlRange[
 
 图片靠 `r:embed` + relationships；同一 media part 被多处引用则拒绝替换（避免一改全改）。
 
-`node_id` 由 `kind + entry + 锚点` 的哈希构成，不吃可见文本，跨版本可稳定引用。
+现有兼容 `node_id` 仍由 `kind + entry + 锚点` 的哈希构成，不吃可见文本；正式跨版本迁移依赖 sidecar 的 native identity/remap，而不是把 XML path 当永久身份。
+
+地址现在同时携带 revision-scoped `locator`、可用的 OOXML `nativeIdentity` 提示和 fingerprint；三者与 PaperDuck `nodeId` 分离。版本间可通过 sidecar remap 保守匹配移动/变更节点，遇到多候选时显式标记 ambiguous，不猜测。
 
 ### 3.3 写入
 

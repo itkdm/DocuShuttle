@@ -1,8 +1,10 @@
 import { PassThrough } from "node:stream";
+import fs from "node:fs";
+import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { createEngineeringLogger } from "./server/logger";
+import { createEngineeringLogger, slowThresholds } from "./server/logger";
 import { withLogContext, getLogContext } from "./server/context";
 import { measure } from "./server/timing";
 import { redact, serializeError } from "./server/redaction";
@@ -30,13 +32,32 @@ describe("engineering observability", () => {
   it("records completed and failed measurements with duration", async () => {
     const stream = new PassThrough();
     const testLogger = createEngineeringLogger({ profile: "test", stream });
-    await measure("test.operation", { taskId: "task-1" }, async () => "ok");
-    await expect(measure("test.failure", {}, async () => { throw Object.assign(new Error("nope"), { code: "FAIL" }); })).rejects.toThrow("nope");
+    await measure("test.operation", { taskId: "task-1" }, async () => "ok", testLogger);
+    await expect(measure("test.failure", {}, async () => { throw Object.assign(new Error("nope"), { code: "FAIL" }); }, testLogger)).rejects.toThrow("nope");
     testLogger.info("test.marker", { requestId: "req-1" });
     const output = await readLines(stream);
     expect(output).toContain('"event":"test.marker"');
-    // measure uses the shared logger; this assertion verifies the public API
-    // remains non-throwing even when its sink is unavailable.
+    expect(output).toContain('"event":"test.operation.completed"');
+    expect(output).toContain('"durationMs":');
+  });
+
+  it("promotes operations that cross their centralized slow threshold", async () => {
+    const stream = new PassThrough();
+    const testLogger = createEngineeringLogger({ profile: "test", stream });
+    slowThresholds["test.operation"] = 0;
+    await measure("test.operation", {}, async () => "ok", testLogger);
+    const output = await readLines(stream);
+    expect(output).toContain('"slow":true');
+    expect(output).toContain('"event":"test.operation.slow"');
+    delete slowThresholds["test.operation"];
+  });
+
+  it("does not create a local file for the production profile", () => {
+    const directory = path.join(process.cwd(), ".paperduck", "logs");
+    const before = fs.existsSync(directory) ? fs.readdirSync(directory) : [];
+    createEngineeringLogger({ profile: "production", stream: new PassThrough() });
+    const after = fs.existsSync(directory) ? fs.readdirSync(directory) : [];
+    expect(after).toEqual(before);
   });
 
   it("redacts sensitive values and serializes errors safely", () => {

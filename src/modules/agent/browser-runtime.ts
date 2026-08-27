@@ -132,8 +132,8 @@ export async function runBrowserAgentLoopStream(
   );
 }
 
-export const loadBrowserAgentLoop = async (runId: string) =>
-  json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop`);
+export const loadBrowserAgentLoop = async (runId: string, after?: number) =>
+  json<BrowserAgentLoopResult & { nextSequence?: number }>(`/api/agent/runs/${runId}/loop${after ? `?after=${after}` : ""}`);
 
 export const resumeBrowserAgentLoop = async (runId: string, approval: "approved" | "rejected") =>
   json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop/resume`, post({ approval }));

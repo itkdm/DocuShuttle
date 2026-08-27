@@ -18,7 +18,11 @@ const schema = z.object({
   permissionMode: z.enum(["default", "full"]).optional().default("default"),
 });
 
-const eventPayload = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+const eventPayload = (event: string, data: unknown) => {
+  const id = event === "event" && data && typeof data === "object" && typeof (data as { eventId?: unknown }).eventId === "string"
+    ? `id: ${(data as { eventId: string }).eventId}\n` : "";
+  return `${id}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+};
 
 async function createRunner(runId: string) {
   const { client } = await requireSupabaseUser();
@@ -34,13 +38,22 @@ async function createRunner(runId: string) {
   return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), new SupabaseAgentLoopStore(client), tools);
 }
 
-export async function GET(_request: Request, { params }: { params: Promise<{ runId: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ runId: string }> }) {
   try {
     const { runId } = await params;
     const { client } = await requireSupabaseUser();
     const checkpoint = await new SupabaseAgentLoopStore(client).load(runId);
     if (!checkpoint) return NextResponse.json({ code: "LOOP_NOT_FOUND" }, { status: 404 });
-    return NextResponse.json({ checkpoint, events: checkpoint.trace ?? [] });
+    const url = new URL(request.url);
+    const after = Number(url.searchParams.get("after") ?? "0");
+    const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "200"), 1), 500);
+    const durable = await client.from("agent_run_events").select("sequence, event").eq("run_id", runId).gt("sequence", Number.isFinite(after) ? after : 0).order("sequence", { ascending: true }).limit(limit);
+    if (durable.error) throw new Error(durable.error.message);
+    const events = (durable.data ?? []).map((row) => {
+      const event = row.event && typeof row.event === "object" ? row.event as Record<string, unknown> : undefined;
+      return event ? { ...event, sequence: row.sequence } : undefined;
+    }).filter((event) => Boolean(event));
+    return NextResponse.json({ checkpoint, events: events.length ? events : checkpoint.trace ?? [], nextSequence: durable.data?.at(-1)?.sequence ?? after });
   } catch (error) {
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
     return NextResponse.json({ code: "AGENT_LOOP_LOAD_FAILED" }, { status: 500 });

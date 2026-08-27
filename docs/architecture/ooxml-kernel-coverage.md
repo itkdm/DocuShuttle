@@ -116,6 +116,8 @@ export function findElementRanges(xml: string, qualifiedName: string): XmlRange[
 
 Feature Adapter Registry 提供统一生命周期钩子：recognition、semantic mapping、capability resolution、mutation planning、result validation 和 identity hints。当前 adapter 只实现实际需要的 recognition/capability，其余钩子保持可选，避免为尚未支持的 Word 特性制造假实现。Content Control 内的段落现在会明确标记为可读但 guarded，避免 UI/Agent 误以为普通段落可直接写入。
 
+Field（`w:fldSimple` / `w:fldChar`）段落同样只读可理解，写入能力标记为 `FIELD_MUTATION_UNSUPPORTED`；字段 instruction 与缓存结果未来必须拆成独立 Operation，当前不会把显示结果当普通文本覆盖。
+
 ## 4. 真实文档上的缺口（有证据）
 
 对工作区实验报告的粗测：

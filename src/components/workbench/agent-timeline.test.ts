@@ -65,6 +65,15 @@ describe("Agent execution timeline", () => {
     expect(items[0]).toMatchObject({ kind: "tool", id: "call-4", state: "completed" });
   });
 
+  it("does not keep approval controls after a rejection is persisted", () => {
+    const items = buildTimeline([
+      { type: "approval.required", callId: "call-5", name: "apply_text_change", input: {} },
+      { type: "approval.resolved", callId: "call-5", name: "apply_text_change", decision: "rejected" },
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "tool", state: "failed", error: "用户已拒绝此操作。" });
+  });
+
   it("redacts secrets from expandable tool details", () => {
     expect(sanitizeForDisplay({ apiKey: "secret", nested: { password: "pw", value: "ok" } })).toEqual({ apiKey: "[已隐藏]", nested: { password: "[已隐藏]", value: "ok" } });
   });

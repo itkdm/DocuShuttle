@@ -117,6 +117,18 @@ export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
       const index = toolIndex.get(callId);
       if (index === undefined) { toolIndex.set(callId, items.length); items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "approval", input: event.input }); }
       else { const item = items[index]; if (item.kind === "tool") item.state = "approval"; }
+    } else if (event.type === "approval.resolved" && eventName(event)) {
+      const callId = eventCallId(event) ?? id;
+      const decision = (event as unknown as Record<string, unknown>).decision;
+      const state = decision === "rejected" ? "failed" : "running";
+      const index = toolIndex.get(callId);
+      if (index === undefined) {
+        toolIndex.set(callId, items.length);
+        items.push({ kind: "tool", id: callId, name: eventName(event)!, state, error: state === "failed" ? "用户已拒绝此操作。" : undefined });
+      } else {
+        const item = items[index];
+        if (item.kind === "tool") { item.state = state; if (state === "failed") item.error = "用户已拒绝此操作。"; }
+      }
     } else if (event.type === "completed") {
       const streamed = streamedIndex === undefined ? undefined : items[streamedIndex];
       if (streamed?.kind === "thought") items[streamedIndex!] = { kind: "message", id: streamed.id, text: streamed.text };

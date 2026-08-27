@@ -171,6 +171,18 @@ export interface MutationRequest {
   operations: readonly DocumentMutation[];
 }
 
+export interface MutationPlan {
+  baseRevision: string;
+  operations: readonly DocumentMutation[];
+  targets: readonly string[];
+  changedParts: readonly string[];
+  relationshipChanges: readonly string[];
+  contentTypeChanges: readonly string[];
+  expectedPostconditions: readonly string[];
+  riskLevel: "low" | "medium" | "high";
+  diagnostics: readonly DocumentDiagnostic[];
+}
+
 export interface MutationResult {
   bytes: Uint8Array;
   manifest: DocumentManifest;

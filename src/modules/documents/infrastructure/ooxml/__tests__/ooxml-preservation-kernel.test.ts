@@ -20,6 +20,21 @@ async function entry(bytes: Uint8Array, path: string): Promise<Uint8Array> {
 }
 
 describe("OoxmlPreservationKernel", () => {
+  it("produces a dry-run mutation plan without changing source bytes", async () => {
+    const bytes = await createDocx();
+    const original = Uint8Array.from(bytes);
+    const kernel = new OoxmlPreservationKernel();
+    const inspection = await kernel.inspect(bytes);
+    const paragraph = inspection.paragraphs[0];
+    const plan = await kernel.planMutation!(bytes, {
+      expectedRevision: inspection.manifest.revision,
+      operations: [{ kind: "replace-text", address: paragraph.address, expectedText: paragraph.text, replacement: `${paragraph.text} updated` }],
+    });
+    expect(plan.changedParts).toEqual(["word/document.xml"]);
+    expect(plan.targets).toEqual([paragraph.address.nodeId]);
+    expect(plan.diagnostics[0]?.code).toBe("MUTATION_PLAN_READY");
+    expect(bytes).toEqual(original);
+  });
   it("inspects manifest, stable addresses, relationships, and package integrity", async () => {
     const bytes = await createDocx();
     const kernel = new OoxmlPreservationKernel();

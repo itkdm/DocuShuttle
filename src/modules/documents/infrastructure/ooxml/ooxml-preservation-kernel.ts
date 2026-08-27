@@ -9,6 +9,7 @@ import {
   type DocumentMutation,
   type MutationRequest,
   type MutationResult,
+  type MutationPlan,
 } from "../../domain/types";
 import { sha256, utf8 } from "./hash";
 import {
@@ -298,6 +299,58 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
 
   async validate(bytes: Uint8Array): Promise<DocumentInspection> {
     return this.inspect(bytes);
+  }
+
+  async planMutation(bytes: Uint8Array, request: MutationRequest): Promise<MutationPlan> {
+    const loaded = await loadPackage(bytes);
+    const indexed = await indexDocument(loaded);
+    const diagnostics = [...loaded.diagnostics, ...indexed.diagnostics];
+    const blocking = blockingPackageErrors(diagnostics);
+    if (blocking.length > 0) throw new DocumentKernelError("SOURCE_PACKAGE_INVALID", "Refusing to plan against an invalid OOXML package.", blocking);
+    if (loaded.manifest.revision !== request.expectedRevision) throw new DocumentKernelError("REVISION_PRECONDITION_FAILED", "The source package revision differs from expectedRevision.");
+    const targets: string[] = [];
+    const changedParts = new Set<string>();
+    let riskLevel: MutationPlan["riskLevel"] = "low";
+    const expectedPostconditions: string[] = [];
+    for (const operation of request.operations) {
+      if (operation.address.sourceRevision !== request.expectedRevision) throw new DocumentKernelError("ADDRESS_REVISION_MISMATCH", "Operation address belongs to a different source revision.");
+      if (operation.kind === "replace-text") {
+        const target = indexed.paragraphs.find((candidate) => addressMatches(candidate, operation));
+        if (!target) throw new DocumentKernelError("ADDRESS_NOT_FOUND", "Paragraph address was not found.");
+        ensureAddressPrecondition(target, operation);
+        textPatch(target, operation);
+        targets.push(target.address.nodeId); changedParts.add(target.address.entry);
+        expectedPostconditions.push(`${target.address.nodeId}.text == ${JSON.stringify(operation.replacement)}`);
+      } else if (operation.kind === "set-cell-text") {
+        const target = indexed.cells.find((candidate) => addressMatches(candidate, operation));
+        if (!target) throw new DocumentKernelError("ADDRESS_NOT_FOUND", "Table cell address was not found.");
+        ensureAddressPrecondition(target, operation);
+        cellPatch(target, operation);
+        targets.push(target.address.nodeId); changedParts.add(target.address.entry);
+        expectedPostconditions.push(`${target.address.nodeId}.text == ${JSON.stringify(operation.text)}`);
+      } else {
+        const target = indexed.images.find((candidate) => addressMatches(candidate, operation));
+        if (!target) throw new DocumentKernelError("ADDRESS_NOT_FOUND", "Image address was not found.");
+        ensureAddressPrecondition(target, operation);
+        if (operation.expectedHash !== target.address.fingerprint) throw new DocumentKernelError("IMAGE_HASH_PRECONDITION_FAILED", "Image hash differs from expectedHash.");
+        if (target.address.mediaReferenceCount > 1) throw new DocumentKernelError("SHARED_MEDIA_PART_UNSUPPORTED", "The selected image part is shared by multiple drawings; V1 refuses a fan-out replacement.");
+        if (operation.contentType && operation.contentType !== target.contentType) throw new DocumentKernelError("IMAGE_CONTENT_TYPE_CHANGE_UNSUPPORTED", "V1 only replaces an image with the existing package part content type.");
+        assertSupportedImage(operation.bytes, target.contentType);
+        targets.push(target.address.nodeId); changedParts.add(target.address.mediaEntry); riskLevel = "medium";
+        expectedPostconditions.push(`${target.address.nodeId}.fingerprint == sha256(newImage)`);
+      }
+    }
+    return {
+      baseRevision: request.expectedRevision,
+      operations: request.operations,
+      targets,
+      changedParts: [...changedParts].sort(),
+      relationshipChanges: [],
+      contentTypeChanges: [],
+      expectedPostconditions,
+      riskLevel,
+      diagnostics: [{ severity: "info", code: "MUTATION_PLAN_READY", message: `${request.operations.length} operation(s) resolved without writing package bytes.`, details: { changedPartCount: changedParts.size } }],
+    };
   }
 
   async mutate(bytes: Uint8Array, request: MutationRequest): Promise<MutationResult> {

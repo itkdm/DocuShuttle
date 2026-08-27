@@ -114,6 +114,8 @@ export function findElementRanges(xml: string, qualifiedName: string): XmlRange[
 
 `DocumentInspection.validation` 同时提供分层报告：ZIP/security、XML well-formed、source preservation、OPC integrity、semantic 和 identity。报告与诊断并存，便于 Agent/UI 展示可解释状态，而不把单一 schema/renderer 结果误当作完整安全证明。
 
+Feature Adapter Registry 提供统一生命周期钩子：recognition、semantic mapping、capability resolution、mutation planning、result validation 和 identity hints。当前 adapter 只实现实际需要的 recognition/capability，其余钩子保持可选，避免为尚未支持的 Word 特性制造假实现。
+
 ## 4. 真实文档上的缺口（有证据）
 
 对工作区实验报告的粗测：

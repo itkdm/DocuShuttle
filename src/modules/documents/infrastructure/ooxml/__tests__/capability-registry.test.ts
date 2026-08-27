@@ -4,6 +4,7 @@ import { capabilitiesFor, featureAdapterRegistry } from "../capability-registry"
 describe("OOXML capability registry", () => {
   it("exposes a provider-neutral feature adapter registry", () => {
     expect(featureAdapterRegistry.list()).toEqual(["textbox", "cross-run-text", "nested-table-container", "shared-media"]);
+    expect(featureAdapterRegistry.matching({ kind: "paragraph", textBox: true }).map(({ featureId }) => featureId)).toEqual(["textbox"]);
   });
   it("marks text boxes and nested containers guarded while keeping reads supported", () => {
     expect(capabilitiesFor("paragraph", { textBox: true })).toContainEqual(expect.objectContaining({ operation: "read", state: "supported" }));

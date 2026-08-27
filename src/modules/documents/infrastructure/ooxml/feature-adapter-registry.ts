@@ -1,8 +1,9 @@
-import type { DocumentNodeKind, NodeCapability } from "../../domain/types";
+import type { DocumentDiagnostic, DocumentMutation, DocumentNodeKind, NativeIdentity, NodeCapability } from "../../domain/types";
 import type { NodeCapabilityContext } from "./capability-registry";
 
 export interface FeatureAdapterContext extends NodeCapabilityContext {
   kind: DocumentNodeKind;
+  sourceXml?: string;
 }
 
 /** Infrastructure-only extension point for OOXML feature recognition and capability resolution. */
@@ -10,6 +11,11 @@ export interface OoxmlFeatureAdapter {
   readonly featureId: string;
   recognize(context: FeatureAdapterContext): boolean;
   resolveCapabilities(context: FeatureAdapterContext): readonly NodeCapability[];
+  /** Optional lifecycle hooks; feature adapters remain isolated from Agent runtime. */
+  buildSemanticNodes?(context: FeatureAdapterContext): readonly unknown[];
+  planMutation?(context: FeatureAdapterContext, operation: DocumentMutation): readonly unknown[];
+  validateResult?(context: FeatureAdapterContext): readonly DocumentDiagnostic[];
+  identityHints?(context: FeatureAdapterContext): readonly NativeIdentity[];
 }
 
 export class FeatureAdapterRegistry {
@@ -23,6 +29,10 @@ export class FeatureAdapterRegistry {
 
   resolveCapabilities(context: FeatureAdapterContext): readonly NodeCapability[] | undefined {
     return this.adapters.find((adapter) => adapter.recognize(context))?.resolveCapabilities(context);
+  }
+
+  matching(context: FeatureAdapterContext): readonly OoxmlFeatureAdapter[] {
+    return this.adapters.filter((adapter) => adapter.recognize(context));
   }
 
   list(): readonly string[] { return this.adapters.map((adapter) => adapter.featureId); }

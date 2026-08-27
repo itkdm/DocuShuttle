@@ -47,9 +47,10 @@ describe.skipIf(!fixturePath)("Agent document tools against a real DOCX", () => 
     };
     const runner = new AgentLoopRunner(model, new MemoryStore(), tools);
     const paused = await runner.run("local-real-docx", "把目标区域补充标记，先检查文档再修改");
-    expect(paused.checkpoint.status).toBe("awaiting_user");
+    expect(paused.checkpoint.status).toBe("awaiting_approval");
     expect(paused.events.some((event) => event.type === "approval.required")).toBe(true);
-    const completed = await runner.resume("local-real-docx", "approved");
+    const pending = paused.checkpoint.pendingInteraction;
+    const completed = await runner.resume("local-real-docx", "approved", pending!.interactionId, pending?.type === "approval" ? pending.callId : "");
     expect(completed.checkpoint.status).toBe("completed");
     const reopened = await engine.validate(current);
     expect(reopened.diagnostics.filter(({ severity }) => severity === "error")).toEqual([]);

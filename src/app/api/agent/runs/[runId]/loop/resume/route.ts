@@ -14,7 +14,7 @@ import { SupabaseDocumentVersionAccess } from "@/modules/agent/infrastructure/su
 import { SupabaseSourceDocumentContext } from "@/modules/agent/infrastructure/supabase/source-context";
 import { OoxmlPreservationKernel } from "@/modules/documents";
 
-const schema = z.object({ approval: z.enum(["approved", "rejected"]) });
+const schema = z.object({ approval: z.enum(["approved", "rejected"]), interactionId: z.uuid(), callId: z.string().trim().min(1).max(200) });
 const eventPayload = (event: string, data: unknown) => {
   const id = event === "event" && data && typeof data === "object" && typeof (data as { eventId?: unknown }).eventId === "string"
     ? `id: ${(data as { eventId: string }).eventId}\n` : "";
@@ -38,13 +38,13 @@ async function createRunner(runId: string) {
 async function runResume(request: Request, runId: string, stream: boolean) {
   const input = schema.parse(await request.json());
   const runner = await createRunner(runId);
-  if (!stream) return NextResponse.json(await runner.resume(runId, input.approval, request.signal));
+  if (!stream) return NextResponse.json(await runner.resume(runId, input.approval, input.interactionId, input.callId, request.signal));
   const encoder = new TextEncoder();
   const responseStream = new ReadableStream({
     async start(controller) {
       const send = (event: string, data: unknown) => controller.enqueue(encoder.encode(eventPayload(event, data)));
       try {
-        const result = await runner.resume(runId, input.approval, request.signal, (event) => send("event", event));
+        const result = await runner.resume(runId, input.approval, input.interactionId, input.callId, request.signal, (event) => send("event", event));
         send("result", result);
       } catch (error) {
         send("error", { code: error instanceof Error ? error.message : "AGENT_LOOP_RESUME_FAILED" });
@@ -64,6 +64,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
     if (error instanceof Error && error.message === "No pending agent approval") {
       return NextResponse.json({ code: "APPROVAL_NOT_PENDING" }, { status: 409 });
     }
+    if (error instanceof Error && ["APPROVAL_ALREADY_CLAIMED", "APPROVAL_INTERACTION_MISMATCH"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
     logger.error("http.request.failed", { route: "/api/agent/runs/:runId/loop/resume", error });
     return NextResponse.json({ code: "AGENT_LOOP_RESUME_FAILED" }, { status: 500 });
   }
@@ -77,6 +78,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
     if (error instanceof Error && error.message === "No pending agent approval") return NextResponse.json({ code: "APPROVAL_NOT_PENDING" }, { status: 409 });
+    if (error instanceof Error && ["APPROVAL_ALREADY_CLAIMED", "APPROVAL_INTERACTION_MISMATCH"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
     logger.error("http.request.failed", { route: "/api/agent/runs/:runId/loop/resume", error });
     return NextResponse.json({ code: error instanceof Error ? error.message : "AGENT_LOOP_RESUME_FAILED" }, { status: 500 });
   }

@@ -9,9 +9,11 @@ export type AgentRunStatus =
   | "failed"
   | "cancelled";
 
-export type AgentPendingInteraction =
-  | { readonly type: "approval"; readonly callId: string; readonly toolName: string; readonly input: unknown }
-  | { readonly type: "user_input"; readonly question: string }
+export type AgentRuntimePendingInteraction =
+  | { readonly interactionId: string; readonly type: "approval"; readonly callId: string; readonly toolName: string; readonly input: unknown }
+  | { readonly interactionId: string; readonly type: "user_input"; readonly question: string };
+
+export type AgentPendingInteraction = AgentRuntimePendingInteraction
   | { readonly type: "final_review"; readonly revision: string };
 
 export type AgentRunFailure = {

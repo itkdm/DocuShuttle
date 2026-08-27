@@ -73,7 +73,7 @@ export async function POST(request: Request) {
       .limit(1)
       .maybeSingle();
     if (latest.error) throw new Error(`Unable to inspect active agent run: ${latest.error.message}`);
-    const checkpoint = (latest.data?.state as { loopCheckpoint?: { pendingApproval?: unknown; pendingUserQuestion?: unknown } } | null)?.loopCheckpoint;
+    const checkpoint = (latest.data?.state as { loopCheckpoint?: { pendingInteraction?: unknown } } | null)?.loopCheckpoint;
     const activeStatus = [...AGENT_LEASE_MANAGED_STATUSES, "awaiting_approval", "awaiting_user", "awaiting_review"].includes(latest.data?.status as string);
     // HITL waits are intentionally lease-less: a user may take hours to
     // answer. Only an invocation phase can become stale and be reclaimed.
@@ -82,7 +82,7 @@ export async function POST(request: Request) {
     if (leaseExpired && latest.data?.id) {
       const reclaimed = await client.rpc("reclaim_stale_agent_run", { p_run_id: latest.data.id });
       if (reclaimed.error) throw new Error(`Unable to reclaim stale agent run: ${reclaimed.error.message}`);
-    } else if (checkpoint?.pendingApproval || checkpoint?.pendingUserQuestion || activeStatus) {
+    } else if (checkpoint?.pendingInteraction || activeStatus) {
       return NextResponse.json({ code: "TURN_NOT_ALLOWED", runId: latest.data?.id }, { status: 409 });
     }
     const run = await new SupabaseAgentRunStore(client).createForTask({

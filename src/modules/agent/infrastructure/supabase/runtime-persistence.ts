@@ -58,9 +58,7 @@ function normalizeRun(state: RunState, fallbackUpdatedAt: string): AgentRun {
     id: String(state.id), conversationId: state.conversationId, taskId: state.taskId, documentId: state.documentId,
     baseRevision: state.baseRevision,
     status: state.status ?? "queued",
-    pendingInteraction: state.pendingInteraction ?? (state.loopCheckpoint?.pendingApproval
-      ? { type: "approval", callId: state.loopCheckpoint.pendingApproval.callId, toolName: state.loopCheckpoint.pendingApproval.name, input: state.loopCheckpoint.pendingApproval.input }
-      : state.loopCheckpoint?.pendingUserQuestion ? { type: "user_input", question: state.loopCheckpoint.pendingUserQuestion.text } : undefined),
+    pendingInteraction: state.pendingInteraction,
     failure: state.failure,
     lockVersion: Number(state.lockVersion ?? 0),
     leaseExpiresAt: state.leaseExpiresAt, startedAt: state.startedAt, updatedAt: state.updatedAt ?? fallbackUpdatedAt, completedAt: state.completedAt,

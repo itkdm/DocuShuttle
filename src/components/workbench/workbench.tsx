@@ -305,7 +305,7 @@ export function Workbench() {
   }
 
   const decide = async (decision: ProposalState) => {
-    if (run && loopResult?.checkpoint.pendingApproval) return decideLoop(decision === "accepted" ? "approved" : "rejected");
+    if (run && loopResult?.checkpoint.pendingInteraction?.type === "approval") return decideLoop(decision === "accepted" ? "approved" : "rejected");
     setMessages((items) => [...items, { role: "agent", text: "请先打开一份 DOCX，建立文档工作区后我就可以开始处理。" }]);
     setNotice("请先打开一份 DOCX，建立文档工作区");
   };
@@ -343,11 +343,12 @@ export function Workbench() {
       // turn.started event shortly afterwards; mergeTimelineEvents replaces
       // this local item when that event arrives.
       setActiveEvents((items) => mergeTimelineEvents(items, [createAgentEvent(activeRun.id, { type: "turn.started", text: prompt, clientMessageId: localMessageId })]));
+      const interactionId = loopResult?.checkpoint.pendingInteraction?.type === "user_input" ? loopResult.checkpoint.pendingInteraction.interactionId : undefined;
       const result = await runBrowserAgentLoopStream(activeRun.id, prompt, permissionMode, (event) => {
         setActiveEvents((items) => mergeTimelineEvents(items, [event]));
         if (event.type === "model.delta") setNotice("纸上鸭正在回复");
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
-      }, abortController.signal, localMessageId);
+      }, abortController.signal, localMessageId, interactionId);
       setLoopResult(result);
       setActiveEvents((items) => mergeTimelineEvents(items, result.events));
       setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, status: result.checkpoint.status === "failed" ? "failed" : "sent" } : item));
@@ -375,10 +376,10 @@ export function Workbench() {
         setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
         await refreshVersions(taskId);
       }
-      setStage(result.checkpoint.pendingApproval || result.checkpoint.pendingUserQuestion ? "awaiting" : wrote ? "complete" : "idle");
-      setNotice(result.checkpoint.pendingApproval
+      setStage(result.checkpoint.pendingInteraction ? "awaiting" : wrote ? "complete" : "idle");
+      setNotice(result.checkpoint.pendingInteraction?.type === "approval"
         ? "Agent 已完成读取并请求写入确认"
-        : result.checkpoint.pendingUserQuestion
+        : result.checkpoint.pendingInteraction?.type === "user_input"
           ? "Agent 正在等待你的回答"
           : wrote ? "新版本已加载到文档画布" : "Agent 已完成本轮对话");
     } catch (error) {
@@ -392,9 +393,9 @@ export function Workbench() {
           const recovered = await loadBrowserAgentLoop(runToRecover.id);
           setLoopResult(recovered);
           setActiveEvents((items) => mergeTimelineEvents(items, recovered.events));
-          if (recovered.checkpoint.pendingApproval || recovered.checkpoint.pendingUserQuestion) {
+          if (recovered.checkpoint.pendingInteraction) {
             setStage("awaiting");
-            setNotice(recovered.checkpoint.pendingApproval ? "Agent 已完成读取并请求写入确认" : "Agent 正在等待你的回答");
+            setNotice(recovered.checkpoint.pendingInteraction.type === "approval" ? "Agent 已完成读取并请求写入确认" : "Agent 正在等待你的回答");
             return;
           }
           if (["running", "completed"].includes(recovered.checkpoint.status)) {
@@ -417,11 +418,13 @@ export function Workbench() {
 
   const decideLoop = async (choice: "approved" | "rejected") => {
     if (!run) return;
+    const pending = loopResult?.checkpoint.pendingInteraction;
+    if (!pending || pending.type !== "approval") return;
     setNotice(choice === "approved" ? "正在执行批准的操作…" : "已拒绝，正在继续后续处理…");
     const abortController = new AbortController();
     agentAbortRef.current = abortController;
     try {
-      const result = await resumeBrowserAgentLoopStream(run.id, choice, (event) => {
+      const result = await resumeBrowserAgentLoopStream(run.id, choice, pending.interactionId, pending.callId, (event) => {
         setActiveEvents((items) => mergeTimelineEvents(items, [event]));
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
       }, abortController.signal);

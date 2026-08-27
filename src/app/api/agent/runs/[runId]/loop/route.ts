@@ -18,6 +18,7 @@ const schema = z.object({
   message: z.string().trim().min(1).max(8_000),
   permissionMode: z.enum(["default", "full"]).optional().default("default"),
   clientMessageId: z.uuid().optional(),
+  interactionId: z.uuid().optional(),
 });
 
 const eventPayload = (event: string, data: unknown) => {
@@ -38,26 +39,6 @@ async function createRunner(runId: string) {
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
   return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), new SupabaseAgentLoopStore(client), tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata));
-}
-
-async function persistAskUserAnswer(runId: string, message: string, clientMessageId?: string) {
-  if (!clientMessageId) return;
-  const { client, user } = await requireSupabaseUser();
-  const run = await client.from("agent_runs").select("state, owner_user_id").eq("id", runId).eq("owner_user_id", user.id).single();
-  if (run.error || !run.data) throw new Error("RUN_NOT_FOUND");
-  const checkpoint = (run.data.state as { loopCheckpoint?: { pendingUserQuestion?: unknown; conversationId?: string } } | null)?.loopCheckpoint;
-  if (!checkpoint?.pendingUserQuestion || !checkpoint.conversationId) return;
-  const inserted = await client.from("messages").upsert({
-    id: clientMessageId,
-    owner_user_id: user.id,
-    conversation_id: checkpoint.conversationId,
-    role: "user",
-    parts: [{ type: "text", text: message }],
-    run_id: runId,
-    message_key: clientMessageId,
-    delivery_status: "sent",
-  }, { onConflict: "conversation_id,message_key", ignoreDuplicates: true });
-  if (inserted.error) throw new Error(`Unable to persist user answer: ${inserted.error.message}`);
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ runId: string }> }) {
@@ -97,14 +78,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
     const started = performance.now();
   try {
     const input = schema.parse(await request.json());
-    await persistAskUserAnswer(runId, input.message, input.clientMessageId);
-    const result = await (await createRunner(runId)).runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, undefined, undefined, input.clientMessageId);
+    const result = await (await createRunner(runId)).runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, undefined, undefined, input.clientMessageId, input.interactionId);
     const response = NextResponse.json(result);
     logger.info("http.request.completed", { method: "POST", route: "/api/agent/runs/:runId/loop", status: response.status, durationMs: performance.now() - started, runId });
     return response;
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
+    if (error instanceof Error && ["USER_INPUT_ALREADY_CLAIMED", "USER_INPUT_INTERACTION_MISMATCH"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
     logger.error("http.request.failed", { method: "POST", route: "/api/agent/runs/:runId/loop", durationMs: performance.now() - started, runId, error });
     return NextResponse.json({ code: "AGENT_LOOP_FAILED" }, { status: 500 });
   }
@@ -119,7 +100,6 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
     const started = performance.now();
   try {
     const input = schema.parse(await request.json());
-    await persistAskUserAnswer(runId, input.message, input.clientMessageId);
     const runner = await createRunner(runId);
     const encoder = new TextEncoder();
     let eventCount = 0;
@@ -139,7 +119,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
           controller.enqueue(payload);
         };
         try {
-          const result = await runner.runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, request.signal, (event) => send("event", event), input.clientMessageId);
+          const result = await runner.runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, request.signal, (event) => send("event", event), input.clientMessageId, input.interactionId);
           send("result", result);
         } catch (error) {
           streamFailed = true;
@@ -156,6 +136,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
+    if (error instanceof Error && ["USER_INPUT_ALREADY_CLAIMED", "USER_INPUT_INTERACTION_MISMATCH"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
     return NextResponse.json({ code: error instanceof Error ? error.message : "AGENT_LOOP_FAILED" }, { status: 500 });
   }
   });

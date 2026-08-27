@@ -1,6 +1,7 @@
 "use client";
 
 import type { AgentRun } from "./domain/model";
+import type { AgentRuntimePendingInteraction } from "./domain/model";
 import type { AgentPermissionMode } from "./application/loop";
 import { isAgentEvent, isDurableAgentEvent, type AgentEvent, type DurableAgentEvent } from "./application/events";
 import { SseParser } from "./browser/sse-parser";
@@ -164,11 +165,10 @@ export type BrowserAgentEvent = AgentEvent;
 
 export type BrowserAgentLoopResult = {
   checkpoint: {
-    status: "running" | "awaiting_user" | "completed" | "failed" | "cancelled";
+    status: "running" | "awaiting_approval" | "awaiting_user" | "completed" | "failed" | "cancelled";
     finalText?: string;
     iterations: number;
-    pendingApproval?: { callId: string; name: string; input: unknown };
-    pendingUserQuestion?: { text: string };
+    pendingInteraction?: AgentRuntimePendingInteraction;
     messages: ReadonlyArray<{ role: "system" | "user" | "assistant" | "tool"; content: string }>;
     permissionMode?: AgentPermissionMode;
   };
@@ -181,8 +181,8 @@ export function normalizeReplayEvents(events: readonly unknown[]): DurableAgentE
   return events.filter(isDurableAgentEvent);
 }
 
-export const runBrowserAgentLoop = async (runId: string, message: string, permissionMode: AgentPermissionMode = "default") =>
-  json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop`, post({ message, permissionMode }));
+export const runBrowserAgentLoop = async (runId: string, message: string, permissionMode: AgentPermissionMode = "default", interactionId?: string) =>
+  json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop`, post({ message, permissionMode, ...(interactionId ? { interactionId } : {}) }));
 
 /** Consume the Agent route's POST-capable SSE stream. */
 export async function runBrowserAgentLoopStream(
@@ -192,9 +192,10 @@ export async function runBrowserAgentLoopStream(
   onEvent: (event: AgentEvent) => void,
   signal?: AbortSignal,
   clientMessageId?: string,
+  interactionId?: string,
 ) {
   return consumeAgentStream(
-    await fetch(`/api/agent/runs/${runId}/loop`, { ...post({ message, permissionMode, ...(clientMessageId ? { clientMessageId } : {}) }), method: "PUT", signal }),
+    await fetch(`/api/agent/runs/${runId}/loop`, { ...post({ message, permissionMode, ...(clientMessageId ? { clientMessageId } : {}), ...(interactionId ? { interactionId } : {}) }), method: "PUT", signal }),
     runId,
     onEvent,
   );
@@ -206,16 +207,18 @@ export const loadBrowserAgentLoop = async (runId: string, after?: number) =>
     return { ...result, events: normalizeReplayEvents(result.events) };
   })();
 
-export const resumeBrowserAgentLoop = async (runId: string, approval: "approved" | "rejected") =>
-  json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop/resume`, post({ approval }));
+export const resumeBrowserAgentLoop = async (runId: string, approval: "approved" | "rejected", interactionId: string, callId: string) =>
+  json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop/resume`, post({ approval, interactionId, callId }));
 
 export const resumeBrowserAgentLoopStream = async (
   runId: string,
   approval: "approved" | "rejected",
+  interactionId: string,
+  callId: string,
   onEvent: (event: AgentEvent) => void,
   signal?: AbortSignal,
 ) => consumeAgentStream(
-  await fetch(`/api/agent/runs/${runId}/loop/resume`, { ...post({ approval }), method: "PUT", signal }),
+  await fetch(`/api/agent/runs/${runId}/loop/resume`, { ...post({ approval, interactionId, callId }), method: "PUT", signal }),
   runId,
   onEvent,
 );

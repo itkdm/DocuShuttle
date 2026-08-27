@@ -17,6 +17,6 @@ describe("isAgentEvent", () => {
   it("accepts event-specific payloads, including unknown JSON values", () => {
     expect(isAgentEvent({ ...identity, type: "tool.started", callId: "call-1", name: "inspect_document", input: null })).toBe(true);
     expect(isAgentEvent({ ...identity, type: "model.delta", text: "片段", channel: "final" })).toBe(true);
-    expect(isAgentEvent({ ...identity, type: "approval.resolved", callId: "call-1", name: "apply_change", decision: "rejected" })).toBe(true);
+    expect(isAgentEvent({ ...identity, type: "approval.resolved", interactionId: "interaction-1", callId: "call-1", name: "apply_change", decision: "rejected" })).toBe(true);
   });
 });

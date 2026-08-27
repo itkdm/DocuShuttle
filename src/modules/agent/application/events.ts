@@ -26,8 +26,8 @@ export type AgentEventPayload =
   | { type: "tool.started"; callId: string; name: string; input: unknown }
   | { type: "tool.completed"; callId: string; name: string; output: unknown }
   | { type: "tool.failed"; callId: string; name: string; error: string; durationMs?: number }
-  | { type: "approval.required"; callId: string; name: string; input: unknown }
-  | { type: "approval.resolved"; callId: string; name: string; decision: "approved" | "rejected" }
+  | { type: "approval.required"; interactionId: string; callId: string; name: string; input: unknown }
+  | { type: "approval.resolved"; interactionId: string; callId: string; name: string; decision: "approved" | "rejected" }
   | { type: "turn.completed"; text: string }
   | { type: "turn.failed"; error: string }
   | { type: "turn.cancelled"; text: string };
@@ -78,15 +78,16 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
       return isString("text")
         && (!hasField("channel") || event.channel === "commentary" || event.channel === "reasoning_summary" || event.channel === "final");
     case "tool.started":
-    case "approval.required":
       return isString("callId") && isString("name") && hasUnknownValue("input");
+    case "approval.required":
+      return isString("interactionId") && isString("callId") && isString("name") && hasUnknownValue("input");
     case "tool.completed":
       return isString("callId") && isString("name") && hasUnknownValue("output");
     case "tool.failed":
       return isString("callId") && isString("name") && isString("error")
         && (!hasField("durationMs") || isNumber("durationMs"));
     case "approval.resolved":
-      return isString("callId") && isString("name") && (event.decision === "approved" || event.decision === "rejected");
+      return isString("interactionId") && isString("callId") && isString("name") && (event.decision === "approved" || event.decision === "rejected");
     case "turn.completed":
       return isString("text");
     case "turn.failed":

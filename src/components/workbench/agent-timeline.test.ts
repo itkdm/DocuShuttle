@@ -76,7 +76,7 @@ describe("Agent execution timeline", () => {
   it("attaches approval to the original tool card", () => {
     const items = build([
       { type: "tool.started", callId: "call-2", name: "apply_text_change", input: {} },
-      { type: "approval.required", callId: "call-2", name: "apply_text_change", input: {} },
+      { type: "approval.required", interactionId: "interaction-2", callId: "call-2", name: "apply_text_change", input: {} },
     ]);
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ kind: "tool", state: "approval", id: "call-2" });
@@ -102,8 +102,8 @@ describe("Agent execution timeline", () => {
 
   it("keeps approval, resume, and completion on one tool card", () => {
     const items = build([
-      { type: "approval.required", eventId: "approval", callId: "call-4", name: "apply_text_change", input: { nodeId: "p-1" } },
-      { type: "approval.resolved", eventId: "resolved", callId: "call-4", name: "apply_text_change", decision: "approved" },
+      { type: "approval.required", interactionId: "interaction-4", eventId: "approval", callId: "call-4", name: "apply_text_change", input: { nodeId: "p-1" } },
+      { type: "approval.resolved", interactionId: "interaction-4", eventId: "resolved", callId: "call-4", name: "apply_text_change", decision: "approved" },
       { type: "tool.started", eventId: "resume-start", callId: "call-4", name: "apply_text_change", input: { nodeId: "p-1" } },
       { type: "tool.completed", eventId: "resume-done", callId: "call-4", name: "apply_text_change", output: { revision: "r2" } },
     ]);
@@ -113,8 +113,8 @@ describe("Agent execution timeline", () => {
 
   it("does not keep approval controls after a rejection is persisted", () => {
     const items = build([
-      { type: "approval.required", callId: "call-5", name: "apply_text_change", input: {} },
-      { type: "approval.resolved", callId: "call-5", name: "apply_text_change", decision: "rejected" },
+      { type: "approval.required", interactionId: "interaction-5", callId: "call-5", name: "apply_text_change", input: {} },
+      { type: "approval.resolved", interactionId: "interaction-5", callId: "call-5", name: "apply_text_change", decision: "rejected" },
     ]);
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ kind: "tool", state: "failed", error: "用户已拒绝此操作。" });
@@ -128,7 +128,7 @@ describe("Agent execution timeline", () => {
   it("does not mark an approval checkpoint as actively running", () => {
     const events = [
       { type: "model.delta", text: "我准备修改。" },
-      { type: "approval.required", callId: "call-6", name: "apply_text_change", input: {} },
+      { type: "approval.required", interactionId: "interaction-6", callId: "call-6", name: "apply_text_change", input: {} },
     ] as never;
     expect(isTimelineActive(events, buildTimeline(events))).toBe(false);
   });

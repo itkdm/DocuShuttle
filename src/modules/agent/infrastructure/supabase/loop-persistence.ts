@@ -29,25 +29,19 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     if (current.error || !current.data) throw new Error("RUN_NOT_FOUND");
     const row = current.data as RunRow;
     const nextVersion = row.lock_version + 1;
-    const status = checkpoint.status === "completed"
-      ? "completed"
-      : checkpoint.status === "failed"
-        ? "failed"
-        : checkpoint.status === "cancelled"
-          ? "cancelled"
-          : checkpoint.pendingApproval
-            ? "awaiting_approval"
-            : checkpoint.pendingUserQuestion
-              ? "awaiting_user"
-              : "running";
+    const status = ["completed", "failed", "cancelled"].includes(checkpoint.status)
+      ? checkpoint.status
+      : checkpoint.status === "awaiting_approval"
+        ? "awaiting_approval"
+        : checkpoint.status === "awaiting_user"
+          ? "awaiting_user"
+          : "running";
     const state = {
       ...row.state,
       version: nextVersion,
       status,
       loopCheckpoint: checkpoint,
-      pendingInteraction: checkpoint.pendingApproval
-        ? { type: "approval", callId: checkpoint.pendingApproval.callId, toolName: checkpoint.pendingApproval.name, input: checkpoint.pendingApproval.input }
-        : checkpoint.pendingUserQuestion ? { type: "user_input", question: checkpoint.pendingUserQuestion.text } : undefined,
+      pendingInteraction: checkpoint.pendingInteraction ?? null,
       failure: checkpoint.status === "failed" ? { code: "AGENT_LOOP_FAILED", message: checkpoint.finalText ?? "Agent execution failed", retryable: true } : undefined,
     };
     const updated = await this.client
@@ -80,6 +74,19 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       message_key: `assistant:${message.id}`, delivery_status: "sent",
     }, { onConflict: "conversation_id,message_key", ignoreDuplicates: true });
     if (result.error) throw new Error(`Unable to persist assistant message: ${result.error.message}`);
+  }
+
+  async appendUserMessage(runId: string, message: { id: string; text: string }): Promise<void> {
+    const run = await this.client.from("agent_runs").select("state, owner_user_id").eq("id", runId).maybeSingle();
+    if (run.error || !run.data) throw new Error("RUN_NOT_FOUND");
+    const state = run.data.state as { conversationId?: string };
+    if (!state.conversationId) return;
+    const result = await this.client.from("messages").upsert({
+      id: message.id, owner_user_id: run.data.owner_user_id, conversation_id: state.conversationId,
+      role: "user", parts: [{ type: "text", text: message.text }], run_id: runId,
+      message_key: message.id, delivery_status: "sent",
+    }, { onConflict: "conversation_id,message_key", ignoreDuplicates: true });
+    if (result.error) throw new Error(`Unable to persist user message: ${result.error.message}`);
   }
 
   async loadEffectReceipt(runId: string, idempotencyKey: string): Promise<AgentEffectReceipt | undefined> {
@@ -119,8 +126,8 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     }
     if (checkpoint.status === "cancelled") return;
     const event = createAgentEvent(runId, { type: "turn.cancelled", text: "本轮操作已取消。" });
-    const nextCheckpoint: AgentLoopCheckpoint = { ...checkpoint, status: "cancelled", pendingApproval: undefined, finalText: event.text, trace: [...(checkpoint.trace ?? []), event].slice(-200) };
-    const nextState = { ...state, status: "cancelled", loopCheckpoint: nextCheckpoint, version: current.data.lock_version + 1 };
+    const nextCheckpoint: AgentLoopCheckpoint = { ...checkpoint, status: "cancelled", pendingInteraction: undefined, finalText: event.text, trace: [...(checkpoint.trace ?? []), event].slice(-200) };
+    const nextState = { ...state, status: "cancelled", pendingInteraction: null, loopCheckpoint: nextCheckpoint, version: current.data.lock_version + 1 };
     const updated = await this.client.from("agent_runs")
       .update({ state: nextState, status: "cancelled", resume_cursor: nextCheckpoint, lock_version: current.data.lock_version + 1, updated_at: new Date().toISOString() })
       .eq("id", runId).eq("lock_version", current.data.lock_version).select("id").maybeSingle();
@@ -128,12 +135,27 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     await this.appendEvents(runId, [event]);
   }
 
-  async claimPendingApproval(runId: string, callId: string): Promise<AgentLoopCheckpoint | undefined> {
-    return measure("agent.approval.claim", { runId, callId, operation: "rpc", rpc: "claim_agent_loop_approval" }, async () => {
-      const result = await this.client.rpc("claim_agent_loop_approval", { p_run_id: runId, p_call_id: callId });
+  async claimPendingApproval(runId: string, interactionId: string, callId: string): Promise<AgentLoopCheckpoint | undefined> {
+    return this.claimPendingInteraction(runId, interactionId, "approval", callId);
+  }
+
+  async claimPendingUserInput(runId: string, interactionId: string): Promise<AgentLoopCheckpoint | undefined> {
+    return this.claimPendingInteraction(runId, interactionId, "user_input");
+  }
+
+  private async claimPendingInteraction(runId: string, interactionId: string, interactionType: "approval" | "user_input", callId?: string): Promise<AgentLoopCheckpoint | undefined> {
+    return measure("agent.interaction.claim", { runId, interactionId, interactionType, ...(callId ? { callId } : {}), operation: "rpc", rpc: "claim_agent_loop_interaction" }, async () => {
+      const result = await this.client.rpc("claim_agent_loop_interaction", { p_run_id: runId, p_interaction_id: interactionId, p_interaction_type: interactionType, p_call_id: callId ?? null });
       if (result.error) {
-        if (result.error.message.includes("APPROVAL_ALREADY_CLAIMED")) return undefined;
-        throw new Error(`Unable to claim agent approval: ${result.error.message}`);
+        if (result.error.message.includes("INTERACTION_ALREADY_CLAIMED")) return undefined;
+        if (result.error.message.includes("INTERACTION_MISMATCH")) {
+          throw new Error(
+            interactionType === "approval"
+              ? "APPROVAL_INTERACTION_MISMATCH"
+              : "USER_INPUT_INTERACTION_MISMATCH"
+          );
+        }
+        throw new Error(`Unable to claim agent interaction: ${result.error.message}`);
       }
       return (result.data ?? undefined) as AgentLoopCheckpoint | undefined;
     });

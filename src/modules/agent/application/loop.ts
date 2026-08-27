@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { compactAgentMessages, DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY, type AgentContextCompactionPolicy } from "./context-compaction";
 import { createAgentEvent, type AgentEvent, type AgentEventPayload } from "./events";
+import type { AgentRuntimePendingInteraction } from "../domain/model";
 
 export type AgentLoopMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -50,12 +51,8 @@ export type AgentLoopCheckpoint = {
   messages: AgentLoopMessage[];
   iterations: number;
   toolCallCount: number;
-  pendingApproval?: { callId: string; name: string; input: unknown };
-  /** A model question that durably suspended this conversation.  This is
-   * intentionally distinct from pendingApproval: answering it is a normal
-   * user turn, while an approval resolves a side effect boundary. */
-  pendingUserQuestion?: { text: string };
-  status: "running" | "awaiting_user" | "completed" | "failed" | "cancelled";
+  pendingInteraction?: AgentRuntimePendingInteraction;
+  status: "running" | "awaiting_approval" | "awaiting_user" | "completed" | "failed" | "cancelled";
   finalText?: string;
   permissionMode?: AgentPermissionMode;
   /** Durable, user-visible execution trace. Kept bounded by the runner. */
@@ -69,12 +66,14 @@ export type AgentLoopStore = {
   appendEvents?(runId: string, events: readonly AgentEvent[]): Promise<void>;
   /** Persist only user-visible conversation semantics, never tool transcripts. */
   appendAssistantMessage?(runId: string, message: { id: string; text: string }): Promise<void>;
+  appendUserMessage?(runId: string, message: { id: string; text: string }): Promise<void>;
   /** Durable result for a side effect, keyed by runId:callId. */
   loadEffectReceipt?(runId: string, idempotencyKey: string): Promise<AgentEffectReceipt | undefined>;
   saveEffectReceipt?(runId: string, receipt: AgentEffectReceipt): Promise<AgentEffectReceipt>;
   /** Refresh the server-side lease while a provider/tool call is in flight. */
   heartbeat?(runId: string): Promise<boolean>;
-  claimPendingApproval?(runId: string, callId: string): Promise<AgentLoopCheckpoint | undefined>;
+  claimPendingApproval?(runId: string, interactionId: string, callId: string): Promise<AgentLoopCheckpoint | undefined>;
+  claimPendingUserInput?(runId: string, interactionId: string): Promise<AgentLoopCheckpoint | undefined>;
   markCancelled?(runId: string): Promise<void>;
 };
 
@@ -151,13 +150,17 @@ export class AgentLoopRunner {
     private readonly onEngineeringEvent?: (event: AgentEngineeringEvent) => void,
   ) {}
 
-  private observe(runId: string, event: AgentEvent) {
+  private observe(runId: string, event: AgentEvent, permissionMode?: AgentPermissionMode) {
     if (!this.onEngineeringEvent || event.type === "model.delta" || event.type === "assistant.message") return;
     const metadata: Record<string, unknown> = { runId };
     if ("callId" in event) metadata.callId = event.callId;
     if ("name" in event) metadata.toolName = event.name;
     if ("durationMs" in event && event.durationMs !== undefined) metadata.durationMs = event.durationMs;
     if (event.type === "approval.resolved") metadata.decision = event.decision;
+    if (event.type === "tool.started" || event.type === "approval.required" || event.type === "approval.resolved") {
+      metadata.permissionMode = permissionMode;
+      metadata.approvalMode = permissionMode === "full" ? "automatic" : "manual";
+    }
     this.onEngineeringEvent({ event: `agent.${event.type}`, metadata });
   }
 
@@ -174,15 +177,16 @@ export class AgentLoopRunner {
     return this.runWithPermission(runId, userText, "default", signal);
   }
 
-  async runWithPermission(runId: string, userText: string, permissionMode: AgentPermissionMode, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void, clientMessageId?: string): Promise<AgentLoopResult> {
+  async runWithPermission(runId: string, userText: string, permissionMode: AgentPermissionMode, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void, clientMessageId?: string, interactionId?: string): Promise<AgentLoopResult> {
     const current = await this.store.load(runId);
-    const checkpoint: AgentLoopCheckpoint = current ?? {
+    let checkpoint: AgentLoopCheckpoint = current ?? {
       messages: [],
       iterations: 0,
       toolCallCount: 0,
       status: "running",
       permissionMode,
     };
+    if (userText.trim() && interactionId && !checkpoint.pendingInteraction) throw new Error("USER_INPUT_ALREADY_CLAIMED");
     // Older checkpoints may contain an unbounded region listing or tool
     // payload. Compact those messages before sending them back to a provider;
     // this keeps continuation requests reliable without changing the durable
@@ -193,11 +197,23 @@ export class AgentLoopRunner {
     // A pending side effect is a hard interaction boundary. Check it before
     // changing permission, counters, or appending a new turn; a normal user
     // request must not mutate the approval checkpoint.
-    if (userText.trim() && checkpoint.pendingApproval) {
+    if (userText.trim() && checkpoint.pendingInteraction?.type === "approval") {
       return {
         checkpoint,
         events: [createAgentEvent(runId, { type: "assistant.message", text: "当前有一项文档操作等待确认，请先批准或拒绝后再继续。" })],
       };
+    }
+    if (!userText.trim() && checkpoint.pendingInteraction) return { checkpoint, events: [] };
+    if (userText.trim() && checkpoint.pendingInteraction?.type === "user_input") {
+      if (!interactionId || interactionId !== checkpoint.pendingInteraction.interactionId) throw new Error("USER_INPUT_INTERACTION_MISMATCH");
+      const claimed = this.store.claimPendingUserInput
+        ? await this.store.claimPendingUserInput(runId, interactionId)
+        : checkpoint;
+      if (!claimed) throw new Error("USER_INPUT_ALREADY_CLAIMED");
+      checkpoint = claimed;
+      checkpoint.pendingInteraction = undefined;
+      checkpoint.status = "running";
+      await this.store.appendUserMessage?.(runId, { id: clientMessageId ?? crypto.randomUUID(), text: userText });
     }
     // Permission is selected per user turn. A resumed approval keeps the mode
     // persisted in its checkpoint, while a new turn may intentionally switch
@@ -222,7 +238,6 @@ export class AgentLoopRunner {
     if (userText.trim()) {
       // An answer to ask_user continues the same checkpoint and therefore
       // carries the question's preceding context into the next model call.
-      checkpoint.pendingUserQuestion = undefined;
       checkpoint.messages.push({ role: "user", content: userText });
     }
     checkpoint.status = "running";
@@ -236,7 +251,7 @@ export class AgentLoopRunner {
           ? { ...timestamped, output: summarizeTraceValue(timestamped.output) } as AgentEvent
           : timestamped;
       events.push(traceEvent);
-      this.observe(runId, traceEvent);
+      this.observe(runId, traceEvent, checkpoint.permissionMode);
       checkpoint.trace = [...(checkpoint.trace ?? []), traceEvent].slice(-200);
       void this.store.appendEvents?.(runId, [traceEvent]).catch(() => undefined);
       if (traceEvent.type === "assistant.message" && traceEvent.text) {
@@ -316,7 +331,7 @@ export class AgentLoopRunner {
       }
       if (decision.kind === "ask_user") {
         checkpoint.status = "awaiting_user";
-        checkpoint.pendingUserQuestion = { text: decision.text };
+        checkpoint.pendingInteraction = { interactionId: crypto.randomUUID(), type: "user_input", question: decision.text };
         checkpoint.messages.push({ role: "assistant", content: decision.text });
         emit({ type: "assistant.message", text: decision.text });
         await this.store.save(runId, checkpoint);
@@ -357,9 +372,10 @@ export class AgentLoopRunner {
           continue;
         }
         if (tool.requiresApproval && checkpoint.permissionMode !== "full") {
-          checkpoint.pendingApproval = { callId: call.id, name: call.name, input };
-          checkpoint.status = "awaiting_user";
-          const approvalEvent = emit({ type: "approval.required", callId: call.id, name: call.name, input }, false);
+          const interactionId = crypto.randomUUID();
+          checkpoint.pendingInteraction = { interactionId, type: "approval", callId: call.id, toolName: call.name, input };
+          checkpoint.status = "awaiting_approval";
+          const approvalEvent = emit({ type: "approval.required", interactionId, callId: call.id, name: call.name, input }, false);
           await this.store.save(runId, checkpoint);
           onEvent?.(approvalEvent);
           return { checkpoint, events };
@@ -413,23 +429,25 @@ export class AgentLoopRunner {
     return { checkpoint, events };
   }
 
-  async resume(runId: string, approval: "approved" | "rejected", signal?: AbortSignal, onEvent?: (event: AgentEvent) => void): Promise<AgentLoopResult> {
+  async resume(runId: string, approval: "approved" | "rejected", interactionId: string, callId: string, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void): Promise<AgentLoopResult> {
     const current = await this.store.load(runId);
-    const checkpoint = current?.pendingApproval && this.store.claimPendingApproval
-      ? await this.store.claimPendingApproval(runId, current.pendingApproval.callId)
+    const pending = current?.pendingInteraction?.type === "approval" ? current.pendingInteraction : undefined;
+    if (!pending) throw new Error("No pending agent approval");
+    if (pending.interactionId !== interactionId || pending.callId !== callId) throw new Error("APPROVAL_INTERACTION_MISMATCH");
+    const checkpoint = this.store.claimPendingApproval
+      ? await this.store.claimPendingApproval(runId, interactionId, callId)
       : current;
-    if (!checkpoint?.pendingApproval) throw new Error("No pending agent approval");
-    const pending = checkpoint.pendingApproval;
-    checkpoint.pendingApproval = undefined;
+    if (!checkpoint) throw new Error("APPROVAL_ALREADY_CLAIMED");
+    checkpoint.pendingInteraction = undefined;
     checkpoint.status = "running";
-    const tool = this.tools.find((candidate) => candidate.name === pending.name);
-    if (!tool) throw new Error(`Unknown agent tool: ${pending.name}`);
+    const tool = this.tools.find((candidate) => candidate.name === pending.toolName);
+    if (!tool) throw new Error(`Unknown agent tool: ${pending.toolName}`);
     const input = tool.inputSchema.parse(pending.input);
     const events: AgentEvent[] = [];
     const emit = (event: AgentEventPayload, notify = true) => {
       const traceEvent = createAgentEvent(runId, event);
       events.push(traceEvent);
-      this.observe(runId, traceEvent);
+      this.observe(runId, traceEvent, checkpoint.permissionMode);
       checkpoint.trace = [...(checkpoint.trace ?? []), traceEvent].slice(-200);
       void this.store.appendEvents?.(runId, [traceEvent]).catch(() => undefined);
       if (traceEvent.type === "assistant.message" && traceEvent.text) {
@@ -438,19 +456,19 @@ export class AgentLoopRunner {
       if (notify) onEvent?.(traceEvent);
       return traceEvent;
     };
-    const approvalEvent = emit({ type: "approval.resolved", callId: pending.callId, name: pending.name, decision: approval }, false);
+    const approvalEvent = emit({ type: "approval.resolved", interactionId: pending.interactionId, callId: pending.callId, name: pending.toolName, decision: approval }, false);
     await this.store.save(runId, checkpoint);
     onEvent?.(approvalEvent);
     if (approval === "approved") {
       const idempotencyKey = `${runId}:${pending.callId}`;
       const existingReceipt = await this.store.loadEffectReceipt?.(runId, idempotencyKey);
       if (existingReceipt) {
-        checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval, output: existingReceipt.output }), toolCallId: pending.callId, toolName: pending.name });
-        const replayedEvent = emit({ type: "tool.completed", callId: pending.callId, name: pending.name, output: summarizeTraceValue(existingReceipt.output) }, false);
+        checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval, output: existingReceipt.output }), toolCallId: pending.callId, toolName: pending.toolName });
+        const replayedEvent = emit({ type: "tool.completed", callId: pending.callId, name: pending.toolName, output: summarizeTraceValue(existingReceipt.output) }, false);
         await this.store.save(runId, checkpoint);
         onEvent?.(replayedEvent);
       } else {
-      const startedEvent = emit({ type: "tool.started", callId: pending.callId, name: pending.name, input: summarizeTraceValue(input) }, false);
+      const startedEvent = emit({ type: "tool.started", callId: pending.callId, name: pending.toolName, input: summarizeTraceValue(input) }, false);
       // Persist the approval claim and the operation start before side effects.
       // If the request is interrupted, the trace tells us exactly whether a
       // write was started, completed, or needs safe investigation.
@@ -460,23 +478,23 @@ export class AgentLoopRunner {
       try {
         const output = await this.withLeaseHeartbeat(runId, () => tool.execute(input, { runId, callId: pending.callId, idempotencyKey, attempt: checkpoint.toolCallCount, signal }));
         const receipt = this.store.saveEffectReceipt
-          ? await this.store.saveEffectReceipt(runId, { idempotencyKey, callId: pending.callId, toolName: pending.name, output, completedAt: new Date().toISOString() })
-          : { idempotencyKey, callId: pending.callId, toolName: pending.name, output, completedAt: new Date().toISOString() };
-        checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval, output: receipt.output }), toolCallId: pending.callId, toolName: pending.name });
-        const completedEvent = emit({ type: "tool.completed", callId: pending.callId, name: pending.name, output: summarizeTraceValue({ ...((receipt.output && typeof receipt.output === "object") ? receipt.output : { value: receipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
+          ? await this.store.saveEffectReceipt(runId, { idempotencyKey, callId: pending.callId, toolName: pending.toolName, output, completedAt: new Date().toISOString() })
+          : { idempotencyKey, callId: pending.callId, toolName: pending.toolName, output, completedAt: new Date().toISOString() };
+        checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval, output: receipt.output }), toolCallId: pending.callId, toolName: pending.toolName });
+        const completedEvent = emit({ type: "tool.completed", callId: pending.callId, name: pending.toolName, output: summarizeTraceValue({ ...((receipt.output && typeof receipt.output === "object") ? receipt.output : { value: receipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
         await this.store.save(runId, checkpoint);
         onEvent?.(completedEvent);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Tool execution failed";
-        checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval, error: message }), toolCallId: pending.callId, toolName: pending.name });
-        const failedEvent = emit({ type: "tool.failed", callId: pending.callId, name: pending.name, error: message, durationMs: Date.now() - toolStartedAt }, false);
+        checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval, error: message }), toolCallId: pending.callId, toolName: pending.toolName });
+        const failedEvent = emit({ type: "tool.failed", callId: pending.callId, name: pending.toolName, error: message, durationMs: Date.now() - toolStartedAt }, false);
         await this.store.save(runId, checkpoint);
         onEvent?.(failedEvent);
       }
       }
     } else {
-      checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: "rejected", reason: "The user rejected this action." }), toolCallId: pending.callId, toolName: pending.name });
-      const rejectedEvent = emit({ type: "tool.failed", callId: pending.callId, name: pending.name, error: "User rejected the tool call." }, false);
+      checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: "rejected", reason: "The user rejected this action." }), toolCallId: pending.callId, toolName: pending.toolName });
+      const rejectedEvent = emit({ type: "tool.failed", callId: pending.callId, name: pending.toolName, error: "User rejected the tool call." }, false);
       await this.store.save(runId, checkpoint);
       onEvent?.(rejectedEvent);
     }

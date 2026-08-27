@@ -14,7 +14,7 @@ Loop checkpoint 暂存于 `agent_runs.state.loopCheckpoint`，并采用乐观锁
 数据库只原子分配 durable `sequence`。终态事件使用 `turn.completed`、`turn.failed`、
 `turn.cancelled`，协议不引入重复的 `turnId`。
 
-写入工具默认需要审批；“完全批准”是当前用户、当前任务和当前文档内的显式自动执行授权，而非绕过 revision、校验或不可变版本。多处确定的文字改动用 `apply_text_changes` 先完整校验、再一次 mutate/validate/commit，保证全成或全不成。
+写入工具声明 `requiresApproval` 表示敏感能力，不表示每次都必须暂停。Permission Policy 在当前用户回合内决定：`default` 产生人工 approval interrupt，`full` 自动批准并继续执行；两者都不能绕过 revision、校验、Effect Receipt、取消竞争或不可变版本。Runtime 的 `pendingInteraction` 统一承载 approval 与 user input，`final_review` 仍属于产品层的独立状态。多处确定的文字改动用 `apply_text_changes` 先完整校验、再一次 mutate/validate/commit，保证全成或全不成。
 
 Agent 面板以持久化事件为事实源组成单一 Execution Timeline。普通执行和审批恢复都通过 SSE 发送公开文本、工具生命周期、审批请求/解决结果和终态；模型公开文本在没有工具边界时渲染为最终消息，工具前后的文本保留为阶段说明。工具输入/输出默认折叠，并在展示层做截断和敏感字段脱敏；模型的隐藏推理不会进入产品界面。
 

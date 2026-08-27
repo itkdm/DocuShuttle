@@ -10,6 +10,24 @@ class MemoryStore {
   async load() { return this.value; }
   async save(_runId: string, checkpoint: AgentLoopCheckpoint) { this.saves += 1; this.value = structuredClone(checkpoint); }
   async heartbeat() { this.heartbeats += 1; return true; }
+  async claimPendingApproval(_runId: string, interactionId: string, callId: string) {
+    const checkpoint = this.value;
+    if (checkpoint?.pendingInteraction?.type !== "approval" || checkpoint.pendingInteraction.interactionId !== interactionId || checkpoint.pendingInteraction.callId !== callId) return undefined;
+    const claimed = structuredClone(checkpoint);
+    claimed.pendingInteraction = undefined;
+    claimed.status = "running";
+    this.value = claimed;
+    return claimed;
+  }
+  async claimPendingUserInput(_runId: string, interactionId: string) {
+    const checkpoint = this.value;
+    if (checkpoint?.pendingInteraction?.type !== "user_input" || checkpoint.pendingInteraction.interactionId !== interactionId) return undefined;
+    const claimed = structuredClone(checkpoint);
+    claimed.pendingInteraction = undefined;
+    claimed.status = "running";
+    this.value = claimed;
+    return claimed;
+  }
 }
 
 const inspectTool: AgentTool = {
@@ -102,12 +120,13 @@ describe("AgentLoopRunner", () => {
 
   it("pauses before an approval-required tool and resumes from its checkpoint", async () => {
     const store = new MemoryStore();
+    let executions = 0;
     const applyTool: AgentTool = {
       name: "apply_change",
       description: "Apply a document change.",
       inputSchema: z.object({ nodeId: z.string() }),
       requiresApproval: true,
-      async execute() { return { revision: "rev-2" }; },
+      async execute() { executions += 1; return { revision: "rev-2" }; },
     };
     const decisions = [
       { kind: "tool_calls" as const, calls: [{ id: "call-2", name: "apply_change", input: { nodeId: "p-1" } }] },
@@ -116,11 +135,15 @@ describe("AgentLoopRunner", () => {
     const model: AgentModelPort = { decide: async () => decisions.shift()! };
     const runner = new AgentLoopRunner(model, store, [applyTool]);
     const paused = await runner.run("run-2", "修改正文");
-    expect(paused.checkpoint.status).toBe("awaiting_user");
+    expect(paused.checkpoint.status).toBe("awaiting_approval");
     expect(paused.events.some((event) => event.type === "approval.required")).toBe(true);
+    const pending = paused.checkpoint.pendingInteraction;
+    expect(pending?.type).toBe("approval");
+    expect(executions).toBe(0);
     const streamed: string[] = [];
-    const resumed = await runner.resume("run-2", "approved", undefined, (event) => streamed.push(event.type));
+    const resumed = await runner.resume("run-2", "approved", pending!.interactionId, pending?.type === "approval" ? pending.callId : "", undefined, (event) => streamed.push(event.type));
     expect(resumed.checkpoint.status).toBe("completed");
+    expect(executions).toBe(1);
     expect(resumed.checkpoint.messages.some((message) => message.toolName === "apply_change" && message.content.includes("revision"))).toBe(true);
     expect(streamed).toContain("assistant.message");
   });
@@ -138,8 +161,9 @@ describe("AgentLoopRunner", () => {
       : { kind: "tool_calls", calls: [{ id: "call-full", name: "apply_change", input: { nodeId: "p-1" } }] } };
     const result = await new AgentLoopRunner(model, new MemoryStore(), [applyTool]).runWithPermission("run-full", "直接执行修改", "full");
     expect(result.checkpoint.status).toBe("completed");
-    expect(result.checkpoint.pendingApproval).toBeUndefined();
+    expect(result.checkpoint.pendingInteraction).toBeUndefined();
     expect(result.events.some((event) => event.type === "tool.completed")).toBe(true);
+    expect(result.events.some((event) => event.type === "approval.required")).toBe(false);
   });
 
   it("records tool failures as tool messages so the model can recover", async () => {
@@ -261,12 +285,14 @@ describe("AgentLoopRunner", () => {
         { id: "unreached-1", name: "read_context", input: { query: "later" } },
       ] } };
     const paused = await new AgentLoopRunner(model, store, [read, apply]).run("run-approval-boundary", "修改文档");
-    expect(paused.checkpoint.status).toBe("awaiting_user");
-    expect(paused.checkpoint.pendingApproval?.callId).toBe("apply-1");
+    expect(paused.checkpoint.status).toBe("awaiting_approval");
+    expect(paused.checkpoint.pendingInteraction?.type).toBe("approval");
+    expect(paused.checkpoint.pendingInteraction?.type === "approval" && paused.checkpoint.pendingInteraction.callId).toBe("apply-1");
     const assistantCalls = paused.checkpoint.messages.flatMap((message) => message.toolCalls ?? []);
     expect(assistantCalls.map((call) => call.id)).toEqual(["read-1", "apply-1"]);
     expect(assistantCalls.some((call) => call.id === "unreached-1")).toBe(false);
-    const resumed = await new AgentLoopRunner(model, store, [read, apply]).resume("run-approval-boundary", "approved");
+    const pending = paused.checkpoint.pendingInteraction;
+    const resumed = await new AgentLoopRunner(model, store, [read, apply]).resume("run-approval-boundary", "approved", pending!.interactionId, pending?.type === "approval" ? pending.callId : "");
     expect(resumed.checkpoint.status).toBe("completed");
   });
 
@@ -297,12 +323,49 @@ describe("AgentLoopRunner", () => {
     const result = await runner.run("run-ask", "修改实验结论");
     expect(result.checkpoint.status).toBe("awaiting_user");
     expect(result.checkpoint.finalText).toBeUndefined();
-    expect(result.checkpoint.pendingUserQuestion?.text).toContain("哪一个");
+    expect(result.checkpoint.pendingInteraction?.type).toBe("user_input");
+    expect(result.checkpoint.pendingInteraction?.type === "user_input" && result.checkpoint.pendingInteraction.question).toContain("哪一个");
     expect(result.events.some((event) => event.type === "assistant.message")).toBe(true);
-    const resumed = await runner.run("run-ask", "修改实验结论第一段");
+    const pending = result.checkpoint.pendingInteraction;
+    const resumed = await runner.runWithPermission("run-ask", "修改实验结论第一段", "default", undefined, undefined, undefined, pending!.interactionId);
     expect(resumed.checkpoint.status).toBe("completed");
-    expect(resumed.checkpoint.pendingUserQuestion).toBeUndefined();
+    expect(resumed.checkpoint.pendingInteraction).toBeUndefined();
     expect(resumed.checkpoint.finalText).toContain("第一段");
+  });
+
+  it("keeps user-input interaction available in full permission mode", async () => {
+    const runner = new AgentLoopRunner({ decide: async () => ({ kind: "ask_user", text: "请指定要修改的章节。" }) }, new MemoryStore(), []);
+    const result = await runner.runWithPermission("run-full-ask", "修改文档", "full");
+
+    expect(result.checkpoint.status).toBe("awaiting_user");
+    expect(result.checkpoint.pendingInteraction?.type).toBe("user_input");
+    expect(result.events.some((event) => event.type === "approval.required")).toBe(false);
+  });
+
+  it("rejects a response for a stale interaction identity", async () => {
+    const runner = new AgentLoopRunner({ decide: async () => ({ kind: "ask_user", text: "请补充目标。" }) }, new MemoryStore(), []);
+    const result = await runner.run("run-stale-interaction", "开始");
+
+    await expect(runner.runWithPermission("run-stale-interaction", "错误回答", "default", undefined, undefined, undefined, "00000000-0000-4000-8000-000000000000")).rejects.toThrow("USER_INPUT_INTERACTION_MISMATCH");
+    expect(result.checkpoint.pendingInteraction?.type).toBe("user_input");
+  });
+
+  it("rejects duplicate approval and user-input consumption", async () => {
+    const approvalStore = new MemoryStore();
+    const approvalTool: AgentTool = { name: "apply_change", description: "Apply", inputSchema: z.object({ nodeId: z.string() }), requiresApproval: true, async execute() { return {}; } };
+    const approvalRunner = new AgentLoopRunner({ decide: async () => ({ kind: "tool_calls", calls: [{ id: "duplicate-approval", name: "apply_change", input: { nodeId: "p-1" } }] }) }, approvalStore, [approvalTool]);
+    const approval = await approvalRunner.run("run-duplicate-approval", "修改");
+    const approvalPending = approval.checkpoint.pendingInteraction;
+    await approvalRunner.resume("run-duplicate-approval", "rejected", approvalPending!.interactionId, approvalPending?.type === "approval" ? approvalPending.callId : "");
+    await expect(approvalRunner.resume("run-duplicate-approval", "rejected", approvalPending!.interactionId, approvalPending?.type === "approval" ? approvalPending.callId : "")).rejects.toThrow("APPROVAL_INTERACTION_MISMATCH");
+
+    const userStore = new MemoryStore();
+    let userTurn = 0;
+    const userRunner = new AgentLoopRunner({ decide: async () => userTurn++ === 0 ? { kind: "ask_user", text: "请补充信息" } : { kind: "message", text: "已完成" } }, userStore, []);
+    const question = await userRunner.run("run-duplicate-user", "开始");
+    const userPending = question.checkpoint.pendingInteraction;
+    await userRunner.runWithPermission("run-duplicate-user", "回答", "default", undefined, undefined, undefined, userPending!.interactionId);
+    await expect(userRunner.runWithPermission("run-duplicate-user", "重复回答", "default", undefined, undefined, undefined, userPending!.interactionId)).rejects.toThrow("USER_INPUT_ALREADY_CLAIMED");
   });
 
   it("exposes a terminal safety-budget failure in the timeline", async () => {
@@ -322,8 +385,9 @@ describe("AgentLoopRunner", () => {
       return messages.some((message) => message.role === "tool") ? { kind: "message", text: "好的，我不会修改文档。" } : { kind: "tool_calls", calls: [{ id: "reject-1", name: "apply_change", input: { nodeId: "p-1" } }] };
     } };
     const runner = new AgentLoopRunner(model, store, [applyTool]);
-    await runner.run("run-reject", "修改正文");
-    const resumed = await runner.resume("run-reject", "rejected");
+    const first = await runner.run("run-reject", "修改正文");
+    const pending = first.checkpoint.pendingInteraction;
+    const resumed = await runner.resume("run-reject", "rejected", pending!.interactionId, pending?.type === "approval" ? pending.callId : "");
     expect(calls).toBe(2);
     expect(resumed.checkpoint.status).toBe("completed");
     expect(resumed.checkpoint.finalText).toContain("不会修改");
@@ -338,8 +402,9 @@ describe("AgentLoopRunner", () => {
     await runner.run("run-pending", "修改文档");
     const before = await store.load();
     const blocked = await runner.run("run-pending", "再做另一件事");
-    expect(blocked.checkpoint.status).toBe("awaiting_user");
-    expect(blocked.checkpoint.pendingApproval?.callId).toBe("pending-1");
+    expect(blocked.checkpoint.status).toBe("awaiting_approval");
+    expect(blocked.checkpoint.pendingInteraction?.type).toBe("approval");
+    expect(blocked.checkpoint.pendingInteraction?.type === "approval" && blocked.checkpoint.pendingInteraction.callId).toBe("pending-1");
     expect(blocked.checkpoint.finalText).toBeUndefined();
     expect(blocked.checkpoint.permissionMode).toBe(before?.permissionMode);
     expect(blocked.checkpoint.messages).toEqual(before?.messages);

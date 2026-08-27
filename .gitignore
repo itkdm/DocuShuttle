@@ -31,3 +31,6 @@ fixtures/docx-private/
 # local superseded source documents (canonical copies live under docs/)
 /纸上鸭｜产品需求文档 PRD（V0.1）.md
 /纸上鸭｜技术目标与实施约束文档 V1.md
+
+# local agent workspace data (memory, runtime state, MCP config) — not versioned
+.workbuddy/

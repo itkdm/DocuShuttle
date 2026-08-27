@@ -1,4 +1,4 @@
-import type { SourceRole, TaskRecord } from "./domain";
+import type { SourceRole, TaskRecord, TaskSourceRecord, TaskSummary } from "./domain";
 
 export interface TaskRepositoryPort {
   create(input: {
@@ -6,6 +6,13 @@ export interface TaskRepositoryPort {
     title: string;
     goal: string;
   }): Promise<TaskRecord>;
+  listByOwner(ownerUserId: string): Promise<TaskSummary[]>;
+  getWorkspace(taskId: string, ownerUserId: string): Promise<{
+    task: TaskRecord;
+    sources: TaskSourceRecord[];
+    workingDocumentId?: string;
+    latestRunId?: string;
+  } | undefined>;
   belongsToOwner(taskId: string, ownerUserId: string): Promise<boolean>;
   registerSource(input: {
     ownerUserId: string;

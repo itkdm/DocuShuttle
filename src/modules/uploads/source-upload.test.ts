@@ -14,6 +14,8 @@ const taskId = "0872a73c-d403-429c-9ca7-d0e629b36c69";
 
 const createTasks = (): TaskRepositoryPort => ({
   create: vi.fn(),
+  listByOwner: vi.fn().mockResolvedValue([]),
+  getWorkspace: vi.fn(),
   belongsToOwner: vi.fn().mockResolvedValue(true),
   registerSource: vi.fn().mockResolvedValue({ sourceFileId: "source-1", workingDocumentId: "working-1", versionId: "version-1" }),
 });
@@ -135,6 +137,33 @@ describe("complete source upload", () => {
     })).rejects.toThrow("DOCX_INSPECTION_FAILED");
     expect(tasks.registerSource).not.toHaveBeenCalled();
     expect(storage.remove).toHaveBeenCalledOnce();
+  });
+
+  it("accepts documents whose only diagnostics are unsupported but preserved constructs", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const tasks = createTasks();
+    const storage = createStorage(bytes);
+    const documents = {
+      inspect: vi.fn().mockResolvedValue({
+        ...inspection,
+        diagnostics: [
+          { severity: "warning", code: "NESTED_TABLE_UNSUPPORTED", message: "nested" },
+          { severity: "warning", code: "COMPLEX_CONTENT_UNSUPPORTED", message: "textbox" },
+        ],
+      }),
+    } as unknown as DocumentEnginePort;
+
+    await expect(new CompleteSourceUpload(tasks, storage, documents).execute({
+      ownerUserId,
+      taskId,
+      role: "template",
+      originalName: "实验报告.docx",
+      objectKey: `users/${ownerUserId}/tasks/${taskId}/sources/source.docx`,
+      expectedBytes: bytes.byteLength,
+      expectedSha256: await sha256(bytes),
+    })).resolves.toMatchObject({ sourceFileId: "source-1" });
+    expect(tasks.registerSource).toHaveBeenCalledOnce();
+    expect(storage.remove).not.toHaveBeenCalled();
   });
 });
 

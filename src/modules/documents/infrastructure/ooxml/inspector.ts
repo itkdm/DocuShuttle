@@ -82,7 +82,7 @@ async function indexCells(
   revision: string,
 ): Promise<IndexedCell[]> {
   const result: IndexedCell[] = [];
-  const tables = findElementRanges(xml, "w:tbl");
+  const tables = findElementRanges(xml, "w:tbl").filter((table) => !/<w:tbl\b/.test(table.xml.slice(table.openEnd - table.start)));
   for (let tableIndex = 0; tableIndex < tables.length; tableIndex += 1) {
     const table = tables[tableIndex];
     const rows = findElementRanges(table.xml, "w:tr");
@@ -220,7 +220,7 @@ function unsupportedConstructDiagnostics(entry: string, xml: string): DocumentDi
   const diagnostics: DocumentDiagnostic[] = constructs
     .filter(([pattern]) => pattern.test(xml))
     .map(([, code, message]) => ({
-      severity: code === "COMPLEX_CONTENT_UNSUPPORTED" ? "error" as const : "warning" as const,
+      severity: "warning" as const,
       code,
       message,
       entry,
@@ -255,9 +255,9 @@ function unsupportedConstructDiagnostics(entry: string, xml: string): DocumentDi
       tableDepth += 1;
       if (tableDepth > 1) {
         diagnostics.push({
-          severity: "error",
+          severity: "warning",
           code: "NESTED_TABLE_UNSUPPORTED",
-          message: "Nested tables cannot be safely addressed by the V1 kernel; mutation is refused.",
+          message: "Nested tables are preserved. V1 only addresses tables that do not contain another table.",
           entry,
         });
         break;

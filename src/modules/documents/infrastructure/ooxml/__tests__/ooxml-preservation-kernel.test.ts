@@ -421,4 +421,42 @@ describe("OoxmlPreservationKernel", () => {
     expect(noOp.changedEntries).toEqual([]);
     expect(noOp.diagnostics).toContainEqual(expect.objectContaining({ code: "NO_OP_PRESERVED" }));
   });
+
+  it("opens nested tables and text boxes as warnings without blocking safe paragraph writes", async () => {
+    const bytes = await createDocx({
+      "word/document.xml": documentXml.replace(
+        "</w:body>",
+        `<w:tbl><w:tr><w:tc><w:p w14:paraId="NESTED01"><w:r><w:t>outer</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p w14:paraId="NESTED02"><w:r><w:t>inner</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:tc></w:tr></w:tbl><w:p><w:r><w:txbxContent><w:p><w:r><w:t>boxed</w:t></w:r></w:p></w:txbxContent></w:r></w:p></w:body>`,
+      ),
+    });
+    const kernel = new OoxmlPreservationKernel();
+    const inspected = await kernel.inspect(bytes);
+    expect(inspected.diagnostics).toContainEqual(expect.objectContaining({ code: "NESTED_TABLE_UNSUPPORTED", severity: "warning" }));
+    expect(inspected.diagnostics).toContainEqual(expect.objectContaining({ code: "COMPLEX_CONTENT_UNSUPPORTED", severity: "warning" }));
+    expect(inspected.diagnostics.filter(({ severity }) => severity === "error")).toEqual([]);
+
+    const hello = inspected.paragraphs.find((paragraph) => paragraph.text.includes("Hello duck"));
+    expect(hello).toBeDefined();
+    const mutated = await kernel.mutate(bytes, {
+      expectedRevision: inspected.manifest.revision,
+      operations: [{
+        kind: "replace-text",
+        address: hello!.address,
+        expectedText: "duck",
+        replacement: "PaperDuck",
+      }],
+    });
+    const zip = await JSZip.loadAsync(mutated.bytes);
+    expect(await zip.file("word/document.xml")?.async("string")).toContain("Hello PaperDuck");
+  });
+
+  it("ignores trailing bytes after a valid ZIP end record", async () => {
+    const packed = await createDocx();
+    const trailing = new Uint8Array(packed.byteLength + 12);
+    trailing.set(packed);
+    const kernel = new OoxmlPreservationKernel();
+    const inspected = await kernel.inspect(trailing);
+    expect(inspected.paragraphs.some((paragraph) => paragraph.text === "Hello duck")).toBe(true);
+    expect(inspected.diagnostics.filter(({ severity }) => severity === "error")).toEqual([]);
+  });
 });

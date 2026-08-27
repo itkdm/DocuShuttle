@@ -1,20 +1,52 @@
-import { ChevronDown, FileCheck2, FileText, ImageIcon, PanelLeftClose, Table2 } from "lucide-react";
+"use client";
+
+import { ChevronDown, FileCheck2, FileText, ImageIcon, PanelLeftClose, Plus, Table2 } from "lucide-react";
+import { useState } from "react";
+import type { TaskSummary } from "@/modules/tasks/domain";
+import { TaskList } from "./task-list";
 import type { UploadAsset } from "./types";
 
 interface OutlinePanelProps {
   assets: UploadAsset[];
   onCollapse: () => void;
   onUpload: (kind: UploadAsset["kind"], file?: File) => void;
+  documentReady?: boolean;
+  paragraphCount?: number;
+  imageCount?: number;
+  tableCellCount?: number;
+  tasks?: readonly TaskSummary[];
+  activeTaskId?: string;
+  onSelectTask?: (taskId: string) => void;
+  onCreateTask?: () => void;
 }
 
-interface OutlinePanelPropsExtended extends OutlinePanelProps { documentReady?: boolean; paragraphCount?: number; imageCount?: number; tableCellCount?: number; }
-export function OutlinePanel({ assets, onCollapse, onUpload, documentReady = false, paragraphCount = 0, imageCount = 0, tableCellCount = 0 }: OutlinePanelPropsExtended) {
+export function OutlinePanel({
+  assets,
+  onCollapse,
+  onUpload,
+  documentReady = false,
+  paragraphCount = 0,
+  imageCount = 0,
+  tableCellCount = 0,
+  tasks = [],
+  activeTaskId,
+  onSelectTask,
+  onCreateTask,
+}: OutlinePanelProps) {
+  const inTask = Boolean(activeTaskId);
+  const [open, setOpen] = useState({ taskId: activeTaskId, tasks: !inTask, parse: inTask });
+  if (open.taskId !== activeTaskId) {
+    setOpen({ taskId: activeTaskId, tasks: !inTask, parse: inTask });
+  }
+  const tasksOpen = open.tasks;
+  const parseOpen = open.parse;
   const getAsset = (kind: UploadAsset["kind"]) => assets.find((item) => item.kind === kind);
+
   return (
-    <aside className="outline-panel" aria-label="文档结构">
+    <aside className="outline-panel" aria-label="工作区">
       <div className="panel-heading">
-        <div><span className="eyebrow">工作区</span><h2>文档结构</h2></div>
-        <button className="icon-button" onClick={onCollapse} aria-label="收起文档结构"><PanelLeftClose size={17} /></button>
+        <div><span className="eyebrow">工作区</span><h2>当前任务</h2></div>
+        <button className="icon-button" onClick={onCollapse} aria-label="收起工作区"><PanelLeftClose size={17} /></button>
       </div>
       <div className="source-stack" aria-label="源文档">
         {(["template", "example"] as const).map((kind) => {
@@ -30,11 +62,59 @@ export function OutlinePanel({ assets, onCollapse, onUpload, documentReady = fal
           );
         })}
       </div>
-      <nav className="outline-nav" aria-label="页面内导航">
-        <button className="outline-section" aria-expanded="true"><span>{documentReady ? "文档概览" : "等待文档解析"}</span><ChevronDown size={15} /></button>
-        <ol>{documentReady ? <><li><div className="outline-node"><FileText size={15} /><span>正文段落</span><small>{paragraphCount} 个</small></div></li><li><div className="outline-node"><Table2 size={15} /><span>表格单元格</span><small>{tableCellCount} 个</small></div></li><li><div className="outline-node"><ImageIcon size={15} /><span>图片节点</span><small>{imageCount} 个</small></div></li></> : <li><div className="outline-empty">上传 DOCX 后，这里会显示真实解析结果。</div></li>}</ol>
-      </nav>
-      <div className="outline-legend"><span><i className="legend-dot generated" /> 来自当前 DOCX</span><span><i className="legend-dot locked" /> 仅显示已解析结构</span></div>
+      {onSelectTask && onCreateTask && (
+        <section className={`workspace-section ${tasksOpen ? "is-open" : ""}`} aria-label="任务会话">
+          <div className="workspace-section-bar">
+            <button type="button" className="workspace-section-toggle" aria-expanded={tasksOpen} onClick={() => setOpen((current) => ({ ...current, tasks: !current.tasks }))}>
+              <span>
+                <small className="eyebrow">历史</small>
+                任务会话
+              </span>
+              <ChevronDown size={15} className={tasksOpen ? "is-open" : ""} />
+            </button>
+            <button className="task-new" type="button" onClick={onCreateTask}>
+              <Plus size={14} />
+              新任务
+            </button>
+          </div>
+          {tasksOpen && (
+            <div className="workspace-section-body">
+              <TaskList tasks={tasks} activeTaskId={activeTaskId} onSelectTask={onSelectTask} onCreateTask={onCreateTask} heading={false} />
+            </div>
+          )}
+        </section>
+      )}
+      <section className={`workspace-section ${parseOpen ? "is-open" : ""}`} aria-label="文档解析">
+        <button type="button" className="workspace-section-toggle" aria-expanded={parseOpen} onClick={() => setOpen((current) => ({ ...current, parse: !current.parse }))}>
+          <span>
+            <small className="eyebrow">结构</small>
+            文档解析
+          </span>
+          <ChevronDown size={15} className={parseOpen ? "is-open" : ""} />
+        </button>
+        {parseOpen && (
+          <div className="workspace-section-body">
+            <ul className="outline-stats">
+              <li>
+                <span className="outline-stat-icon"><FileText size={15} /></span>
+                <span className="outline-stat-copy"><strong>段落</strong><small>正文与标题</small></span>
+                <b>{documentReady ? paragraphCount : "—"}</b>
+              </li>
+              <li>
+                <span className="outline-stat-icon"><Table2 size={15} /></span>
+                <span className="outline-stat-copy"><strong>表格</strong><small>单元格</small></span>
+                <b>{documentReady ? tableCellCount : "—"}</b>
+              </li>
+              <li>
+                <span className="outline-stat-icon"><ImageIcon size={15} /></span>
+                <span className="outline-stat-copy"><strong>图片</strong><small>可替换节点</small></span>
+                <b>{documentReady ? imageCount : "—"}</b>
+              </li>
+            </ul>
+            <p className="outline-hint">{documentReady ? "以上数字来自当前打开的文档。" : inTask ? "这份任务还没有可解析的文档。" : "打开一份任务后，这里会列出它的段落、表格和图片。"}</p>
+          </div>
+        )}
+      </section>
     </aside>
   );
 }

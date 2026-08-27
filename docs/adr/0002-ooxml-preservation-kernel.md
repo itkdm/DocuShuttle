@@ -52,3 +52,7 @@ HITL 使用应用层 Proposal/Decision 与不可变版本实现，不依赖 Word
 ## SuperDoc 重评条件
 
 至少需要：平台包完整发布；4/4 跨保存修订决定通过；含真实脚注的 no-op 不丢 part；两轮真实 fixture、Office/WPS 和 Vercel 验证通过。即使重评也先作为可替换 adapter，不自动成为权威导出内核。
+
+## 覆盖率后续
+
+打开与写入已拆开；嵌套表、文本框等能力缺口与商业化路径见 [OOXML 内核覆盖率](../architecture/ooxml-kernel-coverage.md)。保真决策不变：未知 part 原样保留，覆盖率靠加深解析，不靠 HTML 往返或放宽未触及 entry 校验。

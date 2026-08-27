@@ -3,7 +3,6 @@ import JSZip from "jszip";
 import type { DocumentEnginePort } from "../../application/document-engine-port";
 import {
   DocumentKernelError,
-  type DocumentDiagnostic,
   type DocumentInspection,
   type DocumentManifest,
   type DocumentNodeManifest,
@@ -19,6 +18,7 @@ import {
   type IndexedImage,
   type IndexedParagraph,
 } from "./inspector";
+import { blockingPackageErrors } from "./diagnostic-policy";
 import { loadPackage, type LoadedPackage } from "./package-model";
 import { assertSupportedImage } from "./media";
 import {
@@ -34,10 +34,6 @@ interface EntryPatch {
   end: number;
   replacement: string;
   operation: DocumentMutation;
-}
-
-function hasErrors(diagnostics: readonly DocumentDiagnostic[]): boolean {
-  return diagnostics.some((diagnostic) => diagnostic.severity === "error");
 }
 
 function inspection(
@@ -293,11 +289,12 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
     const loaded = await loadPackage(bytes);
     const indexed = await indexDocument(loaded);
     const sourceDiagnostics = [...loaded.diagnostics, ...indexed.diagnostics];
-    if (hasErrors(sourceDiagnostics)) {
+    const blocking = blockingPackageErrors(sourceDiagnostics);
+    if (blocking.length > 0) {
       throw new DocumentKernelError(
         "SOURCE_PACKAGE_INVALID",
         "Refusing to mutate an invalid OOXML package.",
-        sourceDiagnostics,
+        blocking,
       );
     }
     if (loaded.manifest.revision !== request.expectedRevision) {
@@ -415,11 +412,12 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
     });
     const changedEntries = new Set([...stagedText.keys(), ...stagedBinary.keys()]);
     const validated = await loadPackage(output);
-    if (hasErrors(validated.diagnostics)) {
+    const blockingOutput = blockingPackageErrors(validated.diagnostics);
+    if (blockingOutput.length > 0) {
       throw new DocumentKernelError(
         "OUTPUT_PACKAGE_INVALID",
         "Mutation produced an invalid OOXML package.",
-        validated.diagnostics,
+        blockingOutput,
       );
     }
     await assertUntouchedEntries(loaded, validated, changedEntries);

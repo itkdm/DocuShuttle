@@ -1,4 +1,5 @@
 import type { DocumentEnginePort } from "@/modules/documents";
+import { blockingPackageErrors } from "@/modules/documents/infrastructure/ooxml/diagnostic-policy";
 import { sha256 } from "@/modules/documents/infrastructure/ooxml/hash";
 import { assertTaskObjectKey, buildTaskObjectKey } from "@/modules/storage/object-key";
 import type { PrivateObjectStoragePort } from "@/modules/storage/ports";
@@ -44,8 +45,11 @@ export class CompleteSourceUpload {
     let manifestObjectKey: string | undefined;
     try {
       const inspection = await this.documents.inspect(bytes);
-      if (inspection.diagnostics.some(({ severity }) => severity === "error")) {
-        throw new Error("DOCX_INSPECTION_FAILED");
+      const blocking = blockingPackageErrors(inspection.diagnostics);
+      if (blocking.length > 0) {
+        const error = new Error(`DOCX_INSPECTION_FAILED: ${blocking.map((item) => item.code).join(", ")}`);
+        error.name = "DOCX_INSPECTION_FAILED";
+        throw error;
       }
       manifestObjectKey = buildTaskObjectKey({
         userId: input.ownerUserId,

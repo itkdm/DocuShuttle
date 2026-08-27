@@ -8,6 +8,8 @@ import type { PrivateObjectStoragePort } from "@/modules/storage/ports";
 
 const taskRepository = (belongs = true): TaskRepositoryPort => ({
   create: vi.fn(),
+  listByOwner: vi.fn().mockResolvedValue([]),
+  getWorkspace: vi.fn(),
   belongsToOwner: vi.fn().mockResolvedValue(belongs),
   registerSource: vi.fn(),
 });

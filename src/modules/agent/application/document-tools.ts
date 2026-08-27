@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { DocumentEnginePort } from "@/modules/documents/application/document-engine-port";
 import type { DocumentInspection, ParagraphAddress, TableCellAddress } from "@/modules/documents/domain/types";
+import { blockingPackageErrors } from "@/modules/documents/infrastructure/ooxml/diagnostic-policy";
 
 import type { AgentTool } from "./loop";
 
@@ -17,13 +18,25 @@ export type WorkingDocumentAccessPort = {
 
 const nodeIdSchema = z.string().trim().min(1).max(300);
 const emptySchema = z.object({});
-const regionListSchema = z.object({ kind: z.enum(["all", "paragraph", "table-cell", "image"]).default("all") });
+const regionListSchema = z.object({
+  kind: z.enum(["all", "paragraph", "table-cell", "image"]).default("all"),
+  offset: z.number().int().min(0).max(10_000).default(0),
+  limit: z.number().int().min(1).max(80).default(80),
+});
 const regionReadSchema = z.object({ nodeId: nodeIdSchema });
 const textChangeSchema = z.object({
   nodeId: nodeIdSchema,
   expectedRevision: z.string().trim().min(1).max(300),
   expectedText: z.string().min(1).max(20_000),
   replacement: z.string().min(1).max(20_000),
+});
+const textChangesSchema = z.object({
+  expectedRevision: z.string().trim().min(1).max(300),
+  changes: z.array(z.object({
+    nodeId: nodeIdSchema,
+    expectedText: z.string().min(1).max(20_000),
+    replacement: z.string().min(1).max(20_000),
+  })).min(2).max(30),
 });
 
 const summarizeInspection = (inspection: DocumentInspection) => ({
@@ -45,7 +58,7 @@ async function inspectCurrent(
   if (inspection.manifest.revision !== current.revision) {
     throw new Error("WORKING_DOCUMENT_REVISION_MISMATCH");
   }
-  if (inspection.diagnostics.some(({ severity }) => severity === "error")) {
+  if (blockingPackageErrors(inspection.diagnostics).length > 0) {
     throw new Error("WORKING_DOCUMENT_INSPECTION_FAILED");
   }
   return { bytes: current.bytes, inspection };
@@ -67,17 +80,21 @@ export function createDocumentTools(
 
   const listRegions: AgentTool<typeof regionListSchema> = {
     name: "list_document_regions",
-    description: "List stable document nodes and short text previews so the requested region can be located without guessing.",
+    description: "List one bounded page (maximum 80) of stable document nodes and short text previews. Use offset to inspect another page; do not request the entire document unless necessary.",
     inputSchema: regionListSchema,
     async execute(input) {
       const { inspection } = await inspectCurrent(documents, working);
-      const nodes = inspection.manifest.nodes.filter((node) => input.kind === "all" || node.kind === input.kind);
+      const matched = inspection.manifest.nodes.filter((node) => input.kind === "all" || node.kind === input.kind);
+      const nodes = matched.slice(input.offset, input.offset + input.limit);
       const textByNodeId = new Map([
         ...inspection.paragraphs.map((paragraph) => [paragraph.address.nodeId, paragraph.text] as const),
         ...inspection.tableCells.map((cell) => [cell.address.nodeId, cell.text] as const),
       ]);
       return {
         revision: inspection.manifest.revision,
+        total: matched.length,
+        offset: input.offset,
+        hasMore: input.offset + nodes.length < matched.length,
         nodes: nodes.map((node) => {
           const text = textByNodeId.get(node.nodeId);
           return text === undefined ? node : { ...node, text: text.length > 240 ? `${text.slice(0, 240)}…` : text };
@@ -116,11 +133,38 @@ export function createDocumentTools(
         : { kind: "set-cell-text" as const, address: cell!.address as TableCellAddress, expectedText: input.expectedText, text: input.replacement };
       const mutation = await documents.mutate(current.bytes, { expectedRevision: input.expectedRevision, operations: [operation] });
       const validated = await documents.validate(mutation.bytes);
-      if (validated.diagnostics.some(({ severity }) => severity === "error")) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
+      if (blockingPackageErrors(validated.diagnostics).length > 0) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
       const committed = await working.commit({ expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
       return { nodeId: input.nodeId, previousRevision: input.expectedRevision, revision: committed.revision, changedEntries: mutation.changedEntries };
     },
   };
 
-  return [inspectDocument, listRegions, readRegion, applyTextChange];
+  const applyTextChanges: AgentTool<typeof textChangesSchema> = {
+    name: "apply_text_changes",
+    description: "Atomically apply two to thirty exact text replacements to known paragraph or table-cell nodes. Validates every target first, then creates one immutable derived version. Use this for a bounded multi-location edit.",
+    requiresApproval: true,
+    inputSchema: textChangesSchema,
+    async execute(input) {
+      const current = await inspectCurrent(documents, working);
+      if (current.inspection.manifest.revision !== input.expectedRevision) throw new Error("DOCUMENT_REVISION_CONFLICT");
+      const seen = new Set<string>();
+      const operations = input.changes.map((change) => {
+        if (seen.has(change.nodeId)) throw new Error("DUPLICATE_DOCUMENT_REGION");
+        seen.add(change.nodeId);
+        const paragraph = current.inspection.paragraphs.find(({ address }) => address.nodeId === change.nodeId);
+        const cell = current.inspection.tableCells.find(({ address }) => address.nodeId === change.nodeId);
+        if (!paragraph && !cell) throw new Error("DOCUMENT_REGION_NOT_FOUND");
+        return paragraph
+          ? { kind: "replace-text" as const, address: paragraph.address as ParagraphAddress, expectedText: change.expectedText, replacement: change.replacement }
+          : { kind: "set-cell-text" as const, address: cell!.address as TableCellAddress, expectedText: change.expectedText, text: change.replacement };
+      });
+      const mutation = await documents.mutate(current.bytes, { expectedRevision: input.expectedRevision, operations });
+      const validated = await documents.validate(mutation.bytes);
+      if (blockingPackageErrors(validated.diagnostics).length > 0) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
+      const committed = await working.commit({ expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
+      return { changedCount: input.changes.length, nodeIds: input.changes.map((change) => change.nodeId), previousRevision: input.expectedRevision, revision: committed.revision, changedEntries: mutation.changedEntries };
+    },
+  };
+
+  return [inspectDocument, listRegions, readRegion, applyTextChange, applyTextChanges];
 }

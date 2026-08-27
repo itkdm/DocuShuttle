@@ -25,7 +25,7 @@ describe("AgentLoopRunner", () => {
     const model: AgentModelPort = { decide: async () => decisions.shift()! };
     const result = await new AgentLoopRunner(model, new MemoryStore(), [inspectTool]).run("run-1", "检查文档");
     expect(result.checkpoint.status).toBe("completed");
-    expect(result.events.map((event) => event.type)).toEqual(["tool.started", "tool.completed", "assistant.message", "completed"]);
+    expect(result.events.map((event) => event.type)).toEqual(["turn.started", "model.started", "model.completed", "tool.started", "tool.completed", "model.started", "model.completed", "assistant.message", "completed"]);
     expect(result.checkpoint.messages.some((message) => message.role === "tool")).toBe(true);
     expect(result.checkpoint.messages.some((message) => message.role === "assistant" && message.toolCalls?.[0]?.name === "inspect_document")).toBe(true);
   });
@@ -47,7 +47,7 @@ describe("AgentLoopRunner", () => {
     const runner = new AgentLoopRunner(model, store, [applyTool]);
     const paused = await runner.run("run-2", "修改正文");
     expect(paused.checkpoint.status).toBe("awaiting_user");
-    expect(paused.events[0]?.type).toBe("approval.required");
+    expect(paused.events.some((event) => event.type === "approval.required")).toBe(true);
     const resumed = await runner.resume("run-2", "approved");
     expect(resumed.checkpoint.status).toBe("completed");
     expect(resumed.checkpoint.messages.some((message) => message.toolName === "apply_change" && message.content.includes("revision"))).toBe(true);
@@ -114,9 +114,10 @@ describe("AgentLoopRunner", () => {
     expect(second.checkpoint.status).toBe("completed");
     expect(second.checkpoint.messages.filter((message) => message.role === "user")).toHaveLength(2);
     expect(second.checkpoint.finalText).toBe("第二轮也完成。");
+    expect(second.checkpoint.iterations).toBe(1);
   });
 
-  it("does not partially execute a multi-tool batch", async () => {
+  it("executes independent multi-tool reads in one model step", async () => {
     let executions = 0;
     const model: AgentModelPort = {
       decide: async ({ messages }) => messages.some((message) => message.role === "tool")
@@ -128,7 +129,7 @@ describe("AgentLoopRunner", () => {
     };
     const tool: AgentTool = { ...inspectTool, async execute() { executions += 1; return {}; } };
     const result = await new AgentLoopRunner(model, new MemoryStore(), [tool]).run("run-5", "检查");
-    expect(executions).toBe(0);
+    expect(executions).toBe(2);
     expect(result.checkpoint.status).toBe("completed");
     expect(result.checkpoint.messages.filter((message) => message.role === "tool")).toHaveLength(2);
   });

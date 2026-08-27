@@ -4,11 +4,26 @@ import { z } from "zod";
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
 import { SupabaseTaskRepository } from "@/modules/tasks/adapters/supabase-task-repository";
 import { CreateTask } from "@/modules/tasks/create-task";
+import { ListTasks } from "@/modules/tasks/list-tasks";
 
 const requestSchema = z.object({
   title: z.string().trim().min(1).max(200),
   goal: z.string().trim().max(8_000).default(""),
 });
+
+export async function GET() {
+  try {
+    const { client, user } = await requireSupabaseUser();
+    const tasks = await new ListTasks(new SupabaseTaskRepository(client)).execute(user.id);
+    return NextResponse.json({ tasks });
+  } catch (error) {
+    if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") {
+      return NextResponse.json({ code: error.message }, { status: 401 });
+    }
+    console.error("list_tasks_failed", error instanceof Error ? error.message : "unknown");
+    return NextResponse.json({ code: "LIST_TASKS_FAILED" }, { status: 500 });
+  }
+}
 
 export async function POST(request: Request) {
   try {

@@ -1,15 +1,21 @@
 "use client";
 
 import { Check, ChevronDown, Cloud, Download, FilePlus2, History, Menu, PanelLeftOpen, PanelRightOpen, RotateCcw, Sparkles, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { AgentPanel } from "./agent-panel";
 import { DocumentCanvas } from "./document-canvas";
 import { OutlinePanel } from "./outline-panel";
 import { PaperDuckMark } from "./paperduck-mark";
+import { TaskList } from "./task-list";
 import { downloadLocalDocument, formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile, productionPersistenceConfigured } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
-import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoop, resumeBrowserAgentLoop, type BrowserAgentLoopResult, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoopStream, resumeBrowserAgentLoop, type BrowserAgentLoopResult, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { listBrowserTasks, loadBrowserTaskWorkspace } from "@/modules/tasks/browser-tasks";
+import type { TaskSummary } from "@/modules/tasks/domain";
+import { taskIdFromPathname, taskUrl } from "@/modules/tasks/task-url";
+import { ensureAnonymousSession } from "@/infrastructure/supabase/browser";
 import type { AgentRun } from "@/modules/agent";
 import type { AgentPermissionMode } from "@/modules/agent/application/loop";
 import type { AgentStage, DocumentLoadState, ProposalState, UploadAsset, VersionItem } from "./types";
@@ -18,9 +24,17 @@ const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
   { id: "pending", label: "等待导入文档", time: "当前", actor: "纸上鸭", current: true },
 ];
-const workspaceResumeKey = "paperduck-workbench-resume-v1";
+function conversationFromLoop(messages: BrowserAgentLoopResult["checkpoint"]["messages"]) {
+  return messages
+    .filter((message) => (message.role === "user" || message.role === "assistant") && message.content.trim())
+    .map((message) => ({ role: message.role === "user" ? "user" as const : "agent" as const, text: message.content }));
+}
 
 export function Workbench() {
+  const pathname = usePathname();
+  const router = useRouter();
+  const routeTaskId = taskIdFromPathname(pathname);
+  const loadedTaskIdRef = useRef<string | undefined>(undefined);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [mobilePanel, setMobilePanel] = useState<"none" | "outline" | "agent" | "versions">("none");
@@ -28,11 +42,14 @@ export function Workbench() {
   const [stage, setStage] = useState<AgentStage>("idle");
   const [assets, setAssets] = useState(initialAssets);
   const [sourceState, setSourceState] = useState<SourceRegistrationState>(emptySourceRegistrationState);
-  const [documentLoad, setDocumentLoad] = useState<DocumentLoadState>({ status: "empty" });
+  const [documentLoad, setDocumentLoad] = useState<DocumentLoadState>(() => (
+    routeTaskId ? { status: "loading", fileName: "正在打开任务" } : { status: "empty" }
+  ));
   const [versions, setVersions] = useState(initialVersions);
   const [versionsOpen, setVersionsOpen] = useState(false);
-  const [notice, setNotice] = useState("请选择真实 DOCX；文件只在当前浏览器中读取");
+  const [notice, setNotice] = useState("请选择真实 DOCX；首页保持空白，打开历史任务才会恢复文档和对话");
   const [taskId, setTaskId] = useState<string>();
+  const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [cloudSaved, setCloudSaved] = useState(false);
   const [run, setRun] = useState<AgentRun>();
   const [proposalSummary, setProposalSummary] = useState<string>();
@@ -47,44 +64,128 @@ export function Workbench() {
   const [tableCellCount, setTableCellCount] = useState(0);
   const [conversation, setConversation] = useState<Array<{ role: "user" | "agent"; text: string }>>([]);
   const [loopResult, setLoopResult] = useState<BrowserAgentLoopResult>();
+  const [liveEvents, setLiveEvents] = useState<BrowserAgentLoopResult["events"]>([]);
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>("default");
-  useEffect(() => {
-    if (!productionPersistenceConfigured()) return;
-    const raw = window.localStorage.getItem(workspaceResumeKey);
-    if (!raw) return;
-    let saved: { taskId?: string; runId?: string; fileName?: string };
-    try { saved = JSON.parse(raw) as typeof saved; } catch { window.localStorage.removeItem(workspaceResumeKey); return; }
-    if (!saved.taskId) return;
-    void (async () => {
-      try {
-        const fileName = saved.fileName ?? "paperduck.docx";
-        const document = await loadCurrentTaskDocument(saved.taskId!, fileName);
-        setTaskId(saved.taskId); setCloudSaved(true);
-        setDocumentLoad({ status: "ready", document: { file: document.file, bytes: document.bytes } }); setCurrentRevision(document.version.revision); const inspection = await inspectBrowserTaskDocument(saved.taskId!); setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
-        await refreshVersions(saved.taskId!);
-        if (saved.runId) {
-          const resumed = await loadBrowserAgentRun(saved.runId);
-          setRun(resumed);
-          try {
-            const resumedLoop = await loadBrowserAgentLoop(saved.runId);
-            setLoopResult(resumedLoop);
-            setProposalSummary(undefined);
-            setConversation(resumedLoop.checkpoint.messages
-              .filter((message) => (message.role === "user" || message.role === "assistant") && message.content.trim())
-              .map((message) => ({ role: message.role === "user" ? "user" as const : "agent" as const, text: message.content })));
-          } catch { setLoopResult(undefined); setProposalSummary(resumed.proposal?.summary); }
-          setAwaitingFinalReview(resumed.status === "awaiting_review");
-          setStage(resumed.status === "awaiting_scope_confirmation" || resumed.status === "awaiting_review" ? "awaiting" : resumed.status === "completed" ? "complete" : "idle");
-        }
-        setNotice("已恢复最近的私有工作区与 Agent 检查点");
-      } catch { window.localStorage.removeItem(workspaceResumeKey); }
-    })();
-  }, []);
+
+  const resetWorkspace = () => {
+    loadedTaskIdRef.current = undefined;
+    setProposal("pending");
+    setStage("idle");
+    setAssets(initialAssets);
+    setSourceState(emptySourceRegistrationState());
+    setDocumentLoad({ status: "empty" });
+    setVersions(initialVersions);
+    setTaskId(undefined);
+    setCloudSaved(false);
+    setRun(undefined);
+    setProposalSummary(undefined);
+    setAwaitingFinalReview(false);
+    setCurrentRevision(undefined);
+    setImageCandidates([]);
+    setImageTargetNodeId("");
+    setImagePrompt("");
+    setImageNodes([]);
+    setParagraphCount(0);
+    setTableCellCount(0);
+    setConversation([]);
+    setLoopResult(undefined);
+    setLiveEvents([]);
+    setNotice("请选择真实 DOCX，或从左侧打开一个历史任务");
+  };
+
+  const refreshTaskList = async () => {
+    try {
+      await ensureAnonymousSession();
+      setTasks(await listBrowserTasks());
+    } catch {
+      setTasks([]);
+    }
+  };
+
+  useEffect(() => { void refreshTaskList(); }, []);
 
   useEffect(() => {
-    if (!cloudSaved || !taskId || documentLoad.status !== "ready") return;
-    window.localStorage.setItem(workspaceResumeKey, JSON.stringify({ taskId, runId: run?.id, fileName: documentLoad.document.file.name }));
-  }, [cloudSaved, documentLoad, run?.id, taskId]);
+    if (!routeTaskId) {
+      if (loadedTaskIdRef.current) resetWorkspace();
+      return;
+    }
+    if (loadedTaskIdRef.current === routeTaskId) return;
+    const abort = new AbortController();
+    void (async () => {
+      try {
+        setDocumentLoad({ status: "loading", fileName: "正在打开任务" });
+        setNotice("正在打开这个任务的最新文档和对话");
+        const workspace = await loadBrowserTaskWorkspace(routeTaskId);
+        if (abort.signal.aborted) return;
+        let nextSource = emptySourceRegistrationState();
+        for (const source of workspace.sources) {
+          nextSource = reduceSourceRegistration(nextSource, {
+            sourceFileId: source.id,
+            role: source.role,
+            originalName: source.originalName,
+            workingDocumentId: workspace.workingDocumentId,
+            versionId: source.role === "template" || source.role === "example" ? source.id : undefined,
+          });
+        }
+        setSourceState(nextSource);
+        setAssets(workspace.sources.flatMap((source) => (
+          source.role === "template" || source.role === "example"
+            ? [{ kind: source.role, name: source.originalName, size: formatFileSize(source.byteLength) }]
+            : []
+        )));
+        setTaskId(workspace.task.id);
+        setCloudSaved(Boolean(workspace.workingDocumentId));
+        setConversation([]);
+        setLoopResult(undefined);
+        setLiveEvents([]);
+        setRun(undefined);
+        setProposalSummary(undefined);
+        setAwaitingFinalReview(false);
+        if (workspace.workingDocumentId) {
+          const document = await loadCurrentTaskDocument(workspace.task.id, workspace.fileName);
+          if (abort.signal.aborted) return;
+          setDocumentLoad({ status: "ready", document: { file: document.file, bytes: document.bytes } });
+          setCurrentRevision(document.version.revision);
+          const inspection = await inspectBrowserTaskDocument(workspace.task.id);
+          if (abort.signal.aborted) return;
+          setImageNodes(inspection.images);
+          setParagraphCount(inspection.counts.paragraphs);
+          setTableCellCount(inspection.counts.tableCells);
+          await refreshVersions(workspace.task.id);
+        } else {
+          setDocumentLoad({ status: "empty" });
+          setVersions(initialVersions);
+        }
+        if (workspace.latestRunId) {
+          const resumed = await loadBrowserAgentRun(workspace.latestRunId);
+          if (abort.signal.aborted) return;
+          setRun(resumed);
+          try {
+            const resumedLoop = await loadBrowserAgentLoop(workspace.latestRunId);
+            if (abort.signal.aborted) return;
+            setLoopResult(resumedLoop);
+            setLiveEvents(resumedLoop.events);
+            setConversation(conversationFromLoop(resumedLoop.checkpoint.messages));
+          } catch {
+            setLoopResult(undefined);
+            setProposalSummary(resumed.proposal?.summary);
+          }
+          setAwaitingFinalReview(resumed.status === "awaiting_review");
+          setStage(resumed.status === "awaiting_scope_confirmation" || resumed.status === "awaiting_review" ? "awaiting" : resumed.status === "completed" ? "complete" : "idle");
+        } else {
+          setStage("idle");
+        }
+        loadedTaskIdRef.current = workspace.task.id;
+        setNotice(workspace.workingDocumentId ? "已打开这个任务的最新文档和对话" : "已打开历史任务；请继续上传文档");
+      } catch (error) {
+        if (abort.signal.aborted) return;
+        loadedTaskIdRef.current = undefined;
+        setDocumentLoad({ status: "error", message: error instanceof Error ? error.message : "任务打开失败" });
+        setNotice(error instanceof Error ? `无法打开任务：${error.message}` : "无法打开任务");
+      }
+    })();
+    return () => abort.abort();
+  }, [routeTaskId]);
 
   async function refreshVersions(id: string) {
     const history = await loadBrowserDocumentVersions(id);
@@ -146,17 +247,36 @@ export function Workbench() {
     setNotice(`纸上鸭正在分析：“${prompt.slice(0, 24)}${prompt.length > 24 ? "…" : ""}”`);
     setAwaitingFinalReview(false);
     setProposalSummary(undefined);
+    setLiveEvents([]);
     try {
       const activeRun = run ?? await createBrowserAgentRun(taskId, prompt);
       setRun(activeRun);
-      const result = await runBrowserAgentLoop(activeRun.id, prompt, permissionMode);
+      const result = await runBrowserAgentLoopStream(activeRun.id, prompt, permissionMode, (event) => {
+        setLiveEvents((items) => [...items, event]);
+        if (event.type === "model.delta") setNotice("纸上鸭正在回复");
+        if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
+      });
       setLoopResult(result);
+      setLiveEvents(result.events);
       const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
       if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
       if (result.checkpoint.status === "failed") throw new Error(result.checkpoint.finalText ?? "Agent Loop 未完成");
-      const wrote = result.events.some((event) => event.type === "tool.completed" && event.name === "apply_text_change");
+      const wrote = result.events.some((event) => event.type === "tool.completed" && (event.name === "apply_text_change" || event.name === "apply_text_changes"));
+      if (wrote && taskId) {
+        // A document mutation is not user-visible until the immutable version
+        // has been downloaded and parsed by the canvas. Do this before marking
+        // the turn complete; otherwise the conversation can claim success
+        // while the central document still renders the previous bytes.
+        const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
+        const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
+        setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } });
+        setCurrentRevision(nextDocument.version.revision);
+        const inspection = await inspectBrowserTaskDocument(taskId);
+        setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
+        await refreshVersions(taskId);
+      }
       setStage(result.checkpoint.pendingApproval ? "awaiting" : wrote ? "complete" : "idle");
-      setNotice(result.checkpoint.pendingApproval ? "Agent 已完成读取并请求写入确认" : wrote ? "Agent 已完成写入并通过版本校验" : "Agent 已完成本轮对话");
+      setNotice(result.checkpoint.pendingApproval ? "Agent 已完成读取并请求写入确认" : wrote ? "新版本已加载到文档画布" : "Agent 已完成本轮对话");
     } catch (error) {
       // A model/provider can fail after the loop has durably saved an approval
       // checkpoint. Recover that checkpoint so the user sees the real next
@@ -180,14 +300,16 @@ export function Workbench() {
 
   const decideLoop = async (choice: "approved" | "rejected") => {
     if (!run) return;
+    setNotice(choice === "approved" ? "正在执行批准的操作…" : "已拒绝，正在继续后续处理…");
     try {
       const result = await resumeBrowserAgentLoop(run.id, choice);
       setLoopResult(result);
+      setLiveEvents(result.events);
       const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
       if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
       if (result.checkpoint.status === "completed") {
         setProposalSummary(undefined);
-        const wrote = result.events.some((event) => event.type === "tool.completed" && event.name === "apply_text_change");
+        const wrote = result.events.some((event) => event.type === "tool.completed" && (event.name === "apply_text_change" || event.name === "apply_text_changes"));
         setStage(wrote ? "complete" : "idle");
         if (taskId) {
           const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
@@ -197,16 +319,37 @@ export function Workbench() {
           await refreshVersions(taskId);
         }
         setNotice("Agent 已完成写入并通过版本校验");
-      } else if (result.checkpoint.status === "awaiting_user") setNotice("Agent 需要你的下一步决定");
+      } else if (result.checkpoint.status === "awaiting_user") {
+        setStage("awaiting");
+        setNotice("Agent 需要你的下一步决定");
+      } else if (result.checkpoint.status === "failed") {
+        const finalText = result.checkpoint.finalText ?? "Agent 执行失败";
+        setConversation((items) => [...items, { role: "agent", text: finalText }]);
+        setStage("idle");
+        setNotice(finalText);
+      }
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Agent 恢复失败";
+      setConversation((items) => [...items, { role: "agent", text: `这次执行没有完成：${message}` }]);
       setStage("idle");
-      setNotice(error instanceof Error ? error.message : "Agent 恢复失败");
+      setNotice(message);
     }
+  };
+
+  const startNewTask = () => {
+    resetWorkspace();
+    if (pathname !== "/") router.push("/");
+  };
+
+  const openTask = (id: string) => {
+    if (id === routeTaskId) return;
+    router.push(taskUrl(id));
   };
 
   const upload = async (kind: UploadAsset["kind"], file?: File) => {
     if (!file) return;
     const isTemplate = kind === "template";
+    const creatingNewTask = !taskId;
     const maySeedWorkingDocument = isTemplate || !sourceState.workingDocumentId;
     // Reference examples are persisted but must never replace the document
     // currently rendered in the canvas. Only a template upload changes it.
@@ -215,7 +358,14 @@ export function Workbench() {
     try {
       const bytes = await readDocxFile(file);
       setLoopResult(undefined);
-      if (maySeedWorkingDocument) setRun(undefined);
+      if (creatingNewTask) {
+        setConversation([]);
+        setLiveEvents([]);
+        setRun(undefined);
+        setProposalSummary(undefined);
+        setAwaitingFinalReview(false);
+        setStage("idle");
+      } else if (maySeedWorkingDocument) setRun(undefined);
       const next = { kind, name: file.name, size: formatFileSize(file.size) };
       setAssets((items) => [...items.filter((item) => item.kind !== kind), next]);
       if (maySeedWorkingDocument && !productionPersistenceConfigured()) {
@@ -265,6 +415,9 @@ export function Workbench() {
             ? `${file.name} 已保存为参考示例，Working Document 未改变`
             : `${file.name} 已保存为参考示例；请继续上传模板以开始编辑`);
         }
+        loadedTaskIdRef.current = persisted.taskId;
+        if (creatingNewTask) router.replace(taskUrl(persisted.taskId));
+        void refreshTaskList();
       } else {
         setNotice(isTemplate
           ? `${file.name} 已在本地打开；云端服务尚未配置`
@@ -341,13 +494,11 @@ export function Workbench() {
     catch (error) { setNotice(error instanceof Error ? error.message : "图片应用失败，请刷新后重试"); }
     finally { setImageBusy(false); }
   };
-  const retry = () => { setStage("idle"); setNotice("请重新发送要求；旧运行及最近有效版本会完整保留"); };
-
   return (
     <main className="workbench-app">
       <a className="skip-link" href="#document-canvas">跳到文档</a>
       <header className="topbar">
-        <div className="brand-lockup"><PaperDuckMark /><div><strong>纸上鸭</strong><span>把 Word 真正做完</span></div></div>
+        <button className="brand-lockup" type="button" onClick={startNewTask} aria-label="回到空白工作台"><PaperDuckMark /><div><strong>纸上鸭</strong><span>把 Word 真正做完</span></div></button>
         <div className="document-identity"><span className="doc-chip">DOCX</span><div><strong>{documentLoad.status === "ready" ? documentLoad.document.file.name : "尚未载入真实文档"}</strong><span><Cloud size={12} /> {documentLoad.status === "ready" ? cloudSaved ? "私有工作区已保存" : "本地预览 · 未上传" : "选择文件开始真实预览"}</span></div></div>
         <div className="top-actions"><span className="demo-badge">{cloudSaved ? "Agent LIVE" : "本地预览"}</span><button className="quiet-action" onClick={() => setVersionsOpen((open) => !open)} aria-expanded={versionsOpen}><History size={16} /><span>版本 {versions.length}</span><ChevronDown size={13} /></button><button className="export-button" onClick={downloadCurrent} disabled={documentLoad.status !== "ready"}><Download size={16} /> 下载当前文件</button><button className="mobile-menu" onClick={() => setMobilePanel(mobilePanel === "none" ? "agent" : "none")} aria-label="打开工作台菜单"><Menu size={20} /></button></div>
       </header>
@@ -355,16 +506,16 @@ export function Workbench() {
       {versionsOpen && <div className="version-popover" role="dialog" aria-label="版本历史"><div className="version-heading"><div><span className="eyebrow">不可变历史</span><h2>版本记录</h2></div><button className="icon-button" onClick={() => setVersionsOpen(false)} aria-label="关闭版本记录"><X size={16} /></button></div><p>恢复会创建新版本，不会删除后续记录。</p><ol>{versions.map((version) => <li key={version.id} className={version.current ? "current" : ""}><span className="version-node">{version.current ? <Check size={12} /> : version.id.slice(1)}</span><div><strong>{version.label}</strong><small>{version.id} · {version.actor} · {version.time}</small></div>{!version.current && <button onClick={() => restoreVersion(version.id)}><RotateCcw size={12} /> 恢复</button>}</li>)}</ol></div>}
 
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
-        {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
+        {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
         <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} proposal={proposal} onChoose={chooseWorkingDocument} onDecide={decide} liveAgent={cloudSaved} proposalSummary={proposalSummary} /></div>
-        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} onLoopApproval={decideLoop} conversation={conversation} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onRetry={retry} onDecide={decide} mode={cloudSaved ? "production" : "local"} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
+        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} liveEvents={liveEvents} onLoopApproval={decideLoop} conversation={conversation} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onDecide={decide} mode={cloudSaved ? "production" : "local"} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 
       <div className="mobile-dock" aria-label="移动端工作台导航"><button onClick={() => setMobilePanel("outline")} className={mobilePanel === "outline" ? "active" : ""}><FilePlus2 size={18} /><span>文档</span></button><button onClick={() => setMobilePanel("agent")} className={mobilePanel === "agent" ? "active" : ""}><Sparkles size={18} /><span>审批</span><i>1</i></button><button onClick={() => setMobilePanel("versions")} className={mobilePanel === "versions" ? "active" : ""}><History size={18} /><span>版本</span></button><button onClick={downloadCurrent}><Download size={18} /><span>下载</span></button></div>
 
       {mobilePanel !== "none" && <div className="mobile-sheet" role="dialog" aria-modal="true" aria-label={mobilePanel === "agent" ? "移动审批" : mobilePanel === "outline" ? "源文档" : "版本历史"}><div className="sheet-handle" /><button className="sheet-close" onClick={() => setMobilePanel("none")} aria-label="关闭"><X size={18} /></button>
         {mobilePanel === "agent" && <div className="mobile-approval"><span className="eyebrow">{cloudSaved ? "需要确认" : "本地预览"}</span><h2>{awaitingFinalReview ? "确认最终版本" : "确认局部改写建议"}</h2><p>{proposalSummary ?? "请先保存文档并让 Agent 生成修改计划。"}</p><div>{awaitingFinalReview ? <button className="mobile-approve" onClick={() => { void finalReview("approved"); setMobilePanel("none"); }}><Check size={16} /> 确认交付</button> : <button className="mobile-approve" onClick={() => { void decide("accepted"); setMobilePanel("none"); }} disabled={!proposalSummary}><Check size={16} /> 批准并应用</button>}<button onClick={() => { void decide("rejected"); setMobilePanel("none"); }} disabled={!proposalSummary}>拒绝</button></div></div>}
-        {mobilePanel === "outline" && <div className="mobile-sources"><span className="eyebrow">任务输入</span><h2>源文档</h2>{assets.map((asset) => <div key={asset.kind}><FilePlus2 size={17} /><span><strong>{asset.kind === "template" ? "模板" : "示例"}</strong><small>{asset.name} · {asset.size}</small></span><Check size={15} /></div>)}</div>}
+        {mobilePanel === "outline" && <div className="mobile-sources"><span className="eyebrow">任务输入</span><h2>源文档</h2>{assets.length ? assets.map((asset) => <div key={asset.kind}><FilePlus2 size={17} /><span><strong>{asset.kind === "template" ? "空白模板" : "完成示例"}</strong><small>{asset.name} · {asset.size}</small></span><Check size={15} /></div>) : <p>先选择空白模板或完成示例，再开始一个任务。</p>}<TaskList tasks={tasks} activeTaskId={taskId} onSelectTask={(id) => { openTask(id); setMobilePanel("none"); }} onCreateTask={() => { startNewTask(); setMobilePanel("none"); }} /></div>}
           {mobilePanel === "versions" && <div className="mobile-versions"><span className="eyebrow">不会覆盖历史</span><h2>版本</h2>{versions.slice(0, 4).map((version) => <button key={version.id} onClick={() => { if (!version.current) void restoreVersion(version.id); }}><span>{version.id}</span><div><strong>{version.label}</strong><small>{version.time} · {version.actor}</small></div>{!version.current && <RotateCcw size={14} />}</button>)}</div>}
       </div>}
       <div className="sr-only" role="status" aria-live="polite">{notice}</div><div className="toast" aria-hidden="true"><span className="toast-dot" />{notice}</div>

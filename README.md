@@ -39,6 +39,7 @@ Auth/DB   private files  text/reasoning GPT Image 2
 - [产品需求](docs/product/prd.md)
 - [系统架构](docs/architecture/system.md)
 - [领域模型](docs/architecture/domain-model.md)
+- [OOXML 内核覆盖率](docs/architecture/ooxml-kernel-coverage.md)
 - [Agent 运行时](docs/architecture/agent-runtime.md)
 - [验收标准](docs/testing/acceptance.md)
 - [架构决策记录](docs/adr/README.md)

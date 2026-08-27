@@ -18,13 +18,29 @@ const schema = z.object({
   permissionMode: z.enum(["default", "full"]).optional().default("default"),
 });
 
+const eventPayload = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+
+async function createRunner(runId: string) {
+  const { client } = await requireSupabaseUser();
+  const run = await client.from("agent_runs").select("task_id").eq("id", runId).single();
+  if (run.error || !run.data) throw new Error("RUN_NOT_FOUND");
+  const kernel = new OoxmlPreservationKernel();
+  const taskId = run.data.task_id as string;
+  const tools = [
+    ...createDocumentTools(kernel, new SupabaseWorkingDocumentAccess(client, taskId, runId)),
+    ...createSourceContextTools(taskId, new SupabaseSourceDocumentContext(client), kernel),
+    ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
+  ];
+  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), new SupabaseAgentLoopStore(client), tools);
+}
+
 export async function GET(_request: Request, { params }: { params: Promise<{ runId: string }> }) {
   try {
     const { runId } = await params;
     const { client } = await requireSupabaseUser();
     const checkpoint = await new SupabaseAgentLoopStore(client).load(runId);
     if (!checkpoint) return NextResponse.json({ code: "LOOP_NOT_FOUND" }, { status: 404 });
-    return NextResponse.json({ checkpoint, events: [] });
+    return NextResponse.json({ checkpoint, events: checkpoint.trace ?? [] });
   } catch (error) {
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
     return NextResponse.json({ code: "AGENT_LOOP_LOAD_FAILED" }, { status: 500 });
@@ -35,26 +51,38 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
   try {
     const input = schema.parse(await request.json());
     const { runId } = await params;
-    const { client } = await requireSupabaseUser();
-    const run = await client.from("agent_runs").select("task_id").eq("id", runId).single();
-    if (run.error || !run.data) return NextResponse.json({ code: "RUN_NOT_FOUND" }, { status: 404 });
-    const kernel = new OoxmlPreservationKernel();
-    const taskId = run.data.task_id as string;
-    const tools = [
-      ...createDocumentTools(kernel, new SupabaseWorkingDocumentAccess(client, taskId, runId)),
-      ...createSourceContextTools(taskId, new SupabaseSourceDocumentContext(client), kernel),
-      ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
-    ];
-    const result = await new AgentLoopRunner(
-      createOpenAICompatibleAgentModelFromEnvironment(),
-      new SupabaseAgentLoopStore(client),
-      tools,
-    ).runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode);
+    const result = await (await createRunner(runId)).runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode);
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
     console.error("agent_loop_failed", error instanceof Error ? error.message : "unknown");
     return NextResponse.json({ code: "AGENT_LOOP_FAILED" }, { status: 500 });
+  }
+}
+
+/** POST with fetch streaming: emits public text deltas and audit-safe tool lifecycle events. */
+export async function PUT(request: Request, { params }: { params: Promise<{ runId: string }> }) {
+  try {
+    const input = schema.parse(await request.json());
+    const { runId } = await params;
+    const runner = await createRunner(runId);
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (event: string, data: unknown) => controller.enqueue(encoder.encode(eventPayload(event, data)));
+        try {
+          const result = await runner.runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, request.signal, (event) => send("event", event));
+          send("result", result);
+        } catch (error) {
+          send("error", { code: error instanceof Error ? error.message : "AGENT_LOOP_FAILED" });
+        } finally { controller.close(); }
+      },
+    });
+    return new Response(stream, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", "connection": "keep-alive", "x-accel-buffering": "no" } });
+  } catch (error) {
+    if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });
+    if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
+    return NextResponse.json({ code: error instanceof Error ? error.message : "AGENT_LOOP_FAILED" }, { status: 500 });
   }
 }

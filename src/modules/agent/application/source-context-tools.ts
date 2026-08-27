@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { DocumentEnginePort } from "@/modules/documents/application/document-engine-port";
 import type { DocumentInspection } from "@/modules/documents/domain/types";
+import { blockingPackageErrors } from "@/modules/documents/infrastructure/ooxml/diagnostic-policy";
 import type { SourceRole } from "@/modules/tasks/domain";
 
 import type { AgentTool } from "./loop";
@@ -130,7 +131,7 @@ export function createSourceContextTools(
       const payload = await sources.load(taskId, input.sourceFileId);
       if (!payload) throw new Error("SOURCE_DOCUMENT_NOT_FOUND");
       const inspection = await documents.inspect(payload.bytes);
-      if (inspection.diagnostics.some(({ severity }) => severity === "error")) {
+      if (blockingPackageErrors(inspection.diagnostics).length > 0) {
         throw new Error("SOURCE_DOCUMENT_INSPECTION_FAILED");
       }
       return {

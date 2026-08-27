@@ -31,9 +31,10 @@ const proxyUpload = async (input: { file: File; taskId: string; role: SourceRole
   return requestJson<PersistedSourceFile>("/api/uploads/source/proxy", { method: "POST", body: form });
 };
 
-export const productionPersistenceConfigured = () => Boolean(
-  process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
-);
+// PaperDuck's browser workspace always talks to its server API. The server
+// owns the Supabase configuration, so client-side environment replacement must
+// not silently turn a real workspace into a fake preview mode.
+export const productionPersistenceConfigured = () => true;
 
 export async function persistSourceFile(input: {
   file: File;

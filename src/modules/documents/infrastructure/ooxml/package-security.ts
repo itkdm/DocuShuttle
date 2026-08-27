@@ -102,8 +102,9 @@ export function preflightZipPackage(bytes: Uint8Array): readonly PackageDirector
   const centralSize = readUint32(view, eocd + 12);
   const centralOffset = readUint32(view, eocd + 16);
   const commentLength = readUint16(view, eocd + 20);
-  if (eocd + 22 + commentLength !== bytes.byteLength) {
-    failure("ZIP_DIRECTORY_INVALID", "ZIP contains trailing or truncated end-record data.");
+  const declaredEnd = eocd + 22 + commentLength;
+  if (declaredEnd > bytes.byteLength) {
+    failure("ZIP_DIRECTORY_INVALID", "ZIP end-of-central-directory record is truncated.");
   }
   if (disk !== 0 || centralDisk !== 0 || entriesOnDisk !== entryCount) {
     failure("ZIP_MULTIDISK_UNSUPPORTED", "Multi-disk ZIP packages are not supported.");

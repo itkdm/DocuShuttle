@@ -1,7 +1,28 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import type { TaskRecord } from "../domain";
+import type { SourceRole, TaskRecord, TaskSourceRecord, TaskStatus, TaskSummary } from "../domain";
+import { fileNameForTask } from "../task-url";
 import type { TaskRepositoryPort } from "../ports";
+
+const asStatus = (value: string): TaskStatus => {
+  switch (value) {
+    case "draft":
+    case "ready":
+    case "running":
+    case "review":
+    case "completed":
+    case "failed":
+    case "archived":
+      return value;
+    default:
+      return "draft";
+  }
+};
+
+const asRole = (value: string): SourceRole => {
+  if (value === "example" || value === "auxiliary") return value;
+  return "template";
+};
 
 const fail = (context: string, error: { message: string } | null) => {
   if (error) throw new Error(`${context}: ${error.message}`);
@@ -55,7 +76,86 @@ export class SupabaseTaskRepository implements TaskRepositoryPort {
       workspaceId: created.data.workspace_id as string,
       title: created.data.title as string,
       goal: created.data.goal as string,
-      status: created.data.status as TaskRecord["status"],
+      status: asStatus(created.data.status as string),
+    };
+  }
+
+  async listByOwner(ownerUserId: string): Promise<TaskSummary[]> {
+    const result = await this.client
+      .from("tasks")
+      .select("id, title, status, updated_at, source_files(role, original_name)")
+      .eq("owner_user_id", ownerUserId)
+      .neq("status", "archived")
+      .order("updated_at", { ascending: false })
+      .limit(50);
+    fail("Unable to list tasks", result.error);
+    return (result.data ?? []).map((row) => {
+      const sources = ((row.source_files as Array<{ role: string; original_name: string }> | null) ?? [])
+        .map((source) => ({ role: source.role, originalName: source.original_name }));
+      return {
+        id: row.id as string,
+        title: row.title as string,
+        status: asStatus(row.status as string),
+        updatedAt: row.updated_at as string,
+        fileName: fileNameForTask({ title: row.title as string, sources }),
+      };
+    });
+  }
+
+  async getWorkspace(taskId: string, ownerUserId: string) {
+    const task = await this.client
+      .from("tasks")
+      .select("id, workspace_id, title, goal, status")
+      .eq("id", taskId)
+      .eq("owner_user_id", ownerUserId)
+      .maybeSingle();
+    fail("Unable to read task", task.error);
+    if (!task.data) return undefined;
+
+    const sources = await this.client
+      .from("source_files")
+      .select("id, role, original_name, byte_length")
+      .eq("task_id", taskId)
+      .eq("owner_user_id", ownerUserId)
+      .order("created_at", { ascending: true });
+    fail("Unable to read source files", sources.error);
+
+    const working = await this.client
+      .from("working_documents")
+      .select("id")
+      .eq("task_id", taskId)
+      .eq("owner_user_id", ownerUserId)
+      .maybeSingle();
+    fail("Unable to read working document", working.error);
+
+    const latestRun = await this.client
+      .from("agent_runs")
+      .select("id")
+      .eq("task_id", taskId)
+      .eq("owner_user_id", ownerUserId)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    fail("Unable to read agent run", latestRun.error);
+
+    const sourceRecords: TaskSourceRecord[] = (sources.data ?? []).map((row) => ({
+      id: row.id as string,
+      role: asRole(row.role as string),
+      originalName: row.original_name as string,
+      byteLength: Number(row.byte_length),
+    }));
+
+    return {
+      task: {
+        id: task.data.id as string,
+        workspaceId: task.data.workspace_id as string,
+        title: task.data.title as string,
+        goal: task.data.goal as string,
+        status: asStatus(task.data.status as string),
+      },
+      sources: sourceRecords,
+      workingDocumentId: (working.data?.id as string | undefined) ?? undefined,
+      latestRunId: (latestRun.data?.id as string | undefined) ?? undefined,
     };
   }
 

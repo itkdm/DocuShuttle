@@ -43,6 +43,43 @@ export type BrowserAgentLoopResult = {
 export const runBrowserAgentLoop = async (runId: string, message: string, permissionMode: AgentPermissionMode = "default") =>
   json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop`, post({ message, permissionMode }));
 
+/** Consume the Agent route's POST-capable SSE stream. */
+export async function runBrowserAgentLoopStream(
+  runId: string,
+  message: string,
+  permissionMode: AgentPermissionMode,
+  onEvent: (event: BrowserAgentLoopResult["events"][number]) => void,
+  signal?: AbortSignal,
+) {
+  const response = await fetch(`/api/agent/runs/${runId}/loop`, { ...post({ message, permissionMode }), method: "PUT", signal });
+  if (!response.ok || !response.body) {
+    const body = await response.json().catch(() => ({})) as { code?: string };
+    throw new Error(body.code ?? `HTTP_${response.status}`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: BrowserAgentLoopResult | undefined;
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    buffer += decoder.decode(next.value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      const event = /^event: (.+)$/m.exec(frame)?.[1];
+      const raw = /^data: (.+)$/m.exec(frame)?.[1];
+      if (!event || !raw) continue;
+      const data = JSON.parse(raw) as BrowserAgentLoopResult | BrowserAgentLoopResult["events"][number] | { code?: string };
+      if (event === "event") onEvent(data as BrowserAgentLoopResult["events"][number]);
+      if (event === "result") finalResult = data as BrowserAgentLoopResult;
+      if (event === "error") throw new Error((data as { code?: string }).code ?? "AGENT_LOOP_FAILED");
+    }
+  }
+  if (!finalResult) throw new Error("AGENT_STREAM_INCOMPLETE");
+  return finalResult;
+}
+
 export const loadBrowserAgentLoop = async (runId: string) =>
   json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop`);
 

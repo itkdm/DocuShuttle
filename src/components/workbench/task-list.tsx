@@ -1,0 +1,56 @@
+import { FileText, Plus } from "lucide-react";
+import type { TaskSummary } from "@/modules/tasks/domain";
+
+interface TaskListProps {
+  tasks: readonly TaskSummary[];
+  activeTaskId?: string;
+  onSelectTask: (taskId: string) => void;
+  onCreateTask: () => void;
+  heading?: boolean;
+}
+
+function formatTaskTime(iso: string) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+export function TaskList({ tasks, activeTaskId, onSelectTask, onCreateTask, heading = true }: TaskListProps) {
+  return (
+    <section className="task-list" aria-label="任务列表">
+      {heading && (
+        <div className="task-list-heading">
+          <div>
+            <span className="eyebrow">历史</span>
+            <h2>任务会话</h2>
+          </div>
+          <button className="task-new" type="button" onClick={onCreateTask}>
+            <Plus size={14} />
+            新任务
+          </button>
+        </div>
+      )}
+      {tasks.length === 0 ? (
+        <p className="task-list-empty">还没有任务。上传一份文档会创建新会话。</p>
+      ) : (
+        <ol className="task-list-items">
+          {tasks.map((item) => (
+            <li key={item.id}>
+              <button
+                type="button"
+                className={item.id === activeTaskId ? "active" : ""}
+                onClick={() => onSelectTask(item.id)}
+              >
+                <FileText size={15} />
+                <span>
+                  <strong>{item.title}</strong>
+                  <small>{item.fileName} · {formatTaskTime(item.updatedAt)}</small>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}

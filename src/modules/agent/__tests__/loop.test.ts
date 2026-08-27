@@ -5,11 +5,15 @@ import { AgentLoopRunner, type AgentEffectReceipt, type AgentLoopCheckpoint, typ
 
 class MemoryStore {
   private value?: AgentLoopCheckpoint;
+  private receipts = new Map<string, AgentEffectReceipt>();
   saves = 0;
   heartbeats = 0;
-  async load() { return this.value; }
-  async save(_runId: string, checkpoint: AgentLoopCheckpoint) { this.saves += 1; this.value = structuredClone(checkpoint); }
+  failFromSave?: number;
+  async load() { return structuredClone(this.value); }
+  async save(_runId: string, checkpoint: AgentLoopCheckpoint) { this.saves += 1; if (this.failFromSave !== undefined && this.saves >= this.failFromSave) throw new Error("simulated checkpoint failure"); this.value = structuredClone(checkpoint); }
   async heartbeat() { this.heartbeats += 1; return true; }
+  async loadEffectReceipt(_runId: string, idempotencyKey: string) { return this.receipts.get(idempotencyKey); }
+  async saveEffectReceipt(_runId: string, receipt: AgentEffectReceipt) { this.receipts.set(receipt.idempotencyKey, receipt); return receipt; }
   async resolvePendingApproval(_runId: string, interactionId: string, callId: string, decision: "approved" | "rejected") {
     const checkpoint = this.value;
     if (checkpoint?.pendingInteraction?.type !== "approval" || checkpoint.pendingInteraction.interactionId !== interactionId || checkpoint.pendingInteraction.callId !== callId) return undefined;
@@ -385,6 +389,27 @@ describe("AgentLoopRunner", () => {
     expect(executions).toBe(1);
     expect(resumed.checkpoint.status).toBe("completed");
     expect(resumed.checkpoint.pendingResolution).toBeUndefined();
+  });
+
+  it("does not duplicate a tool result when the materialization save fails", async () => {
+    const store = new MemoryStore();
+    const tool: AgentTool = { name: "apply_change", description: "Apply", inputSchema: z.object({ nodeId: z.string() }), requiresApproval: true, async execute() { return { ok: true }; } };
+    const paused = await new AgentLoopRunner({ decide: async () => ({ kind: "tool_calls", calls: [{ id: "crash-after-result", name: "apply_change", input: { nodeId: "p-1" } }] }) }, store, [tool]).run("run-crash-result", "修改");
+    const pending = paused.checkpoint.pendingInteraction;
+    await store.resolvePendingApproval("run-crash-result", pending!.interactionId, pending?.type === "approval" ? pending.callId : "", "approved");
+    // Existing-resolution recovery skips the already-emitted approval event;
+    // the next two saves are tool-start and result materialization.
+    store.failFromSave = store.saves + 2;
+    await expect(new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "已完成。" }) }, store, [tool]).resume(
+      "run-crash-result", "approved", pending!.interactionId, pending?.type === "approval" ? pending.callId : ""
+    )).rejects.toThrow("simulated checkpoint failure");
+
+    store.failFromSave = undefined;
+    const recovered = await new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "已完成。" }) }, store, [tool]).resume(
+      "run-crash-result", "approved", pending!.interactionId, pending?.type === "approval" ? pending.callId : ""
+    );
+    expect(recovered.checkpoint.messages.filter((message) => message.role === "assistant" && message.toolCalls?.some((call) => call.id === "crash-after-result"))).toHaveLength(1);
+    expect(recovered.checkpoint.messages.filter((message) => message.role === "tool" && message.toolCallId === "crash-after-result")).toHaveLength(1);
   });
 
   it("replays a durable user-input resolution after the original request is gone", async () => {

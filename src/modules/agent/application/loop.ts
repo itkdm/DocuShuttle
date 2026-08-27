@@ -497,6 +497,7 @@ export class AgentLoopRunner {
       if (existingReceipt) {
         checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval: resolved.decision, output: existingReceipt.output }), toolCallId: resolved.callId, toolName: resolved.toolName });
         const replayedEvent = emit({ type: "tool.completed", callId: resolved.callId, name: resolved.toolName, output: summarizeTraceValue(existingReceipt.output) }, false);
+        checkpoint.pendingResolution = undefined;
         await this.store.save(runId, checkpoint);
         onEvent?.(replayedEvent);
       } else {
@@ -514,12 +515,14 @@ export class AgentLoopRunner {
           : { idempotencyKey, callId: resolved.callId, toolName: resolved.toolName, output, completedAt: new Date().toISOString() };
         checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval: resolved.decision, output: receipt.output }), toolCallId: resolved.callId, toolName: resolved.toolName });
         const completedEvent = emit({ type: "tool.completed", callId: resolved.callId, name: resolved.toolName, output: summarizeTraceValue({ ...((receipt.output && typeof receipt.output === "object") ? receipt.output : { value: receipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
+        checkpoint.pendingResolution = undefined;
         await this.store.save(runId, checkpoint);
         onEvent?.(completedEvent);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Tool execution failed";
         checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: resolved.decision, error: message }), toolCallId: resolved.callId, toolName: resolved.toolName });
         const failedEvent = emit({ type: "tool.failed", callId: resolved.callId, name: resolved.toolName, error: message, durationMs: Date.now() - toolStartedAt }, false);
+        checkpoint.pendingResolution = undefined;
         await this.store.save(runId, checkpoint);
         onEvent?.(failedEvent);
       }
@@ -527,11 +530,10 @@ export class AgentLoopRunner {
     } else {
       checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: "rejected", reason: "The user rejected this action." }), toolCallId: resolved.callId, toolName: resolved.toolName });
       const rejectedEvent = emit({ type: "tool.failed", callId: resolved.callId, name: resolved.toolName, error: "User rejected the tool call." }, false);
+      checkpoint.pendingResolution = undefined;
       await this.store.save(runId, checkpoint);
       onEvent?.(rejectedEvent);
     }
-    checkpoint.pendingResolution = undefined;
-    await this.store.save(runId, checkpoint);
     const continuation = await this.runWithPermission(runId, "", checkpoint.permissionMode ?? "default", signal, onEvent);
     return { checkpoint: continuation.checkpoint, events: [...events, ...continuation.events] };
   }

@@ -89,7 +89,8 @@ user-input interaction 对应；`running`、终态和取消状态不得残留 ru
 pending interaction canonicalize，浏览器只提交 `decision`；user input 保存
 `interactionId/messageId/text`。数据库事务会同时清除 `pendingInteraction`、写入
 `pendingResolution`、同步 `loopCheckpoint.status` 与 `resume_cursor` 为 `running`；Runner
-只有在用户事实已落盘并完成后续 checkpoint 保存后才清除 resolution。进程重启或网络重试
+只有在用户事实已落盘、工具结果（如有）已物化并与清除 resolution 合并到同一次 checkpoint
+保存后才清除 resolution。进程重启或网络重试
 因此可以依据 resolution 和 Effect Receipt 继续，而不会丢失决定或重复执行副作用。
 
 `requiresApproval && permissionMode = default` 才暂停并等待人工批准；`full` 只表示当前

@@ -28,6 +28,7 @@ import { replaceRange, setElementText } from "./xml";
 import { replaceProjectedText } from "./text-projection";
 import { capabilitiesFor } from "./capability-registry";
 import { remapNodeIdentities } from "./node-identity";
+import { createTimer, logger, measure } from "@/infrastructure/observability";
 
 interface EntryPatch {
   start: number;
@@ -272,9 +273,13 @@ async function verifyMutationOutcomes(
 
 export class OoxmlPreservationKernel implements DocumentEnginePort {
   async inspect(bytes: Uint8Array): Promise<DocumentInspection> {
-    const loaded = await loadPackage(bytes);
-    const indexed = await indexDocument(loaded);
-    return inspection(loaded, indexed);
+    return measure("document.inspect", { inputBytes: bytes.length }, async () => {
+      const loaded = await loadPackage(bytes);
+      const indexed = await indexDocument(loaded);
+      const result = inspection(loaded, indexed);
+      logger.info("document.inspect.summary", { inputBytes: bytes.length, revision: result.manifest.revision, paragraphCount: result.paragraphs.length, tableCellCount: result.tableCells.length, imageCount: result.images.length, diagnosticCount: result.diagnostics.length });
+      return result;
+    });
   }
 
   async validate(bytes: Uint8Array): Promise<DocumentInspection> {
@@ -345,8 +350,14 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
   }
 
   async mutate(bytes: Uint8Array, request: MutationRequest): Promise<MutationResult> {
+    return measure("ooxml.mutate", { inputBytes: bytes.length, operationCount: request.operations.length, operationKinds: request.operations.map((operation) => operation.kind), revisionBefore: request.expectedRevision }, (timer) => this.mutateInternal(bytes, request, timer));
+  }
+
+  private async mutateInternal(bytes: Uint8Array, request: MutationRequest, timer: ReturnType<typeof createTimer>): Promise<MutationResult> {
     const loaded = await loadPackage(bytes);
+    timer.mark("package_loaded");
     const indexed = await indexDocument(loaded);
+    timer.mark("document_indexed");
     const sourceDiagnostics = [...loaded.diagnostics, ...indexed.diagnostics];
     const blocking = blockingPackageErrors(sourceDiagnostics);
     if (blocking.length > 0) {

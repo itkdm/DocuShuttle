@@ -3,6 +3,7 @@ import { generateText, streamText, tool } from "ai";
 import { z } from "zod";
 
 import type { AgentModelDecision, AgentModelPort, AgentLoopMessage, AgentTool } from "../application/loop";
+import { createTimer, logger } from "@/infrastructure/observability";
 
 export type OpenAICompatibleModelOptions = {
   apiKey: string;
@@ -56,7 +57,14 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
     signal?: AbortSignal;
     onTextDelta?: (text: string) => void;
   }): Promise<AgentModelDecision> {
-    const onTextDelta = input.onTextDelta;
+    const timer = createTimer("agent.model", { provider: "openai-compatible", model: this.options.model, inputMessageCount: input.messages.length, toolCount: input.tools.length });
+    logger.info("agent.model.started", timer.metadata);
+    let firstTokenMs: number | undefined;
+    const onTextDelta = input.onTextDelta ? (text: string) => {
+      if (firstTokenMs === undefined) { firstTokenMs = timer.elapsed(); timer.mark("first_token"); logger.info("agent.model.first_token", { ...timer.metadata, firstTokenMs }); }
+      input.onTextDelta?.(text);
+    } : undefined;
+    const complete = (decision: AgentModelDecision) => { logger.info("agent.model.completed", { ...timer.metadata, durationMs: timer.elapsed(), firstTokenMs, outcome: "success", toolCallNames: decision.kind === "tool_calls" ? decision.calls.map((call) => call.name) : [] }); return decision; };
     // ask_user is a control-plane tool: the model may explicitly suspend the
     // same conversation when required information is missing. It is converted
     // back to the runner's durable HITL decision rather than executed as a
@@ -119,37 +127,40 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
           if (toolCalls.length > 0) {
             const ask = toolCalls.find((call) => call.toolName === "ask_user");
             if (ask && typeof ask.input === "object" && ask.input !== null && "text" in ask.input) {
-              return { kind: "ask_user", text: String((ask.input as { text: unknown }).text) };
+              return complete({ kind: "ask_user", text: String((ask.input as { text: unknown }).text) });
             }
-            return {
+            return complete({
               kind: "tool_calls",
               calls: toolCalls.map((call) => ({ id: call.toolCallId, name: call.toolName, input: call.input })),
-            };
+            });
           }
-          return { kind: "message", text: streamedText || "我暂时没有足够信息继续，请补充一下目标。" };
+          return complete({ kind: "message", text: streamedText || "我暂时没有足够信息继续，请补充一下目标。" });
         } catch (error) {
           lastError = error;
           if (attempt === 0 && streamedText.length === 0 && !input.signal?.aborted) {
+            logger.warn("agent.model.retry", { ...timer.metadata, attempt: attempt + 1, reason: "empty_stream_failure", error });
             await new Promise<void>((resolve) => setTimeout(resolve, 150));
             continue;
           }
         }
       }
-      throw lastError instanceof Error ? lastError : new Error("模型没有返回可用结果");
+      const error = lastError instanceof Error ? lastError : new Error("模型没有返回可用结果");
+      logger.error("agent.model.failed", { ...timer.metadata, durationMs: timer.elapsed(), firstTokenMs, error });
+      throw error;
     }
     const response = await generateText(request);
     if (response.toolCalls.length > 0) {
       const ask = response.toolCalls.find((call) => call.toolName === "ask_user");
       if (ask && typeof ask.input === "object" && ask.input !== null && "text" in ask.input) {
-        return { kind: "ask_user", text: String((ask.input as { text: unknown }).text) };
+        return complete({ kind: "ask_user", text: String((ask.input as { text: unknown }).text) });
       }
-      return {
+      return complete({
         kind: "tool_calls",
         calls: response.toolCalls.map((call) => ({ id: call.toolCallId, name: call.toolName, input: call.input })),
-      };
+      });
     }
     const text = response.text || "I need more information to continue.";
-    return { kind: "message", text };
+    return complete({ kind: "message", text });
   }
 }
 

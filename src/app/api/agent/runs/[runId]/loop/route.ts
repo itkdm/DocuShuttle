@@ -12,6 +12,7 @@ import { SupabaseWorkingDocumentAccess } from "@/modules/agent/infrastructure/su
 import { SupabaseDocumentVersionAccess } from "@/modules/agent/infrastructure/supabase/document-version-access";
 import { SupabaseSourceDocumentContext } from "@/modules/agent/infrastructure/supabase/source-context";
 import { OoxmlPreservationKernel } from "@/modules/documents";
+import { logger, withLogContext } from "@/infrastructure/observability";
 
 const schema = z.object({
   message: z.string().trim().min(1).max(8_000),
@@ -60,8 +61,11 @@ async function persistAskUserAnswer(runId: string, message: string, clientMessag
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ runId: string }> }) {
+  const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
+  const { runId } = await params;
+  return withLogContext({ requestId }, async () => {
+    const started = performance.now();
   try {
-    const { runId } = await params;
     const { client } = await requireSupabaseUser();
     const checkpoint = await new SupabaseAgentLoopStore(client).load(runId);
     if (!checkpoint) return NextResponse.json({ code: "LOOP_NOT_FOUND" }, { status: 404 });
@@ -80,33 +84,46 @@ export async function GET(request: Request, { params }: { params: Promise<{ runI
     // would duplicate already-consumed events). The legacy trace fallback is
     // only safe for an initial, cursor-less load.
     const replay = events.length || after > 0 ? events : checkpoint.trace ?? [];
-    return NextResponse.json({ checkpoint, events: replay, nextSequence: durable.data?.at(-1)?.sequence ?? after });
+    const response = NextResponse.json({ checkpoint, events: replay, nextSequence: durable.data?.at(-1)?.sequence ?? after });
+    logger.info("http.request.completed", { method: "GET", route: "/api/agent/runs/:runId/loop", status: response.status, durationMs: performance.now() - started, runId, afterSequence: after, durableEventCount: durable.data?.length ?? 0, returnedEventCount: replay.length });
+    return response;
   } catch (error) {
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
+    logger.error("http.request.failed", { method: "GET", route: "/api/agent/runs/:runId/loop", durationMs: performance.now() - started, runId, error });
     return NextResponse.json({ code: "AGENT_LOOP_LOAD_FAILED" }, { status: 500 });
   }
+  });
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ runId: string }> }) {
+  const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
+  const { runId } = await params;
+  return withLogContext({ requestId }, async () => {
+    const started = performance.now();
   try {
     const input = schema.parse(await request.json());
-    const { runId } = await params;
     await persistAskUserAnswer(runId, input.message, input.clientMessageId);
     const result = await (await createRunner(runId)).runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode);
-    return NextResponse.json(result);
+    const response = NextResponse.json(result);
+    logger.info("http.request.completed", { method: "POST", route: "/api/agent/runs/:runId/loop", status: response.status, durationMs: performance.now() - started, runId });
+    return response;
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
-    console.error("agent_loop_failed", error instanceof Error ? error.message : "unknown");
+    logger.error("http.request.failed", { method: "POST", route: "/api/agent/runs/:runId/loop", durationMs: performance.now() - started, runId, error });
     return NextResponse.json({ code: "AGENT_LOOP_FAILED" }, { status: 500 });
   }
+  });
 }
 
 /** POST with fetch streaming: emits public text deltas and audit-safe tool lifecycle events. */
 export async function PUT(request: Request, { params }: { params: Promise<{ runId: string }> }) {
+  const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
+  const { runId } = await params;
+  return withLogContext({ requestId }, async () => {
+    const started = performance.now();
   try {
     const input = schema.parse(await request.json());
-    const { runId } = await params;
     await persistAskUserAnswer(runId, input.message, input.clientMessageId);
     const runner = await createRunner(runId);
     const encoder = new TextEncoder();
@@ -121,10 +138,12 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
         } finally { controller.close(); }
       },
     });
+    logger.info("http.request.completed", { method: "PUT", route: "/api/agent/runs/:runId/loop", status: 200, durationMs: performance.now() - started, runId, streaming: true });
     return new Response(stream, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", "connection": "keep-alive", "x-accel-buffering": "no" } });
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
     return NextResponse.json({ code: error instanceof Error ? error.message : "AGENT_LOOP_FAILED" }, { status: 500 });
   }
+  });
 }

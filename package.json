@@ -12,6 +12,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "logs:summary": "tsx scripts/logs/summary.ts",
+    "logs:slow": "tsx scripts/logs/slow.ts",
+    "logs:errors": "tsx scripts/logs/errors.ts",
+    "logs:trace": "tsx scripts/logs/trace.ts",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
   },
   "dependencies": {
@@ -43,6 +47,7 @@
     "eslint-config-next": "16.3.3",
     "jsdom": "27.0.0",
     "tailwindcss": "4.3.3",
+    "tsx": "^4.23.12",
     "typescript": "5.9.3",
     "vitest": "4.1.11"
   },

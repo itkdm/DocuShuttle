@@ -68,8 +68,9 @@ export function mergeTimelineEvents(previous: readonly AgentEvent[], incoming: r
   const result = [...previous];
   const identity = (event: AgentEvent) => {
     const sequence = (event as { sequence?: unknown }).sequence;
-    if (typeof sequence === "number") return `sequence:${sequence}`;
-    const payload = [event.type, event.callId ?? "", event.name ?? "", event.timestamp ?? "", event.text ?? "", event.error ?? ""];
+    const runId = (event as { runId?: unknown }).runId;
+    if (typeof sequence === "number") return `sequence:${String(runId ?? "")}:${sequence}`;
+    const payload = [String(runId ?? ""), event.type, event.callId ?? "", event.name ?? "", event.timestamp ?? "", event.text ?? "", event.error ?? ""];
     return `fallback:${payload.join("|")}`;
   };
   const seen = new Set(previous.map((event) => eventId(event, identity(event))));
@@ -92,7 +93,9 @@ export function mergeTimelineEvents(previous: readonly AgentEvent[], incoming: r
   return result.map((event, index) => ({ event, index })).sort((a, b) => {
     const as = (a.event as { sequence?: unknown }).sequence;
     const bs = (b.event as { sequence?: unknown }).sequence;
-    if (typeof as === "number" && typeof bs === "number") return as - bs || a.index - b.index;
+    const ar = (a.event as { runId?: unknown }).runId;
+    const br = (b.event as { runId?: unknown }).runId;
+    if (typeof as === "number" && typeof bs === "number" && ar === br) return as - bs || a.index - b.index;
     const at = a.event.timestamp ? Date.parse(a.event.timestamp) : Number.NaN;
     const bt = b.event.timestamp ? Date.parse(b.event.timestamp) : Number.NaN;
     if (Number.isFinite(at) && Number.isFinite(bt) && at !== bt) return at - bt;
@@ -116,7 +119,7 @@ export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
   let streamedIndex: number | undefined;
   for (const event of events) {
     const id = eventId(event, `${event.type}-${items.length}`);
-    if (event.type === "turn.started" && eventText(event)) items.push({ kind: "user", id, text: eventText(event)! });
+    if (event.type === "turn.started" && eventText(event)) { streamedText = ""; streamedIndex = undefined; items.push({ kind: "user", id, text: eventText(event)! }); }
     else if (event.type === "model.delta" && eventText(event)) {
       streamedText += eventText(event)!;
       const previous = items.at(-1);

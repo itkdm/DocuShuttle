@@ -25,7 +25,7 @@ export async function GET(request: Request) {
     if (eventResult.error) throw new Error(`Unable to load task agent events: ${eventResult.error.message}`);
     const eventsByRun = new Map<string, unknown[]>();
     for (const row of eventResult.data ?? []) {
-      const event = row.event && typeof row.event === "object" ? { ...(row.event as Record<string, unknown>), sequence: row.sequence } : undefined;
+      const event = row.event && typeof row.event === "object" ? { ...(row.event as Record<string, unknown>), sequence: row.sequence, runId: row.run_id } : undefined;
       if (!event) continue;
       const list = eventsByRun.get(row.run_id as string) ?? [];
       list.push(event); eventsByRun.set(row.run_id as string, list);

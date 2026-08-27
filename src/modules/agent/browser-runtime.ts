@@ -140,7 +140,10 @@ export type BrowserAgentTaskTimeline = {
 };
 
 export const loadBrowserAgentTaskTimeline = async (taskId: string) =>
-  json<BrowserAgentTaskTimeline>(`/api/agent/runs?taskId=${encodeURIComponent(taskId)}`);
+  (async () => {
+    const timeline = await json<BrowserAgentTaskTimeline>(`/api/agent/runs?taskId=${encodeURIComponent(taskId)}`);
+    return { ...timeline, runs: timeline.runs.map((run) => ({ ...run, events: normalizeReplayEvents(run.events, run.id) })) };
+  })();
 
 export type BrowserConversationMessage = {
   id: string;
@@ -196,6 +199,14 @@ export type BrowserAgentLoopResult = {
   events: ReadonlyArray<{ type: string; text?: string; name?: string; error?: string; eventId?: string; sequence?: number; timestamp?: string; runId?: string; turnId?: string; clientMessageId?: string; [key: string]: unknown }>;
 };
 
+const replayEventTypes = new Set(["turn.started", "model.started", "model.completed", "model.delta", "assistant.message", "tool.started", "tool.completed", "tool.failed", "approval.required", "approval.resolved", "completed", "turn.failed", "turn.cancelled"]);
+export function normalizeReplayEvents(events: BrowserAgentLoopResult["events"], runId: string): BrowserAgentEvent[] {
+  return events.flatMap((event) => {
+    if (!replayEventTypes.has(event.type) || typeof event.eventId !== "string" || typeof event.timestamp !== "string") return [];
+    return [{ ...event, eventId: event.eventId, runId, turnId: typeof event.turnId === "string" ? event.turnId : runId, timestamp: event.timestamp } as BrowserAgentEvent];
+  });
+}
+
 export const runBrowserAgentLoop = async (runId: string, message: string, permissionMode: AgentPermissionMode = "default") =>
   json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop`, post({ message, permissionMode }));
 
@@ -216,7 +227,10 @@ export async function runBrowserAgentLoopStream(
 }
 
 export const loadBrowserAgentLoop = async (runId: string, after?: number) =>
-  json<BrowserAgentLoopResult & { nextSequence?: number }>(`/api/agent/runs/${runId}/loop${after ? `?after=${after}` : ""}`);
+  (async () => {
+    const result = await json<BrowserAgentLoopResult & { nextSequence?: number }>(`/api/agent/runs/${runId}/loop${after ? `?after=${after}` : ""}`);
+    return { ...result, events: normalizeReplayEvents(result.events, runId) };
+  })();
 
 export const resumeBrowserAgentLoop = async (runId: string, approval: "approved" | "rejected") =>
   json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop/resume`, post({ approval }));

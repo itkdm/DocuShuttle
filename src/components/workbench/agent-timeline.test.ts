@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildTimeline, isTimelineActive, mergeTimelineEvents, sanitizeForDisplay } from "./agent-timeline";
 import { projectAgentThread } from "./agent-thread-projection";
+import { normalizeReplayEvents } from "@/modules/agent/browser-runtime";
 
 describe("Agent execution timeline", () => {
   it("keeps the original turn when resumed events arrive", () => {
@@ -150,5 +151,13 @@ describe("Agent execution timeline", () => {
   it("keeps equal prompts in separate turns", () => {
     const messages = ["run-1", "run-2"].map((runId, index) => ({ id: `u-${index}`, role: "user" as const, parts: [{ type: "text", text: "继续" }], run_id: runId, created_at: "2026-01-01", message_key: `u-${index}` }));
     expect(projectAgentThread({ messages, historicalEvents: [], activeEvents: [] }).turns).toHaveLength(2);
+  });
+
+  it("rejects replay events without a durable identity envelope", () => {
+    expect(normalizeReplayEvents([
+      { type: "model.delta", text: "ok", eventId: "e-1", timestamp: "2026-01-01" },
+      { type: "model.delta", text: "untrusted" },
+      { type: "unknown.event", eventId: "e-3", timestamp: "2026-01-01" },
+    ], "run-1")).toEqual([{ type: "model.delta", text: "ok", eventId: "e-1", timestamp: "2026-01-01", runId: "run-1", turnId: "run-1" }]);
   });
 });

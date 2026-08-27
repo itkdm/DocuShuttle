@@ -77,17 +77,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ runI
     if (durable.error) throw new Error(durable.error.message);
     const events = (durable.data ?? []).map((row) => {
       const event = row.event && typeof row.event === "object" ? row.event as Record<string, unknown> : undefined;
-      return event ? { ...event, sequence: row.sequence } : undefined;
+      return event ? { ...event, sequence: row.sequence, runId, turnId: runId } : undefined;
     }).filter((event) => Boolean(event));
-    // A cursor request is an incremental replay contract: when no durable
-    // rows exist after the cursor, return an empty batch rather than falling
-    // back to the whole checkpoint trace (which has no stable sequence and
-    // would duplicate already-consumed events). The legacy trace fallback is
-    // only safe for an initial, cursor-less load.
-    const replay = events.length || after > 0 ? events : checkpoint.trace ?? [];
-    const response = NextResponse.json({ checkpoint, events: replay, nextSequence: durable.data?.at(-1)?.sequence ?? after });
-    logger.info("agent.replay.completed", { runId, afterSequence: after, limit, durableEventCount: durable.data?.length ?? 0, fallbackUsed: !events.length && after === 0, returnedEventCount: replay.length, nextSequence: durable.data?.at(-1)?.sequence ?? after, durationMs: performance.now() - started });
-    logger.info("http.request.completed", { method: "GET", route: "/api/agent/runs/:runId/loop", status: response.status, durationMs: performance.now() - started, runId, afterSequence: after, durableEventCount: durable.data?.length ?? 0, returnedEventCount: replay.length });
+    const response = NextResponse.json({ checkpoint, events, nextSequence: durable.data?.at(-1)?.sequence ?? after });
+    logger.info("agent.replay.completed", { runId, afterSequence: after, limit, durableEventCount: durable.data?.length ?? 0, returnedEventCount: events.length, nextSequence: durable.data?.at(-1)?.sequence ?? after, durationMs: performance.now() - started });
+    logger.info("http.request.completed", { method: "GET", route: "/api/agent/runs/:runId/loop", status: response.status, durationMs: performance.now() - started, runId, afterSequence: after, durableEventCount: durable.data?.length ?? 0, returnedEventCount: events.length });
     return response;
   } catch (error) {
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });

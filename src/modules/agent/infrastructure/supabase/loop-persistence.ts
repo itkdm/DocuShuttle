@@ -94,6 +94,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       return {
         owner_user_id: ownerId,
         conversation_id: conversationId,
+        turn_id: runId,
         role: message.role,
         parts: [{ type: "text", text: message.content, ...(callId ? { toolCallId: callId, toolName: message.toolName } : {}), ...(message.toolCalls ? { toolCalls: message.toolCalls } : {}) }],
         run_id: runId,

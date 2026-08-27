@@ -51,6 +51,7 @@ async function persistAskUserAnswer(runId: string, message: string, clientMessag
     id: clientMessageId,
     owner_user_id: user.id,
     conversation_id: checkpoint.conversationId,
+    turn_id: runId,
     role: "user",
     parts: [{ type: "text", text: message }],
     run_id: runId,

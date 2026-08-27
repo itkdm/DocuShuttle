@@ -27,7 +27,7 @@ export async function GET(request: Request) {
     if (conversation.error) throw new Error(conversation.error.message);
     if (!conversation.data) return NextResponse.json({ messages: [], nextCursor: null });
     let query = client.from("messages")
-      .select("id, role, parts, run_id, created_at, message_key, delivery_status")
+      .select("id, role, parts, run_id, turn_id, created_at, message_key, delivery_status")
       .eq("conversation_id", conversation.data.id)
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })

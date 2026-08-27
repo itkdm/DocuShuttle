@@ -144,6 +144,7 @@ export type BrowserConversationMessage = {
   role: "user" | "assistant" | "tool";
   parts: ReadonlyArray<{ type?: string; text?: string; [key: string]: unknown }>;
   run_id?: string | null;
+  turn_id?: string | null;
   created_at: string;
   message_key: string;
   delivery_status?: "pending" | "sent" | "failed";

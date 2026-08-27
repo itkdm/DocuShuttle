@@ -41,4 +41,13 @@ describe("OpenAI-compatible Agent model adapter", () => {
     const result = await model.decide({ messages: [{ role: "user", content: "你好" }], tools: [] });
     expect(result).toEqual({ kind: "message", text: "你好，我可以直接回答，也可以在需要时读取文档。" });
   });
+
+  it("maps the ask_user control tool to a durable HITL decision", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [{ id: "ask-1", type: "function", function: { name: "ask_user", arguments: JSON.stringify({ text: "要修改哪一段？" }) } }] }, finish_reason: "tool_calls" }],
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+    const model = new OpenAICompatibleAgentModel({ apiKey: "test", baseUrl: "https://gateway.test/v1", model: "test-model" });
+    const result = await model.decide({ messages: [{ role: "user", content: "帮我修改" }], tools: [] });
+    expect(result).toEqual({ kind: "ask_user", text: "要修改哪一段？" });
+  });
 });

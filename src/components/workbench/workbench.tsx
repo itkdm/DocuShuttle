@@ -69,6 +69,7 @@ export function Workbench() {
   const [conversationCursor, setConversationCursor] = useState<string | null>(null);
   const [loadingEarlierMessages, setLoadingEarlierMessages] = useState(false);
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>("default");
+  const taskListRequestRef = useRef<Promise<TaskSummary[]> | undefined>(undefined);
 
   const resetWorkspace = useCallback(() => {
     loadedTaskIdRef.current = undefined;
@@ -98,11 +99,21 @@ export function Workbench() {
   }, [setConversation, setLoopResult, setLiveEvents, setTimelineHistory]);
 
   const refreshTaskList = async () => {
-    try {
+    if (taskListRequestRef.current) {
+      try { setTasks(await taskListRequestRef.current); } catch { setTasks([]); }
+      return;
+    }
+    const request = (async () => {
       await ensureAnonymousSession();
-      setTasks(await listBrowserTasks());
+      return listBrowserTasks();
+    })();
+    taskListRequestRef.current = request;
+    try {
+      setTasks(await request);
     } catch {
       setTasks([]);
+    } finally {
+      taskListRequestRef.current = undefined;
     }
   };
 

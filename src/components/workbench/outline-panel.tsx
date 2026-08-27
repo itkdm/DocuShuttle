@@ -45,7 +45,7 @@ export function OutlinePanel({
   return (
     <aside className="outline-panel" aria-label="工作区">
       <div className="panel-heading">
-        <div><span className="eyebrow">工作区</span><h2>当前任务</h2></div>
+        <div><span className="eyebrow">工作区</span></div>
         <button className="icon-button" onClick={onCollapse} aria-label="收起工作区"><PanelLeftClose size={17} /></button>
       </div>
       <div className="source-stack" aria-label="源文档">
@@ -68,7 +68,6 @@ export function OutlinePanel({
             <button type="button" className="workspace-section-toggle" aria-expanded={tasksOpen} onClick={() => setOpen((current) => ({ ...current, tasks: !current.tasks }))}>
               <span>
                 <small className="eyebrow">历史</small>
-                任务会话
               </span>
               <ChevronDown size={15} className={tasksOpen ? "is-open" : ""} />
             </button>
@@ -88,7 +87,6 @@ export function OutlinePanel({
         <button type="button" className="workspace-section-toggle" aria-expanded={parseOpen} onClick={() => setOpen((current) => ({ ...current, parse: !current.parse }))}>
           <span>
             <small className="eyebrow">结构</small>
-            文档解析
           </span>
           <ChevronDown size={15} className={parseOpen ? "is-open" : ""} />
         </button>
@@ -111,7 +109,6 @@ export function OutlinePanel({
                 <b>{documentReady ? imageCount : "—"}</b>
               </li>
             </ul>
-            <p className="outline-hint">{documentReady ? "以上数字来自当前打开的文档。" : inTask ? "这份任务还没有可解析的文档。" : "打开一份任务后，这里会列出它的段落、表格和图片。"}</p>
           </div>
         )}
       </section>

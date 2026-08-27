@@ -39,14 +39,23 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
             : checkpoint.pendingUserQuestion
               ? "awaiting_user"
               : "running";
-    const state = { ...row.state, version: nextVersion, status, loopCheckpoint: checkpoint };
+    const state = {
+      ...row.state,
+      version: nextVersion,
+      status,
+      loopCheckpoint: checkpoint,
+      pendingInteraction: checkpoint.pendingApproval
+        ? { type: "approval", callId: checkpoint.pendingApproval.callId, toolName: checkpoint.pendingApproval.name, input: checkpoint.pendingApproval.input }
+        : checkpoint.pendingUserQuestion ? { type: "user_input", question: checkpoint.pendingUserQuestion.text } : undefined,
+      failure: checkpoint.status === "failed" ? { code: "AGENT_LOOP_FAILED", message: checkpoint.finalText ?? "Agent execution failed", retryable: true } : undefined,
+    };
     const updated = await this.client
       .from("agent_runs")
       .update({ state, status, resume_cursor: checkpoint, lock_version: nextVersion, updated_at: new Date().toISOString(), lease_expires_at: AGENT_LEASE_MANAGED_STATUSES.includes(status as typeof AGENT_LEASE_MANAGED_STATUSES[number]) ? new Date(Date.now() + 120_000).toISOString() : null })
       .eq("id", runId)
       .eq("lock_version", row.lock_version)
-      // The legacy cancel command owns the terminal cancelled state. Never
-      // let an in-flight loop write its stale checkpoint back over it.
+      // Cancellation owns the terminal state. Never let an in-flight loop
+      // write its stale checkpoint back over it.
       .neq("status", "cancelled")
       .select("id")
       .maybeSingle();

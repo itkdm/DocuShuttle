@@ -9,6 +9,7 @@ import type { AgentTool } from "./loop";
 export type WorkingDocumentAccessPort = {
   load(): Promise<{ bytes: Uint8Array; revision: string }>;
   commit(input: {
+    idempotencyKey: string;
     expectedRevision: string;
     bytes: Uint8Array;
     revision: string;
@@ -217,7 +218,7 @@ export function createDocumentTools(
     description: "Apply one exact text replacement to a paragraph or table cell after the user approves it. Creates one immutable derived document version.",
     requiresApproval: true,
     inputSchema: textChangeSchema,
-    async execute(input) {
+    async execute(input, context) {
       const current = await inspectCurrent();
       if (current.inspection.manifest.revision !== input.expectedRevision) throw new Error("DOCUMENT_REVISION_CONFLICT");
       const paragraph = current.inspection.paragraphs.find(({ address }) => address.nodeId === input.nodeId);
@@ -230,7 +231,7 @@ export function createDocumentTools(
       const mutation = await documents.mutate(current.bytes, { expectedRevision: input.expectedRevision, operations: [operation] });
       const validated = await documents.validate(mutation.bytes);
       if (blockingPackageErrors(validated.diagnostics).length > 0) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
-      const committed = await working.commit({ expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
+      const committed = await working.commit({ idempotencyKey: context.idempotencyKey, expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
       invalidateInspection();
       onEngineeringEvent?.({ event: "document.mutate.completed", metadata: { operationCount: 1, nodeCount: 1, revisionBefore: input.expectedRevision, revisionAfter: committed.revision, changedEntryCount: mutation.changedEntries.length, riskLevel: plan?.riskLevel, validationValid: mutation.validation?.valid } });
       return {
@@ -249,7 +250,7 @@ export function createDocumentTools(
     description: "Atomically apply two to thirty exact text replacements to known paragraph or table-cell nodes. Validates every target first, then creates one immutable derived version. Use this for a bounded multi-location edit.",
     requiresApproval: true,
     inputSchema: textChangesSchema,
-    async execute(input) {
+    async execute(input, context) {
       const current = await inspectCurrent();
       if (current.inspection.manifest.revision !== input.expectedRevision) throw new Error("DOCUMENT_REVISION_CONFLICT");
       const seen = new Set<string>();
@@ -267,7 +268,7 @@ export function createDocumentTools(
       const mutation = await documents.mutate(current.bytes, { expectedRevision: input.expectedRevision, operations });
       const validated = await documents.validate(mutation.bytes);
       if (blockingPackageErrors(validated.diagnostics).length > 0) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
-      const committed = await working.commit({ expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
+      const committed = await working.commit({ idempotencyKey: context.idempotencyKey, expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
       invalidateInspection();
       onEngineeringEvent?.({ event: "document.mutate.completed", metadata: { operationCount: operations.length, nodeCount: seen.size, revisionBefore: input.expectedRevision, revisionAfter: committed.revision, changedEntryCount: mutation.changedEntries.length, riskLevel: plan?.riskLevel, validationValid: mutation.validation?.valid } });
       return {

@@ -267,6 +267,16 @@ export class AgentLoopRunner {
       try {
         decision = await this.withLeaseHeartbeat(runId, () => this.model.decide({ messages: context.messages, tools: this.tools, signal: modelController.signal, onTextDelta: (text) => emit({ type: "model.delta", text, channel: "commentary" }) }));
       } catch (error) {
+        if (signal?.aborted) {
+          const cancelled = await this.store.load(runId);
+          if (cancelled?.status === "cancelled") return { checkpoint: cancelled, events };
+          checkpoint.status = "cancelled";
+          checkpoint.finalText = "本轮操作已取消。";
+          const cancelledEvent = emit({ type: "turn.cancelled", text: checkpoint.finalText }, false);
+          await this.store.save(runId, checkpoint);
+          onEvent?.(cancelledEvent);
+          return { checkpoint, events };
+        }
         // Provider/network failures must become a durable checkpoint instead of
         // leaving the run in `running` forever (or only returning a generic 500).
         // This also gives the UI a truthful, retryable terminal state.

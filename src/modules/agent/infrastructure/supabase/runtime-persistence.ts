@@ -9,7 +9,7 @@ const fail = (context: string, error: { message: string; code?: string } | null)
   if (error) throw new Error(`${context}: ${error.code ?? "DATABASE_ERROR"}: ${error.message}`);
 };
 
-type RunState = Partial<AgentRun> & { conversationId?: string; loopCheckpoint?: AgentLoopCheckpoint };
+type RunState = Partial<AgentRun> & { conversationId?: string; loopCheckpoint?: AgentLoopCheckpoint; failure?: AgentRun["failure"] };
 
 /** Owns run creation/loading only; checkpoint persistence belongs to the loop store. */
 export class SupabaseAgentRunStore implements AgentRunStore {
@@ -56,7 +56,13 @@ export class SupabaseAgentRunStore implements AgentRunStore {
 function normalizeRun(state: RunState, fallbackUpdatedAt: string): AgentRun {
   return {
     id: String(state.id), conversationId: state.conversationId, taskId: state.taskId, documentId: state.documentId,
-    baseRevision: state.baseRevision, status: state.status ?? "queued", lockVersion: Number(state.lockVersion ?? 0),
+    baseRevision: state.baseRevision,
+    status: state.status ?? "queued",
+    pendingInteraction: state.pendingInteraction ?? (state.loopCheckpoint?.pendingApproval
+      ? { type: "approval", callId: state.loopCheckpoint.pendingApproval.callId, toolName: state.loopCheckpoint.pendingApproval.name, input: state.loopCheckpoint.pendingApproval.input }
+      : state.loopCheckpoint?.pendingUserQuestion ? { type: "user_input", question: state.loopCheckpoint.pendingUserQuestion.text } : undefined),
+    failure: state.failure,
+    lockVersion: Number(state.lockVersion ?? 0),
     leaseExpiresAt: state.leaseExpiresAt, startedAt: state.startedAt, updatedAt: state.updatedAt ?? fallbackUpdatedAt, completedAt: state.completedAt,
   };
 }

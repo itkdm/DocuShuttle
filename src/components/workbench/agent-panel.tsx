@@ -90,6 +90,7 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
   const [imageToolOpen, setImageToolOpen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const prependHeightRef = useRef<number | null>(null);
   const currentTimeline = liveEvents.length ? liveEvents : loopResult?.events ?? [];
   const timelineEvents = mergeTimelineEvents(timelineHistory, currentTimeline);
   const latestTimelineEvent = timelineEvents.at(-1);
@@ -104,6 +105,13 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
     if (!element || !stickToBottomRef.current) return;
     element.scrollTop = element.scrollHeight;
   }, [timelineEvents.length, latestTimelineEventId, latestTimelineText, stage]);
+  useEffect(() => {
+    const element = contentRef.current;
+    const previousHeight = prependHeightRef.current;
+    if (!element || previousHeight === null) return;
+    element.scrollTop += element.scrollHeight - previousHeight;
+    prependHeightRef.current = null;
+  }, [conversation.length]);
   const handleContentScroll = () => {
     const element = contentRef.current;
     if (!element) return;
@@ -122,7 +130,7 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
         <button className="icon-button" onClick={onCollapse} aria-label="收起 Agent 面板"><PanelRightClose size={17} /></button>
       </div>
       <div className="agent-content" ref={contentRef} onScroll={handleContentScroll}>
-        {hasEarlierMessages && onLoadEarlier && <button className="load-earlier" onClick={onLoadEarlier} disabled={loadingEarlierMessages}>{loadingEarlierMessages ? "正在加载更早消息…" : "加载更早消息"}</button>}
+        {hasEarlierMessages && onLoadEarlier && <button className="load-earlier" onClick={() => { prependHeightRef.current = contentRef.current?.scrollHeight ?? null; onLoadEarlier(); }} disabled={loadingEarlierMessages}>{loadingEarlierMessages ? "正在加载更早消息…" : "加载更早消息"}</button>}
         {timelineEvents.length > 0 ? <AgentTimeline events={timelineEvents} onApproval={onLoopApproval} deciding={deciding} onCancel={stage !== "idle" && stage !== "awaiting" && stage !== "complete" ? onCancel : undefined} /> : <>
       {conversation.length === 0 && <div className="agent-message duck-message"><div className="message-meta"><span>鸭</span><strong>纸上鸭</strong><small>准备就绪</small></div><p>我可以帮你理解、修改和导出当前 Word 文档。直接告诉我目标；默认模式会在写入前请你确认。</p></div>}
           {conversation.map((message, index) => <div className={`agent-message conversation-message ${message.role}`} key={`${message.role}-${index}`}><div className="message-meta"><span>{message.role === "user" ? "你" : "鸭"}</span><strong>{message.role === "user" ? "你的目标" : "纸上鸭"}</strong><small>{message.role === "user" ? "刚刚" : "实时回复"}</small></div><p className="agent-rich-text">{message.role === "agent" ? renderAgentMarkdown(message.text) : message.text}</p></div>)}

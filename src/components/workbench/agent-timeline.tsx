@@ -1,0 +1,102 @@
+import { AlertCircle, Check, ChevronRight, LoaderCircle, Shield } from "lucide-react";
+import type { BrowserAgentLoopResult } from "@/modules/agent/browser-runtime";
+
+type AgentEvent = BrowserAgentLoopResult["events"][number];
+type ToolState = "running" | "completed" | "failed" | "approval";
+
+export type TimelineItem =
+  | { kind: "user"; id: string; text: string }
+  | { kind: "message"; id: string; text: string }
+  | { kind: "thought"; id: string; text: string }
+  | { kind: "tool"; id: string; name: string; state: ToolState; input?: unknown; output?: unknown; error?: string };
+
+const toolNames: Record<string, { label: string; detail: string }> = {
+  inspect_document: { label: "读取当前文档", detail: "查看文档结构和版本" },
+  list_document_regions: { label: "查找文档区域", detail: "定位可操作的语义节点" },
+  read_document_region: { label: "读取目标内容", detail: "读取选定节点的当前文本" },
+  inspect_node_capabilities: { label: "检查节点能力", detail: "确认安全可用的操作" },
+  plan_text_change: { label: "预演修改方案", detail: "检查目标、风险和预期结果" },
+  apply_text_change: { label: "修改当前文档", detail: "创建新的文档版本" },
+  apply_text_changes: { label: "批量修改文档", detail: "原子更新多个文档区域" },
+  list_source_documents: { label: "读取参考资料", detail: "查看模板、示例或辅助资料" },
+  read_source_document: { label: "读取参考内容", detail: "提取参考文档中的相关内容" },
+  list_document_versions: { label: "查看版本历史", detail: "读取不可变文档版本" },
+  restore_document_version: { label: "恢复文档版本", detail: "从历史版本创建新的版本" },
+  export_document: { label: "导出文档", detail: "准备当前版本的下载" },
+};
+
+export const toolPresentation = (name: string) => toolNames[name] ?? { label: "执行文档操作", detail: name };
+
+const compact = (value: unknown) => {
+  if (value === undefined) return "";
+  try {
+    const text = JSON.stringify(value, null, 2);
+    return text.length > 1600 ? `${text.slice(0, 1600)}…` : text;
+  } catch { return ""; }
+};
+
+const eventText = (event: AgentEvent) => typeof event.text === "string" ? event.text : undefined;
+const eventName = (event: AgentEvent) => typeof event.name === "string" ? event.name : undefined;
+const eventError = (event: AgentEvent) => typeof event.error === "string" ? event.error : undefined;
+const eventId = (event: AgentEvent, fallback: string) => typeof event.eventId === "string" ? event.eventId : fallback;
+const eventCallId = (event: AgentEvent) => typeof event.callId === "string" ? event.callId : undefined;
+
+export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
+  const items: TimelineItem[] = [];
+  const toolIndex = new Map<string, number>();
+  let streamedText = "";
+  for (const event of events) {
+    const id = eventId(event, `${event.type}-${items.length}`);
+    if (event.type === "turn.started" && eventText(event)) items.push({ kind: "user", id, text: eventText(event)! });
+    else if (event.type === "model.delta" && eventText(event)) {
+      streamedText += eventText(event)!;
+      const previous = items.at(-1);
+      if (previous?.kind === "thought") previous.text = streamedText;
+      else items.push({ kind: "thought", id, text: streamedText });
+    } else if (event.type === "assistant.message" && eventText(event)) {
+      if (eventText(event) !== streamedText) items.push({ kind: "message", id, text: eventText(event)! });
+      streamedText = "";
+    } else if (event.type === "tool.started" && eventName(event) && eventCallId(event)) {
+      streamedText = "";
+      toolIndex.set(eventCallId(event)!, items.length);
+      items.push({ kind: "tool", id: eventCallId(event)!, name: eventName(event)!, state: "running", input: event.input });
+    } else if (event.type === "tool.completed" && eventName(event)) {
+      const callId = eventCallId(event) ?? id;
+      const index = toolIndex.get(callId);
+      if (index === undefined) items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "completed", output: event.output });
+      else { const item = items[index]; if (item.kind === "tool") { item.state = "completed"; item.output = event.output; } }
+    } else if (event.type === "tool.failed" && eventName(event)) {
+      const callId = eventCallId(event) ?? id;
+      const index = toolIndex.get(callId);
+      if (index === undefined) items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "failed", error: eventError(event) });
+      else { const item = items[index]; if (item.kind === "tool") { item.state = "failed"; item.error = eventError(event); } }
+    } else if (event.type === "approval.required" && eventName(event)) {
+      const callId = eventCallId(event) ?? id;
+      const index = toolIndex.get(callId);
+      if (index === undefined) items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "approval", input: event.input });
+      else { const item = items[index]; if (item.kind === "tool") item.state = "approval"; }
+    }
+  }
+  return items;
+}
+
+function StateIcon({ state }: { state: ToolState }) {
+  if (state === "running") return <LoaderCircle size={14} className="event-spinner" />;
+  if (state === "approval") return <Shield size={14} />;
+  if (state === "failed") return <AlertCircle size={14} />;
+  return <Check size={14} />;
+}
+
+export function AgentTimeline({ events, onApproval, deciding = false }: { events: readonly AgentEvent[]; onApproval?: (choice: "approved" | "rejected") => void | Promise<void>; deciding?: boolean }) {
+  const items = buildTimeline(events);
+  return <div className="agent-timeline">
+    {items.map((item) => {
+      if (item.kind === "user") return <div className="timeline-message user" key={item.id}><div className="message-meta"><span>你</span><strong>你的目标</strong></div><p>{item.text}</p></div>;
+      if (item.kind === "thought") return <div className="timeline-thought" key={item.id}><span className="timeline-label">纸上鸭</span><p>{item.text}</p></div>;
+      if (item.kind === "message") return <div className="timeline-message agent" key={item.id}><div className="message-meta"><span>鸭</span><strong>纸上鸭</strong></div><p className="agent-rich-text">{item.text}</p></div>;
+      const presentation = toolPresentation(item.name);
+      const detailText = typeof item.error === "string" ? item.error : compact(item.output ?? item.input);
+      return <div className={`timeline-tool ${item.state}`} key={item.id}><div className="timeline-tool-head"><span className="timeline-tool-icon"><StateIcon state={item.state} /></span><div><strong>{presentation.label}</strong><small>{presentation.detail} · <code>{item.name}</code></small></div><ChevronRight size={14} /></div>{item.state === "approval" && onApproval && <div className="timeline-approval"><p>这一步会修改文档并创建新的版本，需要你的确认。</p><div><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并执行</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div></div>}{detailText && <details><summary>查看详情</summary><pre>{detailText}</pre></details>}</div>;
+    })}
+  </div>;
+}

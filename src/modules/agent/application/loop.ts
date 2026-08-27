@@ -60,7 +60,7 @@ export type AgentLoopStore = {
   claimPendingApproval?(runId: string, callId: string): Promise<AgentLoopCheckpoint | undefined>;
 };
 
-export type AgentLoopEvent = { timestamp?: string } & (
+export type AgentLoopEvent = { timestamp?: string; eventId?: string } & (
   | { type: "turn.started"; text: string }
   | { type: "model.started"; text: string }
   | { type: "model.completed"; durationMs: number }
@@ -143,7 +143,7 @@ export class AgentLoopRunner {
     checkpoint.finalText = undefined;
     const events: AgentLoopEvent[] = [];
     const emit = (event: AgentLoopEvent) => {
-      const timestamped = { ...event, timestamp: event.timestamp ?? new Date().toISOString() } as AgentLoopEvent;
+      const timestamped = { ...event, eventId: event.eventId ?? crypto.randomUUID(), timestamp: event.timestamp ?? new Date().toISOString() } as AgentLoopEvent;
       const traceEvent = timestamped.type === "tool.started"
         ? { ...timestamped, input: summarizeTraceValue(timestamped.input) } as AgentLoopEvent
         : timestamped.type === "tool.completed"
@@ -270,7 +270,7 @@ export class AgentLoopRunner {
     const input = tool.inputSchema.parse(pending.input);
     const events: AgentLoopEvent[] = [];
     const emit = (event: AgentLoopEvent) => {
-      const traceEvent = { ...event, timestamp: event.timestamp ?? new Date().toISOString() } as AgentLoopEvent;
+      const traceEvent = { ...event, eventId: event.eventId ?? crypto.randomUUID(), timestamp: event.timestamp ?? new Date().toISOString() } as AgentLoopEvent;
       events.push(traceEvent);
       checkpoint.trace = [...(checkpoint.trace ?? []), traceEvent].slice(-200);
     };

@@ -1,5 +1,5 @@
 import { createOpenAI } from "@ai-sdk/openai";
-import { generateText, tool } from "ai";
+import { generateText, streamText, tool } from "ai";
 
 import type { AgentModelDecision, AgentModelPort, AgentLoopMessage, AgentTool } from "../application/loop";
 
@@ -55,7 +55,8 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
     signal?: AbortSignal;
     onTextDelta?: (text: string) => void;
   }): Promise<AgentModelDecision> {
-    const response = await generateText({
+    const onTextDelta = input.onTextDelta;
+    const request = {
       model: this.provider.chat(this.options.model),
       system: this.options.system ?? PAPERDUCK_AGENT_SYSTEM,
       messages: input.messages.map((message) => message.role === "tool"
@@ -67,7 +68,7 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
               toolName: message.toolName ?? "unknown",
               output: { type: "json", value: parseToolResult(message.content) },
             }],
-          } as const)
+          })
         : message.role === "assistant" && message.toolCalls
           ? ({
               role: "assistant",
@@ -77,15 +78,32 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
                 toolName: call.name,
                 input: call.input,
               })),
-            } as const)
-        : ({ role: message.role, content: message.content } as const)),
+            })
+        : ({ role: message.role, content: message.content })),
       tools: Object.fromEntries(input.tools.map((candidate) => [candidate.name, tool({
         description: candidate.description,
         inputSchema: candidate.inputSchema,
       })])),
       stopWhen: () => true,
       abortSignal: input.signal,
-    });
+    } as Parameters<typeof streamText>[0];
+    if (onTextDelta) {
+      const response = streamText(request);
+      let streamedText = "";
+      for await (const delta of response.textStream) {
+        streamedText += delta;
+        onTextDelta(delta);
+      }
+      const toolCalls = await response.toolCalls;
+      if (toolCalls.length > 0) {
+        return {
+          kind: "tool_calls",
+          calls: toolCalls.map((call) => ({ id: call.toolCallId, name: call.toolName, input: call.input })),
+        };
+      }
+      return { kind: "message", text: streamedText || "I need more information to continue." };
+    }
+    const response = await generateText(request);
     if (response.toolCalls.length > 0) {
       return {
         kind: "tool_calls",
@@ -93,7 +111,6 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
       };
     }
     const text = response.text || "I need more information to continue.";
-    input.onTextDelta?.(text);
     return { kind: "message", text };
   }
 }

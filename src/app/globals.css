@@ -183,6 +183,8 @@ button:focus-visible, textarea:focus-visible, label:has(input:focus-visible) { o
 .timeline-message.user { background: #eef6fb; border-color: #c9dce9; }
 .timeline-message p, .timeline-thought p { margin: 8px 0 0; white-space: pre-wrap; line-height: 1.65; }
 .timeline-thought { border-left: 3px solid var(--duck); background: #fffdf2; }
+.timeline-status { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 9px; font-size: 11px; color: var(--green); background: #f1f7f1; border: 1px solid #d7e5d7; }
+.timeline-status.failed { color: var(--red); background: #fff2ef; border-color: #f0d5d0; }
 .timeline-label { color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .timeline-tool { border: 1px solid var(--line); background: #fff; border-radius: 9px; overflow: hidden; }
 .timeline-tool-head { display: grid; grid-template-columns: 22px 1fr 14px; gap: 8px; align-items: center; padding: 10px 12px; }

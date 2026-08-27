@@ -1,5 +1,6 @@
 import { AlertCircle, Check, ChevronRight, LoaderCircle, Shield } from "lucide-react";
 import type { BrowserAgentLoopResult } from "@/modules/agent/browser-runtime";
+import { renderAgentMarkdown } from "./agent-markdown";
 
 type AgentEvent = BrowserAgentLoopResult["events"][number];
 type ToolState = "running" | "completed" | "failed" | "approval";
@@ -8,7 +9,8 @@ export type TimelineItem =
   | { kind: "user"; id: string; text: string }
   | { kind: "message"; id: string; text: string }
   | { kind: "thought"; id: string; text: string }
-  | { kind: "tool"; id: string; name: string; state: ToolState; input?: unknown; output?: unknown; error?: string };
+  | { kind: "tool"; id: string; name: string; state: ToolState; input?: unknown; output?: unknown; error?: string; durationMs?: number }
+  | { kind: "status"; id: string; state: "completed" | "failed"; text: string };
 
 const toolNames: Record<string, { label: string; detail: string }> = {
   inspect_document: { label: "读取当前文档", detail: "查看文档结构和版本" },
@@ -40,6 +42,12 @@ const eventName = (event: AgentEvent) => typeof event.name === "string" ? event.
 const eventError = (event: AgentEvent) => typeof event.error === "string" ? event.error : undefined;
 const eventId = (event: AgentEvent, fallback: string) => typeof event.eventId === "string" ? event.eventId : fallback;
 const eventCallId = (event: AgentEvent) => typeof event.callId === "string" ? event.callId : undefined;
+const eventDuration = (event: AgentEvent, value?: unknown) => {
+  const direct = (event as unknown as Record<string, unknown>).durationMs;
+  if (typeof direct === "number") return direct;
+  if (value && typeof value === "object" && typeof (value as Record<string, unknown>).durationMs === "number") return (value as Record<string, unknown>).durationMs as number;
+  return undefined;
+};
 
 export function mergeTimelineEvents(previous: readonly AgentEvent[], incoming: readonly AgentEvent[]): AgentEvent[] {
   const result = [...previous];
@@ -73,19 +81,20 @@ export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
     } else if (event.type === "tool.completed" && eventName(event)) {
       const callId = eventCallId(event) ?? id;
       const index = toolIndex.get(callId);
-      if (index === undefined) items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "completed", output: event.output });
-      else { const item = items[index]; if (item.kind === "tool") { item.state = "completed"; item.output = event.output; } }
+      if (index === undefined) items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "completed", output: event.output, durationMs: eventDuration(event, event.output) });
+      else { const item = items[index]; if (item.kind === "tool") { item.state = "completed"; item.output = event.output; item.durationMs = eventDuration(event, event.output); } }
     } else if (event.type === "tool.failed" && eventName(event)) {
       const callId = eventCallId(event) ?? id;
       const index = toolIndex.get(callId);
-      if (index === undefined) items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "failed", error: eventError(event) });
-      else { const item = items[index]; if (item.kind === "tool") { item.state = "failed"; item.error = eventError(event); } }
+      if (index === undefined) items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "failed", error: eventError(event), durationMs: eventDuration(event) });
+      else { const item = items[index]; if (item.kind === "tool") { item.state = "failed"; item.error = eventError(event); item.durationMs = eventDuration(event); } }
     } else if (event.type === "approval.required" && eventName(event)) {
       const callId = eventCallId(event) ?? id;
       const index = toolIndex.get(callId);
       if (index === undefined) items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "approval", input: event.input });
       else { const item = items[index]; if (item.kind === "tool") item.state = "approval"; }
-    }
+    } else if (event.type === "completed") items.push({ kind: "status", id, state: "completed", text: eventText(event) ?? "本轮已完成" });
+    else if (event.type === "turn.failed") items.push({ kind: "status", id, state: "failed", text: eventError(event) ?? "本轮未完成" });
   }
   return items;
 }
@@ -102,11 +111,12 @@ export function AgentTimeline({ events, onApproval, deciding = false }: { events
   return <div className="agent-timeline">
     {items.map((item) => {
       if (item.kind === "user") return <div className="timeline-message user" key={item.id}><div className="message-meta"><span>你</span><strong>你的目标</strong></div><p>{item.text}</p></div>;
-      if (item.kind === "thought") return <div className="timeline-thought" key={item.id}><span className="timeline-label">纸上鸭</span><p>{item.text}</p></div>;
-      if (item.kind === "message") return <div className="timeline-message agent" key={item.id}><div className="message-meta"><span>鸭</span><strong>纸上鸭</strong></div><p className="agent-rich-text">{item.text}</p></div>;
+      if (item.kind === "thought") return <div className="timeline-thought" key={item.id}><span className="timeline-label">纸上鸭</span><p className="agent-rich-text">{renderAgentMarkdown(item.text)}</p></div>;
+      if (item.kind === "message") return <div className="timeline-message agent" key={item.id}><div className="message-meta"><span>鸭</span><strong>纸上鸭</strong></div><p className="agent-rich-text">{renderAgentMarkdown(item.text)}</p></div>;
+      if (item.kind === "status") return <div className={`timeline-status ${item.state}`} key={item.id}><StateIcon state={item.state === "completed" ? "completed" : "failed"} /><span>{item.text}</span></div>;
       const presentation = toolPresentation(item.name);
       const detailText = typeof item.error === "string" ? item.error : compact(item.output ?? item.input);
-      return <div className={`timeline-tool ${item.state}`} key={item.id}><div className="timeline-tool-head"><span className="timeline-tool-icon"><StateIcon state={item.state} /></span><div><strong>{presentation.label}</strong><small>{presentation.detail} · <code>{item.name}</code></small></div><ChevronRight size={14} /></div>{item.state === "approval" && onApproval && <div className="timeline-approval"><p>这一步会修改文档并创建新的版本，需要你的确认。</p><div><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并执行</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div></div>}{detailText && <details><summary>查看详情</summary><pre>{detailText}</pre></details>}</div>;
+      return <div className={`timeline-tool ${item.state}`} key={item.id}><div className="timeline-tool-head"><span className="timeline-tool-icon"><StateIcon state={item.state} /></span><div><strong>{presentation.label}</strong><small>{presentation.detail} · <code>{item.name}</code>{item.durationMs !== undefined && <> · {item.durationMs}ms</>}</small></div><ChevronRight size={14} /></div>{item.state === "approval" && onApproval && <div className="timeline-approval"><p>这一步会修改文档并创建新的版本，需要你的确认。</p><div><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并执行</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div></div>}{detailText && <details><summary>查看详情</summary><pre>{detailText}</pre></details>}</div>;
     })}
   </div>;
 }

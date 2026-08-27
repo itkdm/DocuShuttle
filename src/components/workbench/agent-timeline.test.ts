@@ -35,4 +35,14 @@ describe("Agent execution timeline", () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ kind: "tool", state: "approval", id: "call-2" });
   });
+
+  it("keeps terminal status and tool duration in the timeline", () => {
+    const items = buildTimeline([
+      { type: "tool.started", callId: "call-3", name: "inspect_document", input: {} },
+      { type: "tool.completed", callId: "call-3", name: "inspect_document", output: { summary: "已读取", durationMs: 320 } },
+      { type: "completed", text: "已完成本轮处理" },
+    ]);
+    expect(items[0]).toMatchObject({ kind: "tool", state: "completed", durationMs: 320 });
+    expect(items[1]).toMatchObject({ kind: "status", state: "completed", text: "已完成本轮处理" });
+  });
 });

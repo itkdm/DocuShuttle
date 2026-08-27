@@ -6,6 +6,7 @@ import type { BrowserAgentLoopResult, BrowserImageCandidate, BrowserImageNode } 
 import type { AgentRun } from "@/modules/agent";
 import type { AgentPermissionMode } from "@/modules/agent/application/loop";
 import { AgentTimeline } from "./agent-timeline";
+import { renderAgentMarkdown } from "./agent-markdown";
 
 interface AgentPanelProps {
   stage: AgentStage; proposal: ProposalState; onCollapse: () => void;
@@ -30,42 +31,6 @@ interface AgentPanelProps {
   conversation?: ReadonlyArray<{ role: "user" | "agent"; text: string }>;
   permissionMode: AgentPermissionMode;
   onPermissionModeChange: (mode: AgentPermissionMode) => void;
-}
-
-function renderInlineMarkdown(text: string) {
-  return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, index) => {
-    if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith("`") && part.endsWith("`")) return <code key={index}>{part.slice(1, -1)}</code>;
-    return <span key={index}>{part}</span>;
-  });
-}
-
-function renderAssistantText(text: string) {
-  const lines = text.split("\n");
-  const output: React.ReactNode[] = [];
-  let codeLines: string[] | undefined;
-  lines.forEach((line, index) => {
-    if (line.trim().startsWith("```")) {
-      if (codeLines) {
-        output.push(<pre className="agent-md-code" key={`code-${index}`}><code>{codeLines.join("\n")}</code></pre>);
-        codeLines = undefined;
-      } else codeLines = [];
-      return;
-    }
-    if (codeLines) { codeLines.push(line); return; }
-    if (!line.trim()) { output.push(<br key={`break-${index}`} />); return; }
-    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
-    const ordered = line.match(/^\s*\d+[.)]\s+(.*)$/);
-    const quote = line.match(/^\s*>\s?(.*)$/);
-    const heading = line.match(/^\s*#{1,3}\s+(.*)$/);
-    if (heading) output.push(<strong className="agent-md-heading" key={index}>{renderInlineMarkdown(heading[1])}</strong>);
-    else if (bullet) output.push(<span className="agent-md-list-item" key={index}><span aria-hidden="true">•</span>{renderInlineMarkdown(bullet[1])}</span>);
-    else if (ordered) output.push(<span className="agent-md-list-item" key={index}><span aria-hidden="true">{line.match(/^\s*(\d+)/)?.[1]}.</span>{renderInlineMarkdown(ordered[1])}</span>);
-    else if (quote) output.push(<span className="agent-md-quote" key={index}>{renderInlineMarkdown(quote[1])}</span>);
-    else output.push(<span className="agent-md-line" key={index}>{renderInlineMarkdown(line)}</span>);
-  });
-  if (codeLines) output.push(<pre className="agent-md-code" key="code-final"><code>{codeLines.join("\n")}</code></pre>);
-  return output;
 }
 
 const eventSummary = (event: BrowserAgentLoopResult["events"][number]) => {
@@ -134,7 +99,7 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
       <div className="agent-content">
         {timelineEvents.length > 0 ? <AgentTimeline events={timelineEvents} onApproval={onLoopApproval} deciding={deciding} /> : <>
       {conversation.length === 0 && <div className="agent-message duck-message"><div className="message-meta"><span>鸭</span><strong>纸上鸭</strong><small>准备就绪</small></div><p>我可以帮你理解、修改和导出当前 Word 文档。直接告诉我目标；默认模式会在写入前请你确认。</p></div>}
-          {conversation.map((message, index) => <div className={`agent-message conversation-message ${message.role}`} key={`${message.role}-${index}`}><div className="message-meta"><span>{message.role === "user" ? "你" : "鸭"}</span><strong>{message.role === "user" ? "你的目标" : "纸上鸭"}</strong><small>{message.role === "user" ? "刚刚" : "实时回复"}</small></div><p className="agent-rich-text">{message.role === "agent" ? renderAssistantText(message.text) : message.text}</p></div>)}
+          {conversation.map((message, index) => <div className={`agent-message conversation-message ${message.role}`} key={`${message.role}-${index}`}><div className="message-meta"><span>{message.role === "user" ? "你" : "鸭"}</span><strong>{message.role === "user" ? "你的目标" : "纸上鸭"}</strong><small>{message.role === "user" ? "刚刚" : "实时回复"}</small></div><p className="agent-rich-text">{message.role === "agent" ? renderAgentMarkdown(message.text) : message.text}</p></div>)}
         </>}
           {proposalSummary && !awaitingFinalReview && !loopResult?.checkpoint.pendingApproval && <div className="scope-card"><span className="scope-kicker">等待范围确认</span><strong>Agent 修改计划</strong><p>{proposalSummary}</p>{proposal === "pending" ? <div className="scope-actions"><button className="primary-small" onClick={() => onDecide("accepted")}><Check size={14} /> 批准并应用</button><button onClick={() => onDecide("rejected")}>拒绝</button></div> : <span className="decision-note">{proposal === "accepted" ? "范围已冻结，正在安全写入" : "已拒绝，原文不变"}</span>}</div>}
           {loopResult?.checkpoint.pendingApproval && !timelineEvents.length && <div className="scope-card"><span className="scope-kicker">需要你的确认</span><strong>准备执行：{loopResult.checkpoint.pendingApproval.name}</strong><p>Agent 已生成明确的修改参数。批准后会写入文档并生成新版本。</p><div className="scope-actions"><button className="primary-small" onClick={() => void handleLoopApproval("approved")} disabled={deciding}>{deciding ? "执行中…" : <><Check size={14} /> 批准并执行</>}</button><button onClick={() => void handleLoopApproval("rejected")} disabled={deciding}>{deciding ? "处理中…" : "拒绝"}</button></div></div>}
@@ -164,3 +129,4 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
     </aside>
   );
 }
+

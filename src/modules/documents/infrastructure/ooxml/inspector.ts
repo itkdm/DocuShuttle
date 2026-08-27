@@ -14,6 +14,7 @@ import {
   resolveRelationshipTarget,
 } from "./package-model";
 import { attributes, findElementRanges, visibleText, type XmlRange } from "./xml";
+import { flattenLosslessXml, parseLosslessXml, type LosslessXmlNode } from "./lossless-xml";
 
 /** Deterministic logical identity independent of visible text and revision. */
 async function logicalNodeId(
@@ -66,9 +67,9 @@ function containingCellPath(
   paragraph: XmlRange,
   cells: readonly IndexedCell[],
 ): string | undefined {
-  const cell = cells.find(
-    (candidate) => candidate.range.start < paragraph.start && candidate.range.end > paragraph.end,
-  );
+  const cell = [...cells]
+    .filter((candidate) => candidate.range.start < paragraph.start && candidate.range.end > paragraph.end)
+    .sort((left, right) => (left.range.end - left.range.start) - (right.range.end - right.range.start))[0];
   if (!cell) return undefined;
   const earlier = findElementRanges(cell.range.xml, "w:p").filter(
     (candidate) => candidate.start < paragraph.start - cell.range.start,
@@ -82,36 +83,28 @@ async function indexCells(
   revision: string,
 ): Promise<IndexedCell[]> {
   const result: IndexedCell[] = [];
-  const tables = findElementRanges(xml, "w:tbl").filter((table) => !/<w:tbl\b/.test(table.xml.slice(table.openEnd - table.start)));
-  for (let tableIndex = 0; tableIndex < tables.length; tableIndex += 1) {
-    const table = tables[tableIndex];
-    const rows = findElementRanges(table.xml, "w:tr");
+  const toRange = (node: LosslessXmlNode): XmlRange => ({ start: node.start, end: node.end, openEnd: node.openEnd, xml: node.rawSource });
+  const visitTable = async (table: LosslessXmlNode, tablePath: string): Promise<void> => {
+    const rows = table.children.filter((child) => child.name === "w:tr");
     for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-      const row = rows[rowIndex];
-      const cells = findElementRanges(row.xml, "w:tc");
+      const cells = rows[rowIndex].children.filter((child) => child.name === "w:tc");
       for (let cellIndex = 0; cellIndex < cells.length; cellIndex += 1) {
-        const local = cells[cellIndex];
-        const range: XmlRange = {
-          ...local,
-          start: table.start + row.start + local.start,
-          end: table.start + row.start + local.end,
-          openEnd: table.start + row.start + local.openEnd,
-        };
-        const text = visibleText(local.xml);
-        const fingerprint = await sha256(utf8(text));
-        const path = `tbl[${tableIndex}]/tr[${rowIndex}]/tc[${cellIndex}]`;
-        const address: TableCellAddress = {
-          kind: "table-cell",
-          nodeId: await logicalNodeId("table-cell", entry, path),
-          sourceRevision: revision,
-          fingerprint,
-          entry,
-          path,
-        };
-        result.push({ address, text, range });
+        const cell = cells[cellIndex];
+        const path = `${tablePath}/tr[${rowIndex}]/tc[${cellIndex}]`;
+        const text = visibleText(cell.rawSource);
+        const address: TableCellAddress = { kind: "table-cell", nodeId: await logicalNodeId("table-cell", entry, path), sourceRevision: revision, fingerprint: await sha256(utf8(text)), entry, path };
+        result.push({ address, text, range: toRange(cell) });
+        const nestedTables = cell.children.filter((child) => child.name === "w:tbl");
+        for (let nestedIndex = 0; nestedIndex < nestedTables.length; nestedIndex += 1) {
+          await visitTable(nestedTables[nestedIndex], `${path}/tbl[${nestedIndex}]`);
+        }
       }
     }
-  }
+  };
+  const roots = parseLosslessXml(xml);
+  const allTables = flattenLosslessXml(roots).filter((node) => node.name === "w:tbl");
+  const topLevelTables = allTables.filter((table) => !allTables.some((candidate) => candidate !== table && candidate.start < table.start && candidate.end > table.end));
+  for (let tableIndex = 0; tableIndex < topLevelTables.length; tableIndex += 1) await visitTable(topLevelTables[tableIndex], `tbl[${tableIndex}]`);
   return result;
 }
 

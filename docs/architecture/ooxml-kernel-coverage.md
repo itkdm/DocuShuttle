@@ -165,19 +165,19 @@ export function findElementRanges(xml: string, qualifiedName: string): XmlRange[
 
 打开与写入分离；嵌套表/文本框不再挡上传；ZIP 尾填充可打开。
 
-### P1 解析器换树（核心技术债）
+### P1 解析器换树（已完成）
 
 - 用带源偏移的 XML 遍历替换 `findElementRanges`。
 - 表、行、单元格只收集**直接子级**，嵌套表成为单元格的 child table。
 - 回归：现有 kernel 单测 + 实验2 行为不变。
 
-没有 P1，后面所有「支持嵌套表」都是在错误坐标上打补丁。
+现有 `lossless-xml.ts` 已提供统一 UTF-16 source span 和递归 children；现有 kernel 回归保持通过。
 
-### P2 嵌套表格可写（覆盖实验报告/申请表）
+### P2 嵌套表格可写（基础能力已完成）
 
 - 索引内层表单元格并赋予稳定 `node_id`。
-- `set-cell-text` 对内层格生效；外层格若只包内表，不把整格文本一次性清空。
-- 验收：实验1.2 的信息表格子能改，导出去 Word 无修复，外层边框还在。
+- `set-cell-text` 对内层格生效；外层格若包含内表会 fail closed，不会清空内层内容。
+- 已有 fixture 回归覆盖内层写入与外层容器拒绝；真实实验1.2 的 Word/WPS round-trip 仍是下一验收门槛。
 
 ### P3 文本框内文本
 

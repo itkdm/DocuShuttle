@@ -1,6 +1,6 @@
 # ADR-0006：OOXML Preservation Kernel Foundation Migration
 
-状态：Accepted · Foundation 1 已实现
+状态：Accepted · Foundation 1 与 P2 基础能力已实现
 
 ## 决策
 
@@ -16,15 +16,14 @@ Document Kernel 的 XML 寻址采用 source-preserving、namespace-aware 的元�
 
 - `lossless-xml.ts` 实现带栈的无损元素扫描，跳过 XML 声明、注释和 CDATA，并保留未知元素/属性的原文。
 - `xml.ts` 的 `findElementRanges` 已通过该索引返回完整嵌套范围；现有 kernel patch compiler 的外部契约保持不变。
-- `lossless-xml.test.ts` 覆盖嵌套范围、原始 lexical source、注释/CDATA/声明；完整测试同时覆盖真实 DOCX、未触及 ZIP part 哈希和失败原子性。
+- `lossless-xml.test.ts` 覆盖嵌套范围、原始 lexical source、注释/CDATA/声明；kernel 回归覆盖真实 DOCX、未触及 ZIP part 哈希、嵌套 cell 写入和外层容器 fail-closed。
 
 ## 后续迁移顺序
 
-1. P2：让递归索引暴露嵌套表的语义 cell 节点，并为外层包裹内表的 cell 增加能力说明。
-2. P3：以 Feature Adapter 识别文本框及 AlternateContent coherence group。
-3. P4：以 Feature Adapter 识别内容控件，保留 `sdtPr` 与锁定策略。
-4. Foundation 2/3/4：把 OPC relationship graph、NodeId/Locator/Fingerprint/Remap 和 capability registry 从 inspector 中进一步拆出。
-5. Foundation 5/6：将 mutation planner、dry-run 和分层 validation report 提升为明确的 application port；保持现有 `mutate` 兼容入口。
+1. P3：以 Feature Adapter 识别文本框及 AlternateContent coherence group。
+2. P4：以 Feature Adapter 识别内容控件，保留 `sdtPr` 与锁定策略。
+3. Foundation 2/3/4：把 OPC relationship graph、NodeId/Locator/Fingerprint/Remap 和 capability registry 从 inspector 中进一步拆出。
+4. Foundation 5/6：将 mutation planner、dry-run 和分层 validation report 提升为明确的 application port；保持现有 `mutate` 兼容入口。
 
 ## 不变的安全边界
 

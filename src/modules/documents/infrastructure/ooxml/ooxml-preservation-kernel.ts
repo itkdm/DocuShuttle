@@ -192,6 +192,12 @@ function textPatch(target: IndexedParagraph, operation: Extract<DocumentMutation
 
 function cellPatch(target: IndexedCell, operation: Extract<DocumentMutation, { kind: "set-cell-text" }>): EntryPatch {
   assertSafeTextContainer(target.range.xml);
+  if (/<w:tbl\b/u.test(target.range.xml)) {
+    throw new DocumentKernelError(
+      "NESTED_TABLE_CONTAINER_UNSUPPORTED",
+      "The selected cell contains a nested table; address an inner cell instead of replacing the container text.",
+    );
+  }
   assertPlainTextValue(operation.text);
   if (operation.expectedText !== undefined && target.text !== operation.expectedText) {
     throw new DocumentKernelError(

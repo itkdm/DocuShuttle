@@ -434,6 +434,8 @@ describe("OoxmlPreservationKernel", () => {
     expect(inspected.diagnostics).toContainEqual(expect.objectContaining({ code: "NESTED_TABLE_UNSUPPORTED", severity: "warning" }));
     expect(inspected.diagnostics).toContainEqual(expect.objectContaining({ code: "COMPLEX_CONTENT_UNSUPPORTED", severity: "warning" }));
     expect(inspected.diagnostics.filter(({ severity }) => severity === "error")).toEqual([]);
+    const nestedCell = inspected.tableCells.find(({ text }) => text === "inner");
+    expect(nestedCell).toMatchObject({ text: "inner", address: { path: "tbl[1]/tr[0]/tc[0]/tbl[0]/tr[0]/tc[0]" } });
 
     const hello = inspected.paragraphs.find((paragraph) => paragraph.text.includes("Hello duck"));
     expect(hello).toBeDefined();
@@ -448,6 +450,18 @@ describe("OoxmlPreservationKernel", () => {
     });
     const zip = await JSZip.loadAsync(mutated.bytes);
     expect(await zip.file("word/document.xml")?.async("string")).toContain("Hello PaperDuck");
+
+    const nestedMutation = await kernel.mutate(bytes, {
+      expectedRevision: inspected.manifest.revision,
+      operations: [{ kind: "set-cell-text", address: nestedCell!.address, expectedText: "inner", text: "inner changed" }],
+    });
+    const nestedAfter = await kernel.validate(nestedMutation.bytes);
+    expect(nestedAfter.tableCells.find(({ address }) => address.nodeId === nestedCell!.address.nodeId)?.text).toBe("inner changed");
+    const outerCell = inspected.tableCells.find(({ text }) => text === "outerinner");
+    await expect(kernel.mutate(bytes, {
+      expectedRevision: inspected.manifest.revision,
+      operations: [{ kind: "set-cell-text", address: outerCell!.address, text: "unsafe" }],
+    })).rejects.toMatchObject({ code: "NESTED_TABLE_CONTAINER_UNSUPPORTED" });
   });
 
   it("ignores trailing bytes after a valid ZIP end record", async () => {

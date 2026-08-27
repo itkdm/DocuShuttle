@@ -255,7 +255,7 @@ export function Workbench() {
       const activeRun = run ?? await createBrowserAgentRun(taskId, prompt);
       setRun(activeRun);
       const result = await runBrowserAgentLoopStream(activeRun.id, prompt, permissionMode, (event) => {
-        setLiveEvents((items) => [...items, event]);
+        setLiveEvents((items) => mergeTimelineEvents(items, [event]));
         if (event.type === "model.delta") setNotice("纸上鸭正在回复");
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
       }, abortController.signal);

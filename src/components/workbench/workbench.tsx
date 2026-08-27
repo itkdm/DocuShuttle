@@ -14,6 +14,7 @@ import { formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
 import { applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { createAgentEvent } from "@/modules/agent/application/events";
 import { useConversationStore } from "./conversation-store";
 import { listBrowserTasks, loadBrowserTaskWorkspace, type TaskPage } from "@/modules/tasks/browser-tasks";
 import type { TaskSummary } from "@/modules/tasks/domain";
@@ -335,19 +336,13 @@ export function Workbench() {
         setActiveEvents([]);
         setLoopResult(undefined);
       }
-      // Show the user's turn immediately. The server emits the durable
-      // turn.started event shortly afterwards; mergeTimelineEvents replaces
-      // this local item when that event arrives.
-      setActiveEvents((items) => mergeTimelineEvents(items, [{
-        type: "turn.started",
-        eventId: `local:${crypto.randomUUID()}`,
-        timestamp: new Date().toISOString(),
-        text: prompt,
-        clientMessageId: localMessageId,
-      }]));
       const activeRun = startsFreshRun ? await createBrowserAgentRun(taskId, prompt, localMessageId) : run;
       activeRunForRecovery = activeRun;
       setRun(activeRun);
+      // Show the user's turn immediately. The server emits the durable
+      // turn.started event shortly afterwards; mergeTimelineEvents replaces
+      // this local item when that event arrives.
+      setActiveEvents((items) => mergeTimelineEvents(items, [createAgentEvent(activeRun.id, { type: "turn.started", text: prompt, clientMessageId: localMessageId })]));
       const result = await runBrowserAgentLoopStream(activeRun.id, prompt, permissionMode, (event) => {
         setActiveEvents((items) => mergeTimelineEvents(items, [event]));
         if (event.type === "model.delta") setNotice("纸上鸭正在回复");
@@ -364,7 +359,7 @@ export function Workbench() {
         setNotice(result.checkpoint.finalText ?? "这次请求没有完成，请稍后重试。");
         return;
       }
-      const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
+      const replies = result.events.flatMap((event) => event.type === "assistant.message" && event.text ? [event.text] : []);
       if (replies.length) setMessages((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text, runId: activeRun.id }))]);
       const wrote = result.events.some((event) => event.type === "tool.completed" && (event.name === "apply_text_change" || event.name === "apply_text_changes"));
       if (wrote && taskId) {
@@ -411,12 +406,7 @@ export function Workbench() {
       }
       const failureMessage = error instanceof Error ? error.message : "这次分析没有完成，请重试。";
       setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, status: "failed" } : item));
-      setActiveEvents((items) => mergeTimelineEvents(items, [{
-        type: "turn.failed",
-        eventId: `local:failed:${crypto.randomUUID()}`,
-        timestamp: new Date().toISOString(),
-        error: failureMessage,
-      }]));
+      setActiveEvents((items) => mergeTimelineEvents(items, [createAgentEvent(activeRunForRecovery?.id ?? run?.id ?? "unknown", { type: "turn.failed", error: failureMessage })]));
       setMessages((items) => [...items, { role: "agent", text: error instanceof Error ? `这次分析没有完成：${error.message}` : "这次分析没有完成，请重试。" }]);
       setStage("idle");
       setNotice(error instanceof Error ? error.message : "Agent 分析失败");
@@ -437,7 +427,7 @@ export function Workbench() {
       }, abortController.signal);
       setLoopResult(result);
       setActiveEvents((items) => mergeTimelineEvents(items, result.events));
-      const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
+      const replies = result.events.flatMap((event) => event.type === "assistant.message" && event.text ? [event.text] : []);
       if (replies.length) setMessages((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text, runId: run.id }))]);
       if (result.checkpoint.status === "completed") {
         setProposalSummary(undefined);

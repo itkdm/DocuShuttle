@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import type { AgentStage, ProposalState } from "./types";
 import type { BrowserAgentLoopResult, BrowserImageCandidate, BrowserImageNode } from "@/modules/agent/browser-runtime";
+import type { AgentEvent } from "@/modules/agent/application/events";
 import type { AgentRun } from "@/modules/agent";
 import type { AgentPermissionMode } from "@/modules/agent/application/loop";
 import type { ConversationMessage } from "./conversation-store";
@@ -27,8 +28,8 @@ interface AgentPanelProps {
   imageBusy?: boolean;
   run?: AgentRun;
   loopResult?: BrowserAgentLoopResult;
-  activeEvents?: BrowserAgentLoopResult["events"];
-  historicalEvents?: BrowserAgentLoopResult["events"];
+  activeEvents?: ReadonlyArray<AgentEvent>;
+  historicalEvents?: ReadonlyArray<AgentEvent>;
   onLoopApproval?: (choice: "approved" | "rejected") => void | Promise<void>;
   messages?: ReadonlyArray<ConversationMessage>;
   permissionMode: AgentPermissionMode;
@@ -39,7 +40,7 @@ interface AgentPanelProps {
   loadingWorkspace?: boolean;
 }
 
-const eventSummary = (event: BrowserAgentLoopResult["events"][number]) => {
+const eventSummary = (event: AgentEvent) => {
   if (event.type === "turn.started") return "已接收你的请求";
   if (event.type === "model.started") return "正在处理请求";
   if (event.type === "model.completed") return "已完成本次判断";
@@ -50,6 +51,7 @@ const eventSummary = (event: BrowserAgentLoopResult["events"][number]) => {
   if (event.type === "approval.required") return `等待你批准 ${event.name ?? "文档操作"}`;
   if (event.type === "assistant.message") return "已生成回复";
   if (event.type === "turn.failed") return "本轮未完成";
+  if (event.type === "turn.cancelled") return "本轮已取消";
   return "本轮已完成";
 };
 
@@ -105,7 +107,7 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
   }).turns;
   const latestTimelineEvent = timelineEvents.at(-1);
   const latestTimelineEventId = latestTimelineEvent?.eventId;
-  const latestTimelineText = latestTimelineEvent?.text;
+  const latestTimelineText = latestTimelineEvent && "text" in latestTimelineEvent ? latestTimelineEvent.text : undefined;
   const awaitingUserQuestion = Boolean(loopResult?.checkpoint.pendingUserQuestion);
   // Approval/final review pauses the composer; an ask_user checkpoint is
   // specifically waiting for ordinary user text and must remain writable.

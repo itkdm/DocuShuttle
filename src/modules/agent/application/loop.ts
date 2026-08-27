@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { compactAgentMessages, DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY, type AgentContextCompactionPolicy } from "./context-compaction";
+import { createAgentEvent, type AgentEvent, type AgentEventPayload } from "./events";
 
 export type AgentLoopMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -58,14 +59,14 @@ export type AgentLoopCheckpoint = {
   finalText?: string;
   permissionMode?: AgentPermissionMode;
   /** Durable, user-visible execution trace. Kept bounded by the runner. */
-  trace?: AgentLoopEvent[];
+  trace?: AgentEvent[];
 };
 
 export type AgentLoopStore = {
   load(runId: string): Promise<AgentLoopCheckpoint | undefined>;
   save(runId: string, checkpoint: AgentLoopCheckpoint): Promise<void>;
   /** Append execution facts independently from the recovery snapshot. */
-  appendEvents?(runId: string, events: readonly AgentLoopEvent[]): Promise<void>;
+  appendEvents?(runId: string, events: readonly AgentEvent[]): Promise<void>;
   /** Persist only user-visible conversation semantics, never tool transcripts. */
   appendAssistantMessage?(runId: string, message: { id: string; text: string }): Promise<void>;
   /** Durable result for a side effect, keyed by runId:callId. */
@@ -87,26 +88,11 @@ export type AgentEffectReceipt = {
 
 export const AGENT_LEASE_MANAGED_STATUSES = ["queued", "running"] as const;
 
-export type AgentLoopEvent = { timestamp?: string; eventId?: string } & (
-  | { type: "turn.started"; text: string; clientMessageId?: string }
-  | { type: "model.started"; text: string }
-  | { type: "model.completed"; durationMs: number }
-  /** Public streamed text from the provider. This is commentary while the
-   * model is deciding or calling tools, never hidden chain-of-thought. */
-  | { type: "model.delta"; text: string; channel?: "commentary" | "reasoning_summary" | "final" }
-  | { type: "assistant.message"; text: string }
-  | { type: "tool.started"; callId: string; name: string; input: unknown }
-  | { type: "tool.completed"; callId: string; name: string; output: unknown }
-  | { type: "tool.failed"; callId: string; name: string; error: string; durationMs?: number }
-  | { type: "approval.required"; callId: string; name: string; input: unknown }
-  | { type: "approval.resolved"; callId: string; name: string; decision: "approved" | "rejected" }
-  | { type: "completed"; text: string }
-  | { type: "turn.failed"; error: string }
-  | { type: "turn.cancelled"; text: string });
+export type { AgentEvent, AgentEventPayload } from "./events";
 
 export type AgentLoopResult = {
   checkpoint: AgentLoopCheckpoint;
-  events: AgentLoopEvent[];
+  events: AgentEvent[];
 };
 
 export type AgentEngineeringEvent = {
@@ -165,7 +151,7 @@ export class AgentLoopRunner {
     private readonly onEngineeringEvent?: (event: AgentEngineeringEvent) => void,
   ) {}
 
-  private observe(runId: string, event: AgentLoopEvent) {
+  private observe(runId: string, event: AgentEvent) {
     if (!this.onEngineeringEvent || event.type === "model.delta" || event.type === "assistant.message") return;
     const metadata: Record<string, unknown> = { runId };
     if ("callId" in event) metadata.callId = event.callId;
@@ -188,7 +174,7 @@ export class AgentLoopRunner {
     return this.runWithPermission(runId, userText, "default", signal);
   }
 
-  async runWithPermission(runId: string, userText: string, permissionMode: AgentPermissionMode, signal?: AbortSignal, onEvent?: (event: AgentLoopEvent) => void, clientMessageId?: string): Promise<AgentLoopResult> {
+  async runWithPermission(runId: string, userText: string, permissionMode: AgentPermissionMode, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void, clientMessageId?: string): Promise<AgentLoopResult> {
     const current = await this.store.load(runId);
     const checkpoint: AgentLoopCheckpoint = current ?? {
       messages: [],
@@ -210,7 +196,7 @@ export class AgentLoopRunner {
     if (userText.trim() && checkpoint.pendingApproval) {
       return {
         checkpoint,
-        events: [{ type: "assistant.message", text: "当前有一项文档操作等待确认，请先批准或拒绝后再继续。" }],
+        events: [createAgentEvent(runId, { type: "assistant.message", text: "当前有一项文档操作等待确认，请先批准或拒绝后再继续。" })],
       };
     }
     // Permission is selected per user turn. A resumed approval keeps the mode
@@ -225,7 +211,7 @@ export class AgentLoopRunner {
     }
     else checkpoint.permissionMode ??= permissionMode;
     if ((checkpoint.status === "completed" || checkpoint.status === "failed" || checkpoint.status === "cancelled") && !userText.trim()) {
-      return { checkpoint, events: checkpoint.finalText ? [{ type: "completed", text: checkpoint.finalText }] : [] };
+      return { checkpoint, events: checkpoint.finalText ? [createAgentEvent(runId, { type: "turn.completed", text: checkpoint.finalText })] : [] };
     }
     if (userText.trim()) {
       // An answer to ask_user continues the same checkpoint and therefore
@@ -235,13 +221,13 @@ export class AgentLoopRunner {
     }
     checkpoint.status = "running";
     checkpoint.finalText = undefined;
-    const events: AgentLoopEvent[] = [];
-    const emit = (event: AgentLoopEvent, notify = true) => {
-      const timestamped = { ...event, eventId: event.eventId ?? crypto.randomUUID(), timestamp: event.timestamp ?? new Date().toISOString() } as AgentLoopEvent;
+    const events: AgentEvent[] = [];
+    const emit = (event: AgentEventPayload, notify = true) => {
+      const timestamped = createAgentEvent(runId, event);
       const traceEvent = timestamped.type === "tool.started"
-        ? { ...timestamped, input: summarizeTraceValue(timestamped.input) } as AgentLoopEvent
+        ? { ...timestamped, input: summarizeTraceValue(timestamped.input) } as AgentEvent
         : timestamped.type === "tool.completed"
-          ? { ...timestamped, output: summarizeTraceValue(timestamped.output) } as AgentLoopEvent
+          ? { ...timestamped, output: summarizeTraceValue(timestamped.output) } as AgentEvent
           : timestamped;
       events.push(traceEvent);
       this.observe(runId, traceEvent);
@@ -315,7 +301,7 @@ export class AgentLoopRunner {
         if (decision.finish !== false) {
           checkpoint.status = "completed";
           checkpoint.finalText = decision.text;
-          emit({ type: "completed", text: decision.text });
+          emit({ type: "turn.completed", text: decision.text });
           await this.store.save(runId, checkpoint);
           return { checkpoint, events };
         }
@@ -421,7 +407,7 @@ export class AgentLoopRunner {
     return { checkpoint, events };
   }
 
-  async resume(runId: string, approval: "approved" | "rejected", signal?: AbortSignal, onEvent?: (event: AgentLoopEvent) => void): Promise<AgentLoopResult> {
+  async resume(runId: string, approval: "approved" | "rejected", signal?: AbortSignal, onEvent?: (event: AgentEvent) => void): Promise<AgentLoopResult> {
     const current = await this.store.load(runId);
     const checkpoint = current?.pendingApproval && this.store.claimPendingApproval
       ? await this.store.claimPendingApproval(runId, current.pendingApproval.callId)
@@ -433,9 +419,9 @@ export class AgentLoopRunner {
     const tool = this.tools.find((candidate) => candidate.name === pending.name);
     if (!tool) throw new Error(`Unknown agent tool: ${pending.name}`);
     const input = tool.inputSchema.parse(pending.input);
-    const events: AgentLoopEvent[] = [];
-    const emit = (event: AgentLoopEvent, notify = true) => {
-      const traceEvent = { ...event, eventId: event.eventId ?? crypto.randomUUID(), timestamp: event.timestamp ?? new Date().toISOString() } as AgentLoopEvent;
+    const events: AgentEvent[] = [];
+    const emit = (event: AgentEventPayload, notify = true) => {
+      const traceEvent = createAgentEvent(runId, event);
       events.push(traceEvent);
       this.observe(runId, traceEvent);
       checkpoint.trace = [...(checkpoint.trace ?? []), traceEvent].slice(-200);

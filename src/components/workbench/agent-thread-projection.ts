@@ -1,4 +1,5 @@
-import type { BrowserAgentLoopResult, BrowserConversationMessage } from "@/modules/agent/browser-runtime";
+import type { AgentEvent } from "@/modules/agent/application/events";
+import type { BrowserConversationMessage } from "@/modules/agent/browser-runtime";
 import { reduceAgentEvents, type AgentActivity } from "./agent-turn-reducer";
 export type { AgentActivity } from "./agent-turn-reducer";
 
@@ -10,14 +11,13 @@ export type AgentThreadTurn = {
 };
 
 export type AgentThreadProjection = { turns: readonly AgentThreadTurn[] };
-type AgentEvent = BrowserAgentLoopResult["events"][number];
 const textPart = (message: BrowserConversationMessage) => message.parts.find((part) => part.type === "text")?.text;
 
 function assistantStatus(events: readonly AgentEvent[], finalContent?: string): AgentThreadTurn["assistant"]["status"] {
   if (events.some((event) => event.type === "approval.required")) return "awaiting_approval";
   if (events.some((event) => event.type === "turn.cancelled")) return "cancelled";
   if (events.some((event) => event.type === "turn.failed")) return "failed";
-  if (events.some((event) => event.type === "completed" || event.type === "assistant.message") || finalContent) return "completed";
+  if (events.some((event) => event.type === "turn.completed" || event.type === "assistant.message") || finalContent) return "completed";
   return events.length ? "running" : "completed";
 }
 
@@ -42,10 +42,9 @@ export function projectAgentThread(input: { messages: readonly BrowserConversati
   }
   const eventsByRun = new Map<string, AgentEvent[]>();
   for (const event of [...input.historicalEvents, ...input.activeEvents]) {
-    const runId = event.runId ?? input.activeRunId;
-    if (!runId) continue;
+    const runId = event.runId;
     const list = eventsByRun.get(runId) ?? [];
-    if (!event.eventId || !list.some((candidate) => candidate.eventId === event.eventId)) list.push(event);
+    if (!list.some((candidate) => candidate.eventId === event.eventId)) list.push(event);
     eventsByRun.set(runId, list);
   }
   const runIds = [...new Set([...messagesByRun.keys(), ...eventsByRun.keys()])];

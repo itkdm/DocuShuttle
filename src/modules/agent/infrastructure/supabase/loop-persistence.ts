@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { AGENT_LEASE_MANAGED_STATUSES, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentLoopEvent, type AgentLoopStore } from "../../application/loop";
+import { AGENT_LEASE_MANAGED_STATUSES, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentLoopStore } from "../../application/loop";
+import { createAgentEvent, type AgentEvent } from "../../application/events";
 import { ConcurrentRunUpdateError } from "../../domain/errors";
 import { measure } from "@/infrastructure/observability";
 
@@ -62,7 +63,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     if (updated.error || !updated.data) throw new ConcurrentRunUpdateError(runId);
   }
 
-  async appendEvents(runId: string, events: readonly AgentLoopEvent[]): Promise<void> {
+  async appendEvents(runId: string, events: readonly AgentEvent[]): Promise<void> {
     if (!events.length) return;
     const result = await this.client.rpc("append_agent_events", { p_run_id: runId, p_events: events });
     if (result.error) throw new Error(`Unable to persist agent events: ${result.error.message}`);
@@ -117,7 +118,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       return;
     }
     if (checkpoint.status === "cancelled") return;
-    const event = { type: "turn.cancelled", text: "本轮操作已取消。", eventId: crypto.randomUUID(), timestamp: new Date().toISOString() } as const;
+    const event = createAgentEvent(runId, { type: "turn.cancelled", text: "本轮操作已取消。" });
     const nextCheckpoint: AgentLoopCheckpoint = { ...checkpoint, status: "cancelled", pendingApproval: undefined, finalText: event.text, trace: [...(checkpoint.trace ?? []), event].slice(-200) };
     const nextState = { ...state, status: "cancelled", loopCheckpoint: nextCheckpoint, version: current.data.lock_version + 1 };
     const updated = await this.client.from("agent_runs")

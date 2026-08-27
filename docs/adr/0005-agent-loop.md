@@ -9,6 +9,11 @@ PaperDuck 自研一个 provider-neutral 的 Tool Loop，模型通过 OpenAI-comp
 
 Loop checkpoint 暂存于 `agent_runs.state.loopCheckpoint`，并采用乐观锁；每轮对话有独立的步数和工具预算，历史消息只作为上下文。checkpoint 是恢复快照，`agent_run_events` 是追加事实源，`messages` 只保存面向用户的语义消息；三者不再互相扫描投影。通过 Fetch + SSE 流即时送达界面；不展示模型的私有推理链。
 
+所有 Runtime、Persistence、SSE、Replay 和 Browser 事件统一使用 `application/events.ts`
+中的 `AgentEventPayload`/`AgentEvent`；live 事件由 Runtime 生成 `eventId/runId/timestamp`，
+数据库只原子分配 durable `sequence`。终态事件使用 `turn.completed`、`turn.failed`、
+`turn.cancelled`，协议不引入重复的 `turnId`。
+
 写入工具默认需要审批；“完全批准”是当前用户、当前任务和当前文档内的显式自动执行授权，而非绕过 revision、校验或不可变版本。多处确定的文字改动用 `apply_text_changes` 先完整校验、再一次 mutate/validate/commit，保证全成或全不成。
 
 Agent 面板以持久化事件为事实源组成单一 Execution Timeline。普通执行和审批恢复都通过 SSE 发送公开文本、工具生命周期、审批请求/解决结果和终态；模型公开文本在没有工具边界时渲染为最终消息，工具前后的文本保留为阶段说明。工具输入/输出默认折叠，并在展示层做截断和敏感字段脱敏；模型的隐藏推理不会进入产品界面。

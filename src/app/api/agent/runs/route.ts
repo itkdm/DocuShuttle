@@ -6,6 +6,7 @@ import { logger } from "@/infrastructure/observability";
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
 import { SupabaseAgentRunStore } from "@/modules/agent/infrastructure/supabase/runtime-persistence";
 import { AGENT_LEASE_MANAGED_STATUSES } from "@/modules/agent/application/loop";
+import { isDurableAgentEvent, type DurableAgentEvent } from "@/modules/agent/application/events";
 import { agentErrorResponse } from "../http";
 
 const schema = z.object({ taskId: z.uuid(), goal: z.string().trim().min(1).max(8_000), clientMessageId: z.uuid().optional() });
@@ -26,10 +27,12 @@ export async function GET(request: Request) {
       ? await client.from("agent_run_events").select("run_id, sequence, event").in("run_id", rows.map((row) => row.id)).order("sequence", { ascending: true })
       : { data: [], error: null };
     if (eventResult.error) throw new Error(`Unable to load task agent events: ${eventResult.error.message}`);
-    const eventsByRun = new Map<string, unknown[]>();
+    const eventsByRun = new Map<string, DurableAgentEvent[]>();
     for (const row of eventResult.data ?? []) {
-      const event = row.event && typeof row.event === "object" ? { ...(row.event as Record<string, unknown>), sequence: row.sequence, runId: row.run_id } : undefined;
-      if (!event) continue;
+      const event = row.event && typeof row.event === "object"
+        ? { ...(row.event as Record<string, unknown>), sequence: row.sequence, runId: row.run_id }
+        : undefined;
+      if (!isDurableAgentEvent(event)) continue;
       const list = eventsByRun.get(row.run_id as string) ?? [];
       list.push(event); eventsByRun.set(row.run_id as string, list);
     }

@@ -1,8 +1,7 @@
 import { AlertCircle, Check, ChevronRight, LoaderCircle, Shield, StopCircle } from "lucide-react";
-import type { BrowserAgentLoopResult } from "@/modules/agent/browser-runtime";
+import type { AgentEvent } from "@/modules/agent/application/events";
 import { renderAgentMarkdown } from "./agent-markdown";
 
-type AgentEvent = BrowserAgentLoopResult["events"][number];
 type ToolState = "running" | "completed" | "failed" | "approval";
 
 export type TimelineItem =
@@ -48,11 +47,11 @@ const compact = (value: unknown) => {
   } catch { return ""; }
 };
 
-const eventText = (event: AgentEvent) => typeof event.text === "string" ? event.text : undefined;
-const eventName = (event: AgentEvent) => typeof event.name === "string" ? event.name : undefined;
-const eventError = (event: AgentEvent) => typeof event.error === "string" ? event.error : undefined;
+const eventText = (event: AgentEvent) => "text" in event && typeof event.text === "string" ? event.text : undefined;
+const eventName = (event: AgentEvent) => "name" in event && typeof event.name === "string" ? event.name : undefined;
+const eventError = (event: AgentEvent) => "error" in event && typeof event.error === "string" ? event.error : undefined;
 const eventId = (event: AgentEvent, fallback: string) => typeof event.eventId === "string" ? event.eventId : fallback;
-const eventCallId = (event: AgentEvent) => typeof event.callId === "string" ? event.callId : undefined;
+const eventCallId = (event: AgentEvent) => "callId" in event && typeof event.callId === "string" ? event.callId : undefined;
 const eventDuration = (event: AgentEvent, value?: unknown) => {
   const direct = (event as unknown as Record<string, unknown>).durationMs;
   if (typeof direct === "number") return direct;
@@ -66,17 +65,11 @@ const eventChannel = (event: AgentEvent) => {
 
 export function mergeTimelineEvents(previous: readonly AgentEvent[], incoming: readonly AgentEvent[]): AgentEvent[] {
   const result = [...previous];
-  const stableIdentity = (event: AgentEvent) => {
-    if (typeof event.eventId === "string") return `event:${event.eventId}`;
-    const sequence = (event as { sequence?: unknown }).sequence;
-    const runId = (event as { runId?: unknown }).runId;
-    if (typeof sequence === "number") return `sequence:${String(runId ?? "")}:${sequence}`;
-    return undefined;
-  };
-  const seen = new Set(previous.map(stableIdentity).filter((key): key is string => Boolean(key)));
+  const stableIdentity = (event: AgentEvent) => `event:${event.eventId}`;
+  const seen = new Set(previous.map(stableIdentity));
   incoming.forEach((event) => {
     const key = stableIdentity(event);
-    if (key && seen.has(key)) return;
+    if (seen.has(key)) return;
     // Reconcile optimistic and durable user turns only through the client
     // message identity. Text is content, not identity: the same prompt may
     // legitimately appear in more than one turn.
@@ -87,11 +80,11 @@ export function mergeTimelineEvents(previous: readonly AgentEvent[], incoming: r
         : -1;
       if (optimisticIndex >= 0) {
         result[optimisticIndex] = event;
-        if (key) seen.add(key);
+        seen.add(key);
         return;
       }
     }
-    if (key) seen.add(key);
+    seen.add(key);
     result.push(event);
   });
   return result.map((event, index) => ({ event, index })).sort((a, b) => {
@@ -108,7 +101,7 @@ export function mergeTimelineEvents(previous: readonly AgentEvent[], incoming: r
 }
 
 export function isTimelineActive(events: readonly AgentEvent[], items: readonly TimelineItem[]): boolean {
-  if (events.some((event) => event.type === "completed" || event.type === "turn.failed" || event.type === "turn.cancelled")) return false;
+  if (events.some((event) => event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.cancelled")) return false;
   if (items.some((item) => item.kind === "tool" && item.state === "running")) return true;
   const last = events.at(-1)?.type;
   // A local turn.started is rendered before the request reaches the server.
@@ -176,7 +169,7 @@ export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
         const item = items[index];
         if (item.kind === "tool") { item.state = state; if (state === "failed") item.error = "用户已拒绝此操作。"; }
       }
-      } else if (event.type === "completed") {
+      } else if (event.type === "turn.completed") {
       const streamed = streamedIndex === undefined ? undefined : items[streamedIndex];
       if (streamed?.kind === "thought") items[streamedIndex!] = { kind: "message", id: streamed.id, text: streamed.text };
       streamedText = ""; streamedIndex = undefined;

@@ -51,6 +51,19 @@ run 前 API 会先检查当前 conversation 的 pending interaction；即使两�
 
 ## HITL、版本与流式展示
 
+## Agent Event Protocol
+
+`src/modules/agent/application/events.ts` 是唯一事件协议定义位置。`AgentEventPayload`
+是当前真实运行事件的 discriminated union，`AgentEvent` 统一携带必需的
+`eventId`、`runId`、`timestamp` 和可选 live `sequence`；`DurableAgentEvent` 将
+`sequence` 收紧为必需字段。Runtime、Supabase persistence、SSE、Browser replay 和
+Workbench projection 均直接消费这套类型。事件身份只使用 `eventId`，跨 run 只按
+`runId` 分组，durable 排序只按 `sequence`；`turnId` 不属于协议。
+
+终态事件统一使用 `turn.completed`、`turn.failed` 和 `turn.cancelled`。数据库物理列
+保存 `run_id/sequence`，JSON event 保存协议 payload，读取时在 persistence boundary
+重建完整 durable event；未知事件在 replay validation 阶段过滤。
+
 工具需要批准时只保存 interrupt，不占用长连接；批准/拒绝后从 checkpoint 恢复。模型
 请求补充信息（`ask_user`）也会持久化为独立的用户问题，用户回答后继续同一 run 和
 conversation，而不是创建无上下文的新 run。Token、assistant 消息、工具状态和错误仅

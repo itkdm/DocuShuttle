@@ -28,7 +28,7 @@ describe("AgentLoopRunner", () => {
     const model: AgentModelPort = { decide: async () => decisions.shift()! };
     const result = await new AgentLoopRunner(model, new MemoryStore(), [inspectTool]).run("run-1", "检查文档");
     expect(result.checkpoint.status).toBe("completed");
-    expect(result.events.map((event) => event.type)).toEqual(["turn.started", "model.started", "model.completed", "tool.started", "tool.completed", "model.started", "model.completed", "assistant.message", "completed"]);
+    expect(result.events.map((event) => event.type)).toEqual(["turn.started", "model.started", "model.completed", "tool.started", "tool.completed", "model.started", "model.completed", "assistant.message", "turn.completed"]);
     expect(result.checkpoint.messages.some((message) => message.role === "tool")).toBe(true);
     expect(result.checkpoint.messages.some((message) => message.role === "assistant" && message.toolCalls?.[0]?.name === "inspect_document")).toBe(true);
     expect(result.events.every((event) => typeof event.eventId === "string")).toBe(true);

@@ -1,4 +1,4 @@
-import type { BrowserAgentLoopResult } from "@/modules/agent/browser-runtime";
+import type { AgentEvent } from "@/modules/agent/application/events";
 
 export type AgentActivity =
   | { type: "note"; id: string; text: string }
@@ -11,10 +11,9 @@ export type AgentTurnEventState = {
   readonly sawTool: boolean;
 };
 
-type AgentEvent = BrowserAgentLoopResult["events"][number];
 
 const callIdOf = (event: AgentEvent) => String((event as { callId?: unknown }).callId ?? "unknown");
-const toolNameOf = (event: AgentEvent) => event.name ?? "document_operation";
+const toolNameOf = (event: AgentEvent) => "name" in event ? event.name : "document_operation";
 
 export function reduceAgentEvent(state: AgentTurnEventState, event: AgentEvent, runId: string): AgentTurnEventState {
   const activities = [...state.activities];

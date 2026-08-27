@@ -191,6 +191,7 @@ export function createDocumentTools(
         : { kind: "set-cell-text" as const, address: cell!.address as TableCellAddress, expectedText: input.expectedText, text: input.replacement };
       if (!documents.planMutation) throw new Error("DOCUMENT_DRY_RUN_UNAVAILABLE");
       const plan = await documents.planMutation(current.bytes, { expectedRevision: input.expectedRevision, operations: [operation] });
+      onEngineeringEvent?.({ event: "document.plan.completed", metadata: { operationCount: plan.operations.length, affectedPartCount: plan.changedParts.length, riskLevel: plan.riskLevel, diagnosticCount: plan.diagnostics.length } });
       return {
         baseRevision: plan.baseRevision,
         targets: plan.targets,
@@ -231,6 +232,7 @@ export function createDocumentTools(
       if (blockingPackageErrors(validated.diagnostics).length > 0) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
       const committed = await working.commit({ expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
       invalidateInspection();
+      onEngineeringEvent?.({ event: "document.mutate.completed", metadata: { operationCount: 1, nodeCount: 1, revisionBefore: input.expectedRevision, revisionAfter: committed.revision, changedEntryCount: mutation.changedEntries.length, riskLevel: plan?.riskLevel, validationValid: mutation.validation?.valid } });
       return {
         nodeId: input.nodeId,
         previousRevision: input.expectedRevision,
@@ -267,6 +269,7 @@ export function createDocumentTools(
       if (blockingPackageErrors(validated.diagnostics).length > 0) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
       const committed = await working.commit({ expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
       invalidateInspection();
+      onEngineeringEvent?.({ event: "document.mutate.completed", metadata: { operationCount: operations.length, nodeCount: seen.size, revisionBefore: input.expectedRevision, revisionAfter: committed.revision, changedEntryCount: mutation.changedEntries.length, riskLevel: plan?.riskLevel, validationValid: mutation.validation?.valid } });
       return {
         changedCount: input.changes.length,
         nodeIds: input.changes.map((change) => change.nodeId),

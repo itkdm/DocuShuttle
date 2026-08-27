@@ -31,7 +31,13 @@ const logBrowserEvent = (event: BrowserLog) => {
 
 const json = async <T>(url: string, init?: RequestInit): Promise<T> => {
   const started = performance.now();
-  const response = await fetch(url, init);
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    logBrowserEvent({ event: "client.fetch.failed", route: url.split("?")[0], durationMs: performance.now() - started });
+    throw error;
+  }
   logBrowserEvent({ event: response.ok ? "client.fetch.completed" : "client.fetch.failed", route: url.split("?")[0], status: response.status, durationMs: performance.now() - started });
   const body = await response.json().catch(() => ({})) as T & { code?: string; message?: string };
   if (!response.ok) {
@@ -64,28 +70,33 @@ async function consumeAgentStream(
   let bytesReceived = 0;
   let firstEventMs: number | undefined;
   const started = performance.now();
-  while (true) {
-    const next = await reader.read();
-    if (next.done) break;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
     chunkCount += 1;
     bytesReceived += next.value.byteLength;
     firstEventMs ??= performance.now() - started;
     buffer += decoder.decode(next.value, { stream: true });
     const frames = buffer.split("\n\n");
     buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      const event = /^event: (.+)$/m.exec(frame)?.[1];
-      const raw = /^data: (.+)$/m.exec(frame)?.[1];
-      if (!event || !raw) continue;
-      frameCount += 1;
-      const data = JSON.parse(raw) as BrowserAgentLoopResult | BrowserAgentLoopResult["events"][number] | { code?: string };
-      if (event === "event") onEvent(data as BrowserAgentLoopResult["events"][number]);
-      if (event === "result") finalResult = data as BrowserAgentLoopResult;
-      if (event === "error") {
-        const code = (data as { code?: string }).code;
-        throw new Error(userFacingError(code, "这次请求没有完成，请稍后重试。"));
+      for (const frame of frames) {
+        const event = /^event: (.+)$/m.exec(frame)?.[1];
+        const raw = /^data: (.+)$/m.exec(frame)?.[1];
+        if (!event || !raw) continue;
+        frameCount += 1;
+        const data = JSON.parse(raw) as BrowserAgentLoopResult | BrowserAgentLoopResult["events"][number] | { code?: string };
+        if (event === "event") onEvent(data as BrowserAgentLoopResult["events"][number]);
+        if (event === "result") finalResult = data as BrowserAgentLoopResult;
+        if (event === "error") {
+          const code = (data as { code?: string }).code;
+          throw new Error(userFacingError(code, "这次请求没有完成，请稍后重试。"));
+        }
       }
     }
+  } catch (error) {
+    logBrowserEvent({ event: "client.sse.failed", firstEventMs, chunkCount, frameCount, bytesReceived, finalResultReceived: Boolean(finalResult) });
+    throw error;
   }
   logBrowserEvent({ event: finalResult ? "client.sse.completed" : "client.sse.failed", firstEventMs, chunkCount, frameCount, bytesReceived, finalResultReceived: Boolean(finalResult) });
   if (!finalResult) throw new Error("AGENT_STREAM_INCOMPLETE");

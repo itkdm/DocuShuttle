@@ -273,9 +273,13 @@ async function verifyMutationOutcomes(
 
 export class OoxmlPreservationKernel implements DocumentEnginePort {
   async inspect(bytes: Uint8Array): Promise<DocumentInspection> {
-    return measure("document.inspect", { inputBytes: bytes.length }, async () => {
+    return measure("document.inspect", { inputBytes: bytes.length }, async (timer) => {
       const loaded = await loadPackage(bytes);
+      timer.mark("package_load");
+      logger.info("ooxml.package.load.completed", { inputBytes: bytes.length, durationMs: timer.marks().at(-1)?.durationMs });
       const indexed = await indexDocument(loaded);
+      timer.mark("index");
+      logger.info("ooxml.index.completed", { durationMs: timer.marks().at(-1)?.durationMs, paragraphCount: indexed.paragraphs.length, tableCellCount: indexed.cells.length, imageCount: indexed.images.length });
       const result = inspection(loaded, indexed);
       logger.info("document.inspect.summary", { inputBytes: bytes.length, revision: result.manifest.revision, paragraphCount: result.paragraphs.length, tableCellCount: result.tableCells.length, imageCount: result.images.length, diagnosticCount: result.diagnostics.length });
       return result;
@@ -356,8 +360,10 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
   private async mutateInternal(bytes: Uint8Array, request: MutationRequest, timer: ReturnType<typeof createTimer>): Promise<MutationResult> {
     const loaded = await loadPackage(bytes);
     timer.mark("package_loaded");
+    logger.info("ooxml.package.load.completed", { inputBytes: bytes.length, durationMs: timer.marks().at(-1)?.durationMs });
     const indexed = await indexDocument(loaded);
     timer.mark("document_indexed");
+    logger.info("ooxml.index.completed", { durationMs: timer.marks().at(-1)?.durationMs, paragraphCount: indexed.paragraphs.length, tableCellCount: indexed.cells.length, imageCount: indexed.images.length });
     const sourceDiagnostics = [...loaded.diagnostics, ...indexed.diagnostics];
     const blocking = blockingPackageErrors(sourceDiagnostics);
     if (blocking.length > 0) {
@@ -462,6 +468,8 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
       const original = loaded.entries.get(entry);
       if (!original || !bytesEqual(original, replacement)) stagedBinary.set(entry, replacement);
     }
+    timer.mark("patch");
+    logger.info("ooxml.patch.completed", { durationMs: timer.marks().at(-1)?.durationMs, changedEntryCount: stagedText.size + stagedBinary.size });
 
     if (stagedText.size === 0 && stagedBinary.size === 0) {
       const manifest = manifestWithNodes(loaded.manifest, indexed);
@@ -487,8 +495,12 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
       compression: "DEFLATE",
       compressionOptions: { level: 6 },
     });
+    timer.mark("zip_generate");
+    logger.info("ooxml.zip.generate.completed", { durationMs: timer.marks().at(-1)?.durationMs, outputBytes: output.length });
     const changedEntries = new Set([...stagedText.keys(), ...stagedBinary.keys()]);
     const validated = await loadPackage(output);
+    timer.mark("output_reopen");
+    logger.info("ooxml.output.reopen.completed", { durationMs: timer.marks().at(-1)?.durationMs, outputBytes: output.length });
     const blockingOutput = blockingPackageErrors(validated.diagnostics);
     if (blockingOutput.length > 0) {
       throw new DocumentKernelError(
@@ -498,15 +510,24 @@ export class OoxmlPreservationKernel implements DocumentEnginePort {
       );
     }
     await assertUntouchedEntries(loaded, validated, changedEntries);
+    timer.mark("untouched_validation");
+    logger.info("ooxml.untouched.validate.completed", { durationMs: timer.marks().at(-1)?.durationMs, changedEntryCount: changedEntries.size });
     const validatedIndex = await indexDocument(validated);
+    timer.mark("reindex");
+    logger.info("ooxml.reindex.completed", { durationMs: timer.marks().at(-1)?.durationMs });
     await verifyMutationOutcomes(indexed, validatedIndex, request.operations);
+    timer.mark("semantic_verify");
+    logger.info("ooxml.semantic.verify.completed", { durationMs: timer.marks().at(-1)?.durationMs, operationCount: request.operations.length });
     const manifest = manifestWithNodes(validated.manifest, validatedIndex);
+    const nodeRemap = remapNodeIdentities(manifestWithNodes(loaded.manifest, indexed).nodes, manifest.nodes);
+    timer.mark("identity_remap");
+    logger.info("ooxml.identity.remap.completed", { durationMs: timer.marks().at(-1)?.durationMs, nodeCount: manifest.nodes.length });
     return {
       bytes: output,
       manifest,
       changedEntries: [...changedEntries].sort(),
       validation: inspection(validated, validatedIndex).validation,
-      nodeRemap: remapNodeIdentities(manifestWithNodes(loaded.manifest, indexed).nodes, manifest.nodes),
+      nodeRemap,
       diagnostics: [
         ...validated.diagnostics,
         {

@@ -85,6 +85,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ runI
     // only safe for an initial, cursor-less load.
     const replay = events.length || after > 0 ? events : checkpoint.trace ?? [];
     const response = NextResponse.json({ checkpoint, events: replay, nextSequence: durable.data?.at(-1)?.sequence ?? after });
+    logger.info("agent.replay.completed", { runId, afterSequence: after, limit, durableEventCount: durable.data?.length ?? 0, fallbackUsed: !events.length && after === 0, returnedEventCount: replay.length, nextSequence: durable.data?.at(-1)?.sequence ?? after, durationMs: performance.now() - started });
     logger.info("http.request.completed", { method: "GET", route: "/api/agent/runs/:runId/loop", status: response.status, durationMs: performance.now() - started, runId, afterSequence: after, durableEventCount: durable.data?.length ?? 0, returnedEventCount: replay.length });
     return response;
   } catch (error) {
@@ -127,18 +128,32 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
     await persistAskUserAnswer(runId, input.message, input.clientMessageId);
     const runner = await createRunner(runId);
     const encoder = new TextEncoder();
+    let eventCount = 0;
+    let bytesSent = 0;
+    let firstEventMs: number | undefined;
+    let streamFailed = false;
     const stream = new ReadableStream({
       async start(controller) {
-        const send = (event: string, data: unknown) => controller.enqueue(encoder.encode(eventPayload(event, data)));
+        const send = (event: string, data: unknown) => {
+          const payload = encoder.encode(eventPayload(event, data));
+          firstEventMs ??= performance.now() - started;
+          eventCount += 1;
+          bytesSent += payload.byteLength;
+          controller.enqueue(payload);
+        };
         try {
           const result = await runner.runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, request.signal, (event) => send("event", event));
           send("result", result);
         } catch (error) {
+          streamFailed = true;
           send("error", { code: error instanceof Error ? error.message : "AGENT_LOOP_FAILED" });
-        } finally { controller.close(); }
+        } finally {
+          logger.info(streamFailed || request.signal.aborted ? "agent.stream.failed" : "agent.stream.completed", { runId, firstEventMs, eventCount, bytesSent, aborted: request.signal.aborted, completed: !streamFailed && !request.signal.aborted });
+          controller.close();
+        }
       },
     });
-    logger.info("http.request.completed", { method: "PUT", route: "/api/agent/runs/:runId/loop", status: 200, durationMs: performance.now() - started, runId, streaming: true });
+    logger.info("http.request.started", { method: "PUT", route: "/api/agent/runs/:runId/loop", runId, streaming: true });
     return new Response(stream, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", "connection": "keep-alive", "x-accel-buffering": "no" } });
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });

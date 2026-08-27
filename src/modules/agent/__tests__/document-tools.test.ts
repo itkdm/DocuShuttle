@@ -14,10 +14,11 @@ describe("document mutation planning tool", () => {
     if (!target) return;
     const revision = inspection.manifest.revision;
     let committed = false;
+    const engineeringEvents: Array<{ event: string; metadata: Record<string, unknown> }> = [];
     const tools = createDocumentTools(documents, {
       async load() { return { bytes: source, revision }; },
       async commit() { committed = true; return { revision }; },
-    });
+    }, (event) => engineeringEvents.push(event));
     const plan = tools.find((tool) => tool.name === "plan_text_change");
     expect(plan).toBeDefined();
     if (!plan) return;
@@ -32,6 +33,7 @@ describe("document mutation planning tool", () => {
     expect(result).not.toHaveProperty("operations.0.address");
     expect(result).not.toHaveProperty("changedParts");
     expect(committed).toBe(false);
+    expect(engineeringEvents).toContainEqual({ event: "document.plan.completed", metadata: expect.objectContaining({ operationCount: 1, affectedPartCount: 1, riskLevel: "low" }) });
   });
 
   it("does not leak OOXML locators from region listing", async () => {

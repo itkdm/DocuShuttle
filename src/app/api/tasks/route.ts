@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { performance } from "node:perf_hooks";
 import { logger } from "@/infrastructure/observability";
 
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
@@ -13,15 +14,17 @@ const requestSchema = z.object({
 });
 
 export async function GET() {
+  const started = performance.now();
   try {
     const { client, user } = await requireSupabaseUser();
     const tasks = await new ListTasks(new SupabaseTaskRepository(client)).execute(user.id);
+    logger.info("tasks.list.completed", { durationMs: performance.now() - started, taskCount: tasks.length });
     return NextResponse.json({ tasks });
   } catch (error) {
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") {
       return NextResponse.json({ code: error.message }, { status: 401 });
     }
-    logger.error("http.request.failed", { route: "/api/tasks", error });
+    logger.error("http.request.failed", { route: "/api/tasks", durationMs: performance.now() - started, error });
     return NextResponse.json({ code: "LIST_TASKS_FAILED" }, { status: 500 });
   }
 }

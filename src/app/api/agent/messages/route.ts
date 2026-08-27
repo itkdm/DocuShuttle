@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { performance } from "node:perf_hooks";
+import { logger } from "@/infrastructure/observability";
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
 
 const querySchema = z.object({
@@ -17,6 +19,7 @@ const decodeCursor = (value: string) => {
 
 /** Keyset-paginated durable conversation history, oldest-to-newest per page. */
 export async function GET(request: Request) {
+  const started = performance.now();
   try {
     const input = querySchema.parse(Object.fromEntries(new URL(request.url).searchParams));
     const { client } = await requireSupabaseUser();
@@ -39,16 +42,19 @@ export async function GET(request: Request) {
     const hasMore = rows.length > input.limit;
     const page = rows.slice(0, input.limit).reverse();
     const oldest = page[0];
-    return NextResponse.json({
+    const response = NextResponse.json({
       conversationId: conversation.data.id,
       messages: page,
       nextCursor: hasMore && oldest ? encodeCursor(oldest.created_at as string, oldest.id as string) : null,
     });
+    logger.info("conversation.messages.list.completed", { durationMs: performance.now() - started, taskId: input.taskId, messageCount: page.length, hasMore });
+    return response;
   } catch (error) {
     if (error instanceof z.ZodError || error instanceof Error && error.message === "INVALID_CURSOR") {
       return NextResponse.json({ code: "INVALID_REQUEST" }, { status: 400 });
     }
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
+    logger.error("http.request.failed", { route: "/api/agent/messages", durationMs: performance.now() - started, error });
     return NextResponse.json({ code: "CONVERSATION_HISTORY_FAILED" }, { status: 500 });
   }
 }

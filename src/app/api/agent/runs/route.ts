@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { performance } from "node:perf_hooks";
+import { logger } from "@/infrastructure/observability";
 
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
 import { SupabaseAgentRunStore } from "@/modules/agent/infrastructure/supabase/runtime-persistence";
@@ -9,6 +11,7 @@ import { agentErrorResponse } from "../http";
 const schema = z.object({ taskId: z.uuid(), goal: z.string().trim().min(1).max(8_000), clientMessageId: z.uuid().optional() });
 
 export async function GET(request: Request) {
+  const started = performance.now();
   try {
     const taskId = z.uuid().parse(new URL(request.url).searchParams.get("taskId"));
     const { client } = await requireSupabaseUser();
@@ -42,9 +45,12 @@ export async function GET(request: Request) {
         events: eventsByRun.get(row.id as string) ?? checkpoint?.trace ?? [],
       };
     });
-    return NextResponse.json({ runs });
+    const response = NextResponse.json({ runs });
+    logger.info("agent.runs.list.completed", { durationMs: performance.now() - started, taskId, runCount: runs.length, eventCount: runs.reduce((count, run) => count + run.events.length, 0) });
+    return response;
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST" }, { status: 400 });
+    logger.error("http.request.failed", { route: "/api/agent/runs", durationMs: performance.now() - started, error });
     return agentErrorResponse(error);
   }
 }

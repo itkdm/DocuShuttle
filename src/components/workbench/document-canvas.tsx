@@ -7,7 +7,6 @@ interface DocumentCanvasProps {
   proposal: ProposalState;
   onChoose: (file?: File) => void;
   onDecide: (decision: ProposalState) => void;
-  liveAgent: boolean;
   proposalSummary?: string;
 }
 
@@ -42,7 +41,7 @@ function DocxRenderer({ bytes, onError }: { bytes: ArrayBuffer; onError: (messag
   return <><div ref={styleRef} />{rendering && <div className="docx-rendering" role="status"><LoaderCircle size={20} /> 正在排版真实 DOCX…</div>}<div ref={bodyRef} className="docx-preview-host" data-testid="docx-preview" /></>;
 }
 
-export function DocumentCanvas({ loadState, proposal, onChoose, onDecide, liveAgent, proposalSummary }: DocumentCanvasProps) {
+export function DocumentCanvas({ loadState, proposal, onChoose, onDecide, proposalSummary }: DocumentCanvasProps) {
   const [renderError, setRenderError] = useState<string | null>(null);
   const proposalText = proposal === "accepted" ? "通过分层访问控制与日志审计，验证不同角色的最小权限边界。" : proposal === "rejected" ? "已保留原文，不会写回当前文件。" : "验证访问控制策略是否按预期生效，并记录审计日志中的关键事件。";
   const error = loadState.status === "error" ? loadState.message : renderError;
@@ -50,7 +49,7 @@ export function DocumentCanvas({ loadState, proposal, onChoose, onDecide, liveAg
   return (
     <section className="canvas-shell" aria-label="Working Document 文档画布">
       <div className="canvas-toolbar">
-        <div className="preview-state"><i className={loadState.status === "ready" ? "ready" : ""} />{loadState.status === "ready" ? "真实本地预览" : loadState.status === "loading" ? "正在读取" : "尚未载入文档"}</div>
+        <div className="preview-state"><i className={loadState.status === "ready" ? "ready" : ""} />{loadState.status === "ready" ? "文档预览" : loadState.status === "loading" ? "正在读取" : "尚未载入文档"}</div>
         <label className="canvas-upload"><input id="canvas-upload-docx" name="docx" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => onChoose(event.target.files?.[0])} /><FileUp size={14} />{loadState.status === "ready" ? "更换文档" : "选择 DOCX"}</label>
       </div>
       <div className="paper-stage">
@@ -59,7 +58,7 @@ export function DocumentCanvas({ loadState, proposal, onChoose, onDecide, liveAg
         {error && <div className="canvas-error" role="alert"><AlertCircle size={28} /><strong>这份文档暂时打不开</strong><p>{error}</p><label><input id="canvas-retry-docx" name="docx" type="file" accept=".docx" onChange={(event) => onChoose(event.target.files?.[0])} /><RotateCcw size={15} /> 选择其他文件</label></div>}
         {loadState.status === "ready" && !error && <div className="real-document-wrap">
           <DocxRenderer bytes={loadState.document.bytes} onError={setRenderError} />
-          {proposalSummary && <aside className={`preview-proposal ${proposal}`} aria-label="Agent 修改建议"><div><span className="duck-pin">◆</span><strong>{liveAgent ? "Agent 修改建议" : "本地建议预览"}</strong><small>{liveAgent ? "将写入当前文档并生成新版本" : "不会写回当前 DOCX"}</small></div><p>{proposalSummary || proposalText}</p>{proposal === "pending" ? <div className="proposal-actions"><button className="accept" onClick={() => onDecide("accepted")}><Check size={14} /> 批准</button><button onClick={() => onDecide("rejected")}><X size={14} /> 拒绝</button></div> : <span className="decision-note">{proposal === "accepted" ? "已批准" : "已拒绝"}</span>}</aside>}
+          {proposalSummary && <aside className={`preview-proposal ${proposal}`} aria-label="Agent 修改建议"><div><span className="duck-pin">◆</span><strong>Agent 修改建议</strong><small>批准后将写入当前文档并生成新版本</small></div><p>{proposalSummary || proposalText}</p>{proposal === "pending" ? <div className="proposal-actions"><button className="accept" onClick={() => onDecide("accepted")}><Check size={14} /> 批准</button><button onClick={() => onDecide("rejected")}><X size={14} /> 拒绝</button></div> : <span className="decision-note">{proposal === "accepted" ? "已批准" : "已拒绝"}</span>}</aside>}
         </div>}
       </div>
     </section>

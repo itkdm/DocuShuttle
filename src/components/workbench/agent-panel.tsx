@@ -10,7 +10,7 @@ interface AgentPanelProps {
   stage: AgentStage; proposal: ProposalState; onCollapse: () => void;
   onRun: (prompt: string) => void | Promise<void>; onCancel: () => void | Promise<void>;
   onDecide: (decision: ProposalState) => void | Promise<void>;
-  mode: "local" | "production";
+  workspaceReady: boolean;
   proposalSummary?: string;
   awaitingFinalReview?: boolean;
   onFinalReview: (choice: "approved" | "rejected") => void | Promise<void>;
@@ -115,7 +115,7 @@ function CustomSelect({ value, options, onChange, disabled, icon }: { value: str
   );
 }
 
-export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDecide, mode, proposalSummary, awaitingFinalReview, onFinalReview, imageCandidates = [], onApplyImage, imageBusy, conversation = [], loopResult, liveEvents = [], onLoopApproval, permissionMode, onPermissionModeChange }: AgentPanelProps) {
+export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDecide, workspaceReady, proposalSummary, awaitingFinalReview, onFinalReview, imageCandidates = [], onApplyImage, imageBusy, conversation = [], loopResult, liveEvents = [], onLoopApproval, permissionMode, onPermissionModeChange }: AgentPanelProps) {
   const [tab, setTab] = useState<Tab>("agent");
   const [prompt, setPrompt] = useState("");
   const [deciding, setDeciding] = useState(false);
@@ -124,11 +124,11 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
     setDeciding(true);
     try { await onLoopApproval(choice); } finally { setDeciding(false); }
   };
-  const submit = () => { if (stage === "analyzing" || mode !== "production") return; const value = prompt.trim(); if (!value) return; onRun(value); setPrompt(""); };
+  const submit = () => { if (stage === "analyzing" || !workspaceReady) return; const value = prompt.trim(); if (!value) return; onRun(value); setPrompt(""); };
   return (
     <aside className="agent-panel" aria-label="纸上鸭 Agent">
       <div className="agent-heading">
-        <div className="agent-title"><span className={`agent-orb ${stage}`}><Sparkles size={17} /></span><div><span className="eyebrow">Document Agent · {mode === "production" ? "LIVE" : "LOCAL"}</span><h2>{mode === "production" ? "纸上鸭 Agent" : "本地预览模式"}</h2></div></div>
+        <div className="agent-title"><span className={`agent-orb ${stage}`}><Sparkles size={17} /></span><div><span className="eyebrow">Document Agent</span><h2>纸上鸭 Agent</h2></div></div>
         <button className="icon-button" onClick={onCollapse} aria-label="收起 Agent 面板"><PanelRightClose size={17} /></button>
       </div>
       <div className="agent-tabs" role="tablist" aria-label="Agent 面板视图">
@@ -148,7 +148,7 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
         {tab === "activity" && <div className="activity-list">{(liveEvents.length ? liveEvents : loopResult?.events ?? []).filter((event) => event.type !== "model.delta").map((event, index) => <div className={`activity-item ${event.type === "tool.failed" || event.type === "turn.failed" ? "error" : ""}`} key={`${event.type}-${index}`}><Check size={15} /><div><strong>{eventSummary(event)} <em>{eventTime(event)}</em></strong><small>{eventDetail(event)}</small></div></div>)}{!liveEvents.length && !loopResult?.events.length && <div className="plan-empty">本轮的工具调用和结果会显示在这里。</div>}</div>}
       </div>
       <div className="agent-composer">
-        <textarea id="agent-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && stage !== "analyzing" && mode === "production") { event.preventDefault(); submit(); } }} placeholder="例如：把实验结论改得更专业，只改一个单元格…" rows={2} />
+        <textarea id="agent-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && stage !== "analyzing" && workspaceReady) { event.preventDefault(); submit(); } }} placeholder={workspaceReady ? "例如：把实验结论改得更专业，只改一个单元格…" : "请先打开一份 DOCX"} rows={2} disabled={!workspaceReady} />
         <div className="composer-toolbar">
           <CustomSelect
             value={permissionMode}
@@ -162,7 +162,7 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
           />
           <div className="composer-actions">
             <span>Enter 发送 · Shift + Enter 换行</span>
-            <button className="composer-send" onClick={submit} disabled={!prompt.trim() || stage === "analyzing" || mode !== "production"} aria-label="发送要求"><Send size={14} /></button>
+            <button className="composer-send" onClick={submit} disabled={!prompt.trim() || stage === "analyzing" || !workspaceReady} aria-label="发送要求"><Send size={14} /></button>
           </div>
         </div>
       </div>

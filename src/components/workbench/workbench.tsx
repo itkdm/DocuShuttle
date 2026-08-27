@@ -8,8 +8,8 @@ import { DocumentCanvas } from "./document-canvas";
 import { OutlinePanel } from "./outline-panel";
 import { PaperDuckMark } from "./paperduck-mark";
 import { TaskList } from "./task-list";
-import { downloadLocalDocument, formatFileSize, readDocxFile } from "./docx-file";
-import { persistSourceFile, productionPersistenceConfigured } from "@/modules/uploads/browser-source-upload";
+import { formatFileSize, readDocxFile } from "./docx-file";
+import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
 import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoopStream, resumeBrowserAgentLoop, type BrowserAgentLoopResult, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
 import { listBrowserTasks, loadBrowserTaskWorkspace } from "@/modules/tasks/browser-tasks";
@@ -50,7 +50,7 @@ export function Workbench() {
   const [notice, setNotice] = useState("请选择真实 DOCX；首页保持空白，打开历史任务才会恢复文档和对话");
   const [taskId, setTaskId] = useState<string>();
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
-  const [cloudSaved, setCloudSaved] = useState(false);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
   const [run, setRun] = useState<AgentRun>();
   const [proposalSummary, setProposalSummary] = useState<string>();
   const [awaitingFinalReview, setAwaitingFinalReview] = useState(false);
@@ -76,7 +76,7 @@ export function Workbench() {
     setDocumentLoad({ status: "empty" });
     setVersions(initialVersions);
     setTaskId(undefined);
-    setCloudSaved(false);
+    setWorkspaceReady(false);
     setRun(undefined);
     setProposalSummary(undefined);
     setAwaitingFinalReview(false);
@@ -134,7 +134,7 @@ export function Workbench() {
             : []
         )));
         setTaskId(workspace.task.id);
-        setCloudSaved(Boolean(workspace.workingDocumentId));
+        setWorkspaceReady(Boolean(workspace.workingDocumentId));
         setConversation([]);
         setLoopResult(undefined);
         setLiveEvents([]);
@@ -199,7 +199,7 @@ export function Workbench() {
   }
 
   const decide = async (decision: ProposalState) => {
-    if (cloudSaved && run && taskId) {
+    if (workspaceReady && run && taskId) {
       setProposal(decision);
       try {
         let current = await decideBrowserAgentRun(run.id, decision === "accepted" ? "approved" : "rejected");
@@ -233,13 +233,13 @@ export function Workbench() {
       }
       return;
     }
-    setConversation((items) => [...items, { role: "agent", text: "当前是本地预览模式；我不会伪造批准、进度或版本写回。请先配置云端工作区。" }]);
-    setNotice("当前是本地预览模式；未连接持久化 Agent，不会伪造批准或版本写回。请先配置云端工作区。");
+    setConversation((items) => [...items, { role: "agent", text: "请先打开一份 DOCX，建立文档工作区后我就可以开始处理。" }]);
+    setNotice("请先打开一份 DOCX，建立文档工作区");
   };
 
   const runAgent = async (prompt: string) => {
-    if (!cloudSaved || !taskId) {
-      setNotice("请先将真实 DOCX 保存到私有工作区");
+    if (!workspaceReady || !taskId) {
+      setNotice("请先打开一份 DOCX，建立文档工作区");
       return;
     }
     setConversation((items) => [...items, { role: "user", text: prompt }]);
@@ -368,11 +368,7 @@ export function Workbench() {
       } else if (maySeedWorkingDocument) setRun(undefined);
       const next = { kind, name: file.name, size: formatFileSize(file.size) };
       setAssets((items) => [...items.filter((item) => item.kind !== kind), next]);
-      if (maySeedWorkingDocument && !productionPersistenceConfigured()) {
-        setDocumentLoad({ status: "ready", document: { file, bytes } });
-        setVersions([{ id: "local", label: isTemplate ? "本地原始模板" : "本地原始示例", time: "刚刚", actor: "你", current: true }]);
-        setCloudSaved(false);
-      } else if (!maySeedWorkingDocument) {
+      if (!maySeedWorkingDocument) {
         // Reference context changed, so any proposal generated without this
         // example is stale even though the Working Document bytes are stable.
         setRun(undefined);
@@ -381,48 +377,42 @@ export function Workbench() {
         setAwaitingFinalReview(false);
         setStage("idle");
       }
-      if (productionPersistenceConfigured()) {
-        setNotice(isTemplate ? `${file.name} 已打开，正在安全上传并建立不可变版本` : `${file.name} 已读取，正在作为参考示例安全上传`);
-        const persisted = await persistSourceFile({ file, bytes, role: kind, taskId });
-        const nextSourceState = reduceSourceRegistration(sourceState, persisted);
-        setSourceState(nextSourceState);
-        setTaskId(persisted.taskId);
-        if (nextSourceState.workingDocumentId) {
-          const inspection = await inspectBrowserTaskDocument(persisted.taskId);
-          setImageNodes(inspection.images);
-          setParagraphCount(inspection.counts.paragraphs);
-          setTableCellCount(inspection.counts.tableCells);
-        }
-        const createsWorkingDocument = isWorkingDocumentUpload(kind, persisted);
-        const hadWorkingDocument = Boolean(sourceState.workingDocumentId);
-        if (createsWorkingDocument && !hadWorkingDocument) {
-          setDocumentLoad({ status: "ready", document: { file, bytes } });
-          setVersions([{ id: persisted.versionId ?? "local", label: isTemplate ? "原始模板" : "完成示例", time: "刚刚", actor: "你", current: true }]);
-          setCloudSaved(true);
-          await refreshVersions(persisted.taskId);
-          setNotice(`${file.name} 已保存为 Working Document，并建立版本 v1`);
-        } else if (isTemplate && createsWorkingDocument && hadWorkingDocument) {
-          setCloudSaved(true);
-          await refreshVersions(persisted.taskId);
-          setNotice(`${file.name} 已替换 Working Document，并建立新的不可变版本`);
-        } else if (isTemplate && nextSourceState.workingDocumentId) {
-          setCloudSaved(true);
-          await refreshVersions(persisted.taskId);
-          setNotice(`${file.name} 已保存；当前 Working Document 仍保持不变`);
-        } else if (kind === "example") {
-          setCloudSaved(Boolean(nextSourceState.workingDocumentId));
-          setNotice(nextSourceState.workingDocumentId
-            ? `${file.name} 已保存为参考示例，Working Document 未改变`
-            : `${file.name} 已保存为参考示例；请继续上传模板以开始编辑`);
-        }
-        loadedTaskIdRef.current = persisted.taskId;
-        if (creatingNewTask) router.replace(taskUrl(persisted.taskId));
-        void refreshTaskList();
-      } else {
-        setNotice(isTemplate
-          ? `${file.name} 已在本地打开；云端服务尚未配置`
-          : `${file.name} 已作为本地参考示例载入；云端服务尚未配置`);
+      setNotice(isTemplate ? `${file.name} 正在建立文档工作区` : `${file.name} 正在作为参考资料加入工作区`);
+      const persisted = await persistSourceFile({ file, bytes, role: kind, taskId });
+      const nextSourceState = reduceSourceRegistration(sourceState, persisted);
+      setSourceState(nextSourceState);
+      setTaskId(persisted.taskId);
+      if (nextSourceState.workingDocumentId) {
+        const inspection = await inspectBrowserTaskDocument(persisted.taskId);
+        setImageNodes(inspection.images);
+        setParagraphCount(inspection.counts.paragraphs);
+        setTableCellCount(inspection.counts.tableCells);
       }
+      const createsWorkingDocument = isWorkingDocumentUpload(kind, persisted);
+      const hadWorkingDocument = Boolean(sourceState.workingDocumentId);
+      if (createsWorkingDocument && !hadWorkingDocument) {
+        setDocumentLoad({ status: "ready", document: { file, bytes } });
+        setVersions([{ id: persisted.versionId ?? "initial", label: isTemplate ? "原始模板" : "完成示例", time: "刚刚", actor: "你", current: true }]);
+        setWorkspaceReady(true);
+        await refreshVersions(persisted.taskId);
+        setNotice(`${file.name} 已建立文档工作区，并创建版本 v1`);
+      } else if (isTemplate && createsWorkingDocument && hadWorkingDocument) {
+        setWorkspaceReady(true);
+        await refreshVersions(persisted.taskId);
+        setNotice(`${file.name} 已替换当前文档，并创建新的不可变版本`);
+      } else if (isTemplate && nextSourceState.workingDocumentId) {
+        setWorkspaceReady(true);
+        await refreshVersions(persisted.taskId);
+        setNotice(`${file.name} 已保存；当前文档保持不变`);
+      } else if (kind === "example") {
+        setWorkspaceReady(Boolean(nextSourceState.workingDocumentId));
+        setNotice(nextSourceState.workingDocumentId
+          ? `${file.name} 已作为参考资料加入，当前文档未改变`
+          : `${file.name} 已加入参考资料；请继续上传模板以开始编辑`);
+      }
+      loadedTaskIdRef.current = persisted.taskId;
+      if (creatingNewTask) router.replace(taskUrl(persisted.taskId));
+      void refreshTaskList();
     } catch (error) {
       const message = error instanceof Error ? error.message : "读取文件失败，请重试。";
       setDocumentLoad({ status: "error", message });
@@ -433,7 +423,7 @@ export function Workbench() {
   const chooseWorkingDocument = (file?: File) => { void upload("template", file); };
   const downloadCurrent = async () => {
     if (documentLoad.status !== "ready") { setNotice("请先打开一份真实 DOCX"); return; }
-    if (cloudSaved && taskId) {
+    if (workspaceReady && taskId) {
       try {
         const exported = await createBrowserDocumentExport(taskId);
         const link = window.document.createElement("a");
@@ -444,12 +434,11 @@ export function Workbench() {
       } catch (error) { setNotice(error instanceof Error ? error.message : "导出失败"); }
       return;
     }
-    downloadLocalDocument(documentLoad.document.file);
-    setNotice(`正在下载原始文件 ${documentLoad.document.file.name}`);
+    setNotice("请先完成文档工作区初始化后再导出");
   };
 
   const restoreVersion = async (id: string) => {
-    if (cloudSaved && taskId) {
+    if (workspaceReady && taskId) {
       try {
         const restored = await restoreBrowserDocumentVersion(taskId, id);
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
@@ -464,7 +453,7 @@ export function Workbench() {
     setVersionsOpen(false); setMobilePanel("none"); setNotice(`已从 ${id} 创建新的恢复版本，历史记录仍完整保留`);
   };
   const cancelRun = async () => {
-    try { if (run && cloudSaved) setRun(await cancelBrowserAgentRun(run.id)); } catch { /* persisted latest state wins */ }
+    try { if (run && workspaceReady) setRun(await cancelBrowserAgentRun(run.id)); } catch { /* persisted latest state wins */ }
     setStage("idle"); setNotice("任务已取消，最近有效版本未受影响");
   };
   const finalReview = async (choice: "approved" | "rejected") => {
@@ -499,22 +488,22 @@ export function Workbench() {
       <a className="skip-link" href="#document-canvas">跳到文档</a>
       <header className="topbar">
         <button className="brand-lockup" type="button" onClick={startNewTask} aria-label="回到空白工作台"><PaperDuckMark /><div><strong>纸上鸭</strong><span>把 Word 真正做完</span></div></button>
-        <div className="document-identity"><span className="doc-chip">DOCX</span><div><strong>{documentLoad.status === "ready" ? documentLoad.document.file.name : "尚未载入真实文档"}</strong><span><Cloud size={12} /> {documentLoad.status === "ready" ? cloudSaved ? "私有工作区已保存" : "本地预览 · 未上传" : "选择文件开始真实预览"}</span></div></div>
-        <div className="top-actions"><span className="demo-badge">{cloudSaved ? "Agent LIVE" : "本地预览"}</span><button className="quiet-action" onClick={() => setVersionsOpen((open) => !open)} aria-expanded={versionsOpen}><History size={16} /><span>版本 {versions.length}</span><ChevronDown size={13} /></button><button className="export-button" onClick={downloadCurrent} disabled={documentLoad.status !== "ready"}><Download size={16} /> 下载当前文件</button><button className="mobile-menu" onClick={() => setMobilePanel(mobilePanel === "none" ? "agent" : "none")} aria-label="打开工作台菜单"><Menu size={20} /></button></div>
+        <div className="document-identity"><span className="doc-chip">DOCX</span><div><strong>{documentLoad.status === "ready" ? documentLoad.document.file.name : "尚未载入文档"}</strong><span><Cloud size={12} /> {workspaceReady ? "工作区已保存" : "选择文件开始"}</span></div></div>
+        <div className="top-actions"><button className="quiet-action" onClick={() => setVersionsOpen((open) => !open)} aria-expanded={versionsOpen}><History size={16} /><span>版本 {versions.length}</span><ChevronDown size={13} /></button><button className="export-button" onClick={downloadCurrent} disabled={documentLoad.status !== "ready" || !workspaceReady}><Download size={16} /> 下载当前文件</button><button className="mobile-menu" onClick={() => setMobilePanel(mobilePanel === "none" ? "agent" : "none")} aria-label="打开工作台菜单"><Menu size={20} /></button></div>
       </header>
 
       {versionsOpen && <div className="version-popover" role="dialog" aria-label="版本历史"><div className="version-heading"><div><span className="eyebrow">不可变历史</span><h2>版本记录</h2></div><button className="icon-button" onClick={() => setVersionsOpen(false)} aria-label="关闭版本记录"><X size={16} /></button></div><p>恢复会创建新版本，不会删除后续记录。</p><ol>{versions.map((version) => <li key={version.id} className={version.current ? "current" : ""}><span className="version-node">{version.current ? <Check size={12} /> : version.id.slice(1)}</span><div><strong>{version.label}</strong><small>{version.id} · {version.actor} · {version.time}</small></div>{!version.current && <button onClick={() => restoreVersion(version.id)}><RotateCcw size={12} /> 恢复</button>}</li>)}</ol></div>}
 
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
         {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
-        <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} proposal={proposal} onChoose={chooseWorkingDocument} onDecide={decide} liveAgent={cloudSaved} proposalSummary={proposalSummary} /></div>
-        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} liveEvents={liveEvents} onLoopApproval={decideLoop} conversation={conversation} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onDecide={decide} mode={cloudSaved ? "production" : "local"} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
+        <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} proposal={proposal} onChoose={chooseWorkingDocument} onDecide={decide} proposalSummary={proposalSummary} /></div>
+        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} liveEvents={liveEvents} onLoopApproval={decideLoop} conversation={conversation} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onDecide={decide} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 
       <div className="mobile-dock" aria-label="移动端工作台导航"><button onClick={() => setMobilePanel("outline")} className={mobilePanel === "outline" ? "active" : ""}><FilePlus2 size={18} /><span>文档</span></button><button onClick={() => setMobilePanel("agent")} className={mobilePanel === "agent" ? "active" : ""}><Sparkles size={18} /><span>审批</span><i>1</i></button><button onClick={() => setMobilePanel("versions")} className={mobilePanel === "versions" ? "active" : ""}><History size={18} /><span>版本</span></button><button onClick={downloadCurrent}><Download size={18} /><span>下载</span></button></div>
 
       {mobilePanel !== "none" && <div className="mobile-sheet" role="dialog" aria-modal="true" aria-label={mobilePanel === "agent" ? "移动审批" : mobilePanel === "outline" ? "源文档" : "版本历史"}><div className="sheet-handle" /><button className="sheet-close" onClick={() => setMobilePanel("none")} aria-label="关闭"><X size={18} /></button>
-        {mobilePanel === "agent" && <div className="mobile-approval"><span className="eyebrow">{cloudSaved ? "需要确认" : "本地预览"}</span><h2>{awaitingFinalReview ? "确认最终版本" : "确认局部改写建议"}</h2><p>{proposalSummary ?? "请先保存文档并让 Agent 生成修改计划。"}</p><div>{awaitingFinalReview ? <button className="mobile-approve" onClick={() => { void finalReview("approved"); setMobilePanel("none"); }}><Check size={16} /> 确认交付</button> : <button className="mobile-approve" onClick={() => { void decide("accepted"); setMobilePanel("none"); }} disabled={!proposalSummary}><Check size={16} /> 批准并应用</button>}<button onClick={() => { void decide("rejected"); setMobilePanel("none"); }} disabled={!proposalSummary}>拒绝</button></div></div>}
+        {mobilePanel === "agent" && <div className="mobile-approval"><span className="eyebrow">{awaitingFinalReview ? "需要确认" : "Agent 工作区"}</span><h2>{awaitingFinalReview ? "确认最终版本" : "确认局部改写建议"}</h2><p>{proposalSummary ?? "请先打开文档并让 Agent 生成修改计划。"}</p><div>{awaitingFinalReview ? <button className="mobile-approve" onClick={() => { void finalReview("approved"); setMobilePanel("none"); }}><Check size={16} /> 确认交付</button> : <button className="mobile-approve" onClick={() => { void decide("accepted"); setMobilePanel("none"); }} disabled={!proposalSummary}><Check size={16} /> 批准并应用</button>}<button onClick={() => { void decide("rejected"); setMobilePanel("none"); }} disabled={!proposalSummary}>拒绝</button></div></div>}
         {mobilePanel === "outline" && <div className="mobile-sources"><span className="eyebrow">任务输入</span><h2>源文档</h2>{assets.length ? assets.map((asset) => <div key={asset.kind}><FilePlus2 size={17} /><span><strong>{asset.kind === "template" ? "空白模板" : "完成示例"}</strong><small>{asset.name} · {asset.size}</small></span><Check size={15} /></div>) : <p>先选择空白模板或完成示例，再开始一个任务。</p>}<TaskList tasks={tasks} activeTaskId={taskId} onSelectTask={(id) => { openTask(id); setMobilePanel("none"); }} onCreateTask={() => { startNewTask(); setMobilePanel("none"); }} /></div>}
           {mobilePanel === "versions" && <div className="mobile-versions"><span className="eyebrow">不会覆盖历史</span><h2>版本</h2>{versions.slice(0, 4).map((version) => <button key={version.id} onClick={() => { if (!version.current) void restoreVersion(version.id); }}><span>{version.id}</span><div><strong>{version.label}</strong><small>{version.time} · {version.actor}</small></div>{!version.current && <RotateCcw size={14} />}</button>)}</div>}
       </div>}

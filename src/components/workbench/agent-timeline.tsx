@@ -8,7 +8,7 @@ type ToolState = "running" | "completed" | "failed" | "approval";
 export type TimelineItem =
   | { kind: "user"; id: string; text: string }
   | { kind: "message"; id: string; text: string }
-  | { kind: "thought"; id: string; text: string }
+  | { kind: "thought"; id: string; text: string; channel?: "commentary" | "reasoning_summary" | "final" }
   | { kind: "tool"; id: string; name: string; state: ToolState; input?: unknown; output?: unknown; error?: string; durationMs?: number }
   | { kind: "status"; id: string; state: "completed" | "failed" | "cancelled"; text: string };
 
@@ -59,6 +59,10 @@ const eventDuration = (event: AgentEvent, value?: unknown) => {
   if (value && typeof value === "object" && typeof (value as Record<string, unknown>).durationMs === "number") return (value as Record<string, unknown>).durationMs as number;
   return undefined;
 };
+const eventChannel = (event: AgentEvent) => {
+  const channel = (event as unknown as Record<string, unknown>).channel;
+  return channel === "commentary" || channel === "reasoning_summary" || channel === "final" ? channel : undefined;
+};
 
 export function mergeTimelineEvents(previous: readonly AgentEvent[], incoming: readonly AgentEvent[]): AgentEvent[] {
   const result = [...previous];
@@ -89,7 +93,7 @@ export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
       streamedText += eventText(event)!;
       const previous = items.at(-1);
       if (previous?.kind === "thought" && streamedIndex === items.length - 1) previous.text = streamedText;
-      else { streamedIndex = items.length; items.push({ kind: "thought", id, text: streamedText }); }
+      else { streamedIndex = items.length; items.push({ kind: "thought", id, text: streamedText, channel: eventChannel(event) }); }
     } else if (event.type === "assistant.message" && eventText(event)) {
       const streamed = streamedIndex === undefined ? undefined : items[streamedIndex];
       if (streamed?.kind === "thought" && eventText(event) === streamedText) {
@@ -163,7 +167,7 @@ export function AgentTimeline({ events, onApproval, deciding = false, onCancel }
     {active && onCancel && <div className="timeline-run-toolbar"><span><LoaderCircle size={13} className="event-spinner" />正在运行</span><button type="button" onClick={() => void onCancel()}><StopCircle size={13} />取消运行</button></div>}
     {items.map((item) => {
       if (item.kind === "user") return <div className="timeline-message user" key={item.id}><div className="message-meta"><span>你</span><strong>你的目标</strong></div><p>{item.text}</p></div>;
-      if (item.kind === "thought") return <div className="timeline-thought" key={item.id}><span className="timeline-label">纸上鸭</span><p className="agent-rich-text">{renderAgentMarkdown(item.text)}</p></div>;
+      if (item.kind === "thought") return <div className="timeline-thought" key={item.id}><span className="timeline-label">纸上鸭 · 工作说明</span><p className="agent-rich-text">{renderAgentMarkdown(item.text)}</p></div>;
       if (item.kind === "message") return <div className="timeline-message agent" key={item.id}><div className="message-meta"><span>鸭</span><strong>纸上鸭</strong></div><p className="agent-rich-text">{renderAgentMarkdown(item.text)}</p></div>;
       if (item.kind === "status") return <div className={`timeline-status ${item.state}`} key={item.id}><StateIcon state={item.state === "completed" ? "completed" : item.state === "cancelled" ? "approval" : "failed"} /><span>{item.text}</span></div>;
       const presentation = toolPresentation(item.name);

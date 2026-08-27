@@ -65,7 +65,9 @@ export type AgentLoopEvent = { timestamp?: string; eventId?: string } & (
   | { type: "turn.started"; text: string }
   | { type: "model.started"; text: string }
   | { type: "model.completed"; durationMs: number }
-  | { type: "model.delta"; text: string }
+  /** Public streamed text from the provider. This is commentary while the
+   * model is deciding or calling tools, never hidden chain-of-thought. */
+  | { type: "model.delta"; text: string; channel?: "commentary" | "reasoning_summary" | "final" }
   | { type: "assistant.message"; text: string }
   | { type: "tool.started"; callId: string; name: string; input: unknown }
   | { type: "tool.completed"; callId: string; name: string; output: unknown }
@@ -141,6 +143,16 @@ export class AgentLoopRunner {
     if ((checkpoint.status === "completed" || checkpoint.status === "failed" || checkpoint.status === "cancelled") && !userText.trim()) {
       return { checkpoint, events: checkpoint.finalText ? [{ type: "completed", text: checkpoint.finalText }] : [] };
     }
+    // Do not start a second turn while a side-effect is waiting for an
+    // explicit decision. The user must approve or reject the pending call so
+    // its checkpoint remains the single source of truth for the run.
+    if (userText.trim() && checkpoint.pendingApproval) {
+      checkpoint.status = "awaiting_user";
+      checkpoint.finalText = "当前有一项文档操作等待确认，请先批准或拒绝后再继续。";
+      const blocked = { type: "assistant.message", text: checkpoint.finalText } as const;
+      await this.store.save(runId, checkpoint);
+      return { checkpoint, events: [blocked] };
+    }
     if (userText.trim()) checkpoint.messages.push({ role: "user", content: userText });
     checkpoint.status = "running";
     checkpoint.finalText = undefined;
@@ -173,7 +185,7 @@ export class AgentLoopRunner {
       const timeout = setTimeout(() => modelController.abort(new Error("模型响应超时")), this.modelTimeoutMs);
       signal?.addEventListener("abort", abortModel, { once: true });
       try {
-        decision = await this.model.decide({ messages: checkpoint.messages, tools: this.tools, signal: modelController.signal, onTextDelta: (text) => emit({ type: "model.delta", text }) });
+        decision = await this.model.decide({ messages: checkpoint.messages, tools: this.tools, signal: modelController.signal, onTextDelta: (text) => emit({ type: "model.delta", text, channel: "commentary" }) });
       } catch (error) {
         // Provider/network failures must become a durable checkpoint instead of
         // leaving the run in `running` forever (or only returning a generic 500).
@@ -304,13 +316,13 @@ export class AgentLoopRunner {
     const approvalEvent = emit({ type: "approval.resolved", callId: pending.callId, name: pending.name, decision: approval }, false);
     await this.store.save(runId, checkpoint);
     onEvent?.(approvalEvent);
-    const startedEvent = emit({ type: "tool.started", callId: pending.callId, name: pending.name, input: summarizeTraceValue(input) }, false);
-    // Persist the approval claim and the operation start before side effects.
-    // If the request is interrupted, the trace tells us exactly whether a
-    // write was started, completed, or needs safe investigation.
-    await this.store.save(runId, checkpoint);
-    onEvent?.(startedEvent);
     if (approval === "approved") {
+      const startedEvent = emit({ type: "tool.started", callId: pending.callId, name: pending.name, input: summarizeTraceValue(input) }, false);
+      // Persist the approval claim and the operation start before side effects.
+      // If the request is interrupted, the trace tells us exactly whether a
+      // write was started, completed, or needs safe investigation.
+      await this.store.save(runId, checkpoint);
+      onEvent?.(startedEvent);
       const toolStartedAt = Date.now();
       try {
         const output = await tool.execute(input, { runId, callId: pending.callId, idempotencyKey: `${runId}:${pending.callId}`, attempt: checkpoint.toolCallCount, signal });

@@ -206,5 +206,18 @@ describe("AgentLoopRunner", () => {
     expect(calls).toBe(2);
     expect(resumed.checkpoint.status).toBe("completed");
     expect(resumed.checkpoint.finalText).toContain("不会修改");
+    expect(resumed.events.map((event) => event.type)).not.toContain("tool.started");
+  });
+
+  it("does not start a second user turn while approval is pending", async () => {
+    const store = new MemoryStore();
+    const applyTool: AgentTool = { name: "apply_change", description: "Apply", inputSchema: z.object({ nodeId: z.string() }), requiresApproval: true, async execute() { return {}; } };
+    const model: AgentModelPort = { decide: async () => ({ kind: "tool_calls", calls: [{ id: "pending-1", name: "apply_change", input: { nodeId: "p-1" } }] }) };
+    const runner = new AgentLoopRunner(model, store, [applyTool]);
+    await runner.run("run-pending", "修改文档");
+    const blocked = await runner.run("run-pending", "再做另一件事");
+    expect(blocked.checkpoint.status).toBe("awaiting_user");
+    expect(blocked.checkpoint.pendingApproval?.callId).toBe("pending-1");
+    expect(blocked.checkpoint.finalText).toContain("等待确认");
   });
 });

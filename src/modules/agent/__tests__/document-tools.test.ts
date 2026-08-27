@@ -33,4 +33,19 @@ describe("document mutation planning tool", () => {
     expect(result).not.toHaveProperty("changedParts");
     expect(committed).toBe(false);
   });
+
+  it("does not leak OOXML locators from region listing", async () => {
+    const source = await createDocx();
+    const documents = new OoxmlPreservationKernel();
+    const revision = (await documents.inspect(source)).manifest.revision;
+    const tools = createDocumentTools(documents, { async load() { return { bytes: source, revision }; }, async commit() { return { revision }; } });
+    const list = tools.find((tool) => tool.name === "list_document_regions");
+    expect(list).toBeDefined();
+    if (!list) return;
+    const result = await list.execute({ kind: "paragraph", offset: 0, limit: 10 }, { runId: "run", callId: "call", idempotencyKey: "key", attempt: 1 }) as { nodes: Array<Record<string, unknown>> };
+    expect(result.nodes.length).toBeGreaterThan(0);
+    expect(result.nodes[0]).not.toHaveProperty("entry");
+    expect(result.nodes[0]).not.toHaveProperty("path");
+    expect(result.nodes[0]).not.toHaveProperty("locator");
+  });
 });

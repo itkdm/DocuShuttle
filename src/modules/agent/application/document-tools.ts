@@ -110,7 +110,14 @@ export function createDocumentTools(
         hasMore: input.offset + nodes.length < matched.length,
         nodes: nodes.map((node) => {
           const text = textByNodeId.get(node.nodeId);
-          return text === undefined ? node : { ...node, text: text.length > 240 ? `${text.slice(0, 240)}…` : text };
+          return {
+            nodeId: node.nodeId,
+            kind: node.kind,
+            story: node.locator?.story,
+            fingerprint: node.fingerprint,
+            capabilities: node.capabilities,
+            ...(text === undefined ? {} : { text: text.length > 240 ? `${text.slice(0, 240)}…` : text }),
+          };
         }),
       };
     },

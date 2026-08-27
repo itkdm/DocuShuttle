@@ -19,6 +19,16 @@ function formatTaskTime(iso: string) {
   return date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+const STATUS_LABEL: Record<string, string> = {
+  draft: "草稿",
+  ready: "就绪",
+  running: "运行中",
+  review: "待复核",
+  completed: "已完成",
+  failed: "失败",
+  archived: "已归档",
+};
+
 export function TaskList({ tasks, activeTaskId, onSelectTask, onCreateTask, heading = true, onLoadMore, hasMore = false, loadingMore = false, loading = false }: TaskListProps) {
   return (
     <section className="task-list" aria-label="任务列表">
@@ -49,8 +59,8 @@ export function TaskList({ tasks, activeTaskId, onSelectTask, onCreateTask, head
               >
                 <FileText size={15} />
                 <span>
-                  <strong>{item.title}</strong>
-                  <small>{item.fileName} · {formatTaskTime(item.updatedAt)}</small>
+                  <strong>{item.fileName}</strong>
+                  <small><i className={`task-status-dot ${item.status}`} aria-hidden="true" />{STATUS_LABEL[item.status] ?? item.status} · {formatTaskTime(item.updatedAt)}</small>
                 </span>
               </button>
             </li>

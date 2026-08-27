@@ -72,10 +72,17 @@ button:focus-visible, textarea:focus-visible, label:has(input:focus-visible) { o
 .task-list-items { list-style: none; margin: 0; padding: 0; overflow: auto; display: grid; gap: 2px; }
 .task-list-items button { width: 100%; border: 0; background: transparent; display: grid; grid-template-columns: 19px 1fr; align-items: start; gap: 8px; text-align: left; padding: 8px 9px; border-radius: 4px; cursor: pointer; color: #55594f; }
 .task-list-items button:hover { background: #eeede5; }
-.task-list-items button.active { color: var(--ink); background: #eee9d7; box-shadow: inset 3px 0 0 var(--duck); }
+.task-list-items button.active { color: var(--ink); background: #fbf6e3; border: 1px solid var(--duck-dark); }
 .task-list-items button span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .task-list-items strong { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.task-list-items small { font-size: 9px; color: #96988f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.task-list-items small { font-size: 9px; color: #96988f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 4px; }
+.task-status-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; background: #9d9f97; }
+.task-status-dot.running { background: var(--duck); animation: agentPulse 1.2s ease-in-out infinite; }
+.task-status-dot.completed { background: var(--green); }
+.task-status-dot.failed { background: var(--red); }
+.task-status-dot.review { background: #d49b10; }
+.task-status-dot.draft, .task-status-dot.ready { background: #6f8bd0; }
+.task-status-dot.archived { background: #b9baaf; }
 .source-stack { padding: 0 12px 12px; display: grid; gap: 7px; flex: 0 0 auto; }
 .source-file { min-width: 0; display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 7px; padding: 8px; border: 1px dashed #b9baad; background: #fffefa; cursor: pointer; border-radius: 5px; }
 .source-file:hover { border-color: var(--duck-dark); background: #fffaf0; }

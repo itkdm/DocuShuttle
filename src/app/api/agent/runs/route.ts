@@ -37,7 +37,7 @@ export async function GET(request: Request) {
       list.push(event); eventsByRun.set(row.run_id as string, list);
     }
     const runs = rows.map((row) => {
-      const state = (row.state ?? {}) as { loopCheckpoint?: { trace?: unknown[]; status?: string } };
+      const state = (row.state ?? {}) as { loopCheckpoint?: { status?: string } };
       const checkpoint = state.loopCheckpoint;
       return {
         id: row.id as string,

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { compactAgentMessages, DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY, type AgentContextCompactionPolicy } from "./context-compaction";
-import { createAgentEvent, type AgentEvent, type AgentEventPayload } from "./events";
+import { createAgentEvent, shouldPersistAgentEvent, type AgentEvent, type AgentEventPayload } from "./events";
 import type { AgentInteractionResolution, AgentRuntimePendingInteraction } from "../domain/model";
 
 export type AgentLoopMessage = {
@@ -56,8 +56,6 @@ export type AgentLoopCheckpoint = {
   status: "running" | "awaiting_approval" | "awaiting_user" | "completed" | "failed" | "cancelled";
   finalText?: string;
   permissionMode?: AgentPermissionMode;
-  /** Durable, user-visible execution trace. Kept bounded by the runner. */
-  trace?: AgentEvent[];
 };
 
 export type AgentLoopStore = {
@@ -198,7 +196,7 @@ export class AgentLoopRunner {
     // Older checkpoints may contain an unbounded region listing or tool
     // payload. Compact those messages before sending them back to a provider;
     // this keeps continuation requests reliable without changing the durable
-    // execution trace shown to the user.
+    // recovery transcript.
     checkpoint.messages = checkpoint.messages.map((message) => message.role === "tool"
       ? { ...message, content: compactPersistedToolContent(message.content) }
       : message);
@@ -261,22 +259,37 @@ export class AgentLoopRunner {
     checkpoint.status = "running";
     checkpoint.finalText = undefined;
     const events: AgentEvent[] = [];
+    const durableEvents: AgentEvent[] = [];
+    const flushDurableEvents = async () => {
+      if (!durableEvents.length || !this.store.appendEvents) return;
+      const batch = durableEvents.splice(0, durableEvents.length);
+      try {
+        await this.store.appendEvents(runId, batch);
+      } catch {
+        for (const event of batch) {
+          this.onEngineeringEvent?.({ event: "agent.event.persist_failed", metadata: { runId, eventId: event.eventId, eventType: event.type } });
+        }
+      }
+    };
+    const saveCheckpoint = async () => {
+      await flushDurableEvents();
+      await this.store.save(runId, checkpoint);
+    };
     const emit = (event: AgentEventPayload, notify = true) => {
       const timestamped = createAgentEvent(runId, event);
-      const traceEvent = timestamped.type === "tool.started"
+      const activityEvent = timestamped.type === "tool.started"
         ? { ...timestamped, input: summarizeTraceValue(timestamped.input) } as AgentEvent
         : timestamped.type === "tool.completed"
           ? { ...timestamped, output: summarizeTraceValue(timestamped.output) } as AgentEvent
           : timestamped;
-      events.push(traceEvent);
-      this.observe(runId, traceEvent, checkpoint.permissionMode);
-      checkpoint.trace = [...(checkpoint.trace ?? []), traceEvent].slice(-200);
-      void this.store.appendEvents?.(runId, [traceEvent]).catch(() => undefined);
-      if (traceEvent.type === "assistant.message" && traceEvent.text) {
-        void this.store.appendAssistantMessage?.(runId, { id: traceEvent.eventId ?? crypto.randomUUID(), text: traceEvent.text }).catch(() => undefined);
+      events.push(activityEvent);
+      this.observe(runId, activityEvent, checkpoint.permissionMode);
+      if (shouldPersistAgentEvent(activityEvent)) durableEvents.push(activityEvent);
+      if (activityEvent.type === "assistant.message" && activityEvent.text) {
+        void this.store.appendAssistantMessage?.(runId, { id: activityEvent.eventId ?? crypto.randomUUID(), text: activityEvent.text }).catch(() => undefined);
       }
-      if (notify) onEvent?.(traceEvent);
-      return traceEvent;
+      if (notify) onEvent?.(activityEvent);
+      return activityEvent;
     };
     if (userText.trim()) emit({ type: "turn.started", text: userText, ...(clientMessageId ? { clientMessageId } : {}) });
 
@@ -286,13 +299,13 @@ export class AgentLoopRunner {
       const context = compactAgentMessages(checkpoint.messages, this.contextCompactionPolicy);
       if (context.compacted) {
         // Keep the checkpoint and the provider-facing transcript aligned. The
-        // full user-visible execution history remains in checkpoint.trace;
-        // only model context is summarized when it exceeds the policy.
+        // Only the provider-facing transcript is summarized when it exceeds
+        // the policy; activity history lives in the durable event store.
         checkpoint.messages = context.messages;
       }
       // Persist the observable boundary before entering a potentially long
       // provider call so a refresh can recover the real in-flight phase.
-      await this.store.save(runId, checkpoint);
+      await saveCheckpoint();
       onEvent?.(modelStartedEvent);
       const modelStartedAt = Date.now();
       let decision: AgentModelDecision;
@@ -309,7 +322,7 @@ export class AgentLoopRunner {
           checkpoint.status = "cancelled";
           checkpoint.finalText = "本轮操作已取消。";
           const cancelledEvent = emit({ type: "turn.cancelled", text: checkpoint.finalText }, false);
-          await this.store.save(runId, checkpoint);
+          await saveCheckpoint();
           onEvent?.(cancelledEvent);
           return { checkpoint, events };
         }
@@ -326,7 +339,7 @@ export class AgentLoopRunner {
         checkpoint.finalText = `这次请求暂时没有完成（模型服务异常）。${safeMessage}，请稍后重试。`;
         const failureMessage = emit({ type: "assistant.message", text: checkpoint.finalText }, false);
         const failureEvent = emit({ type: "turn.failed", error: checkpoint.finalText }, false);
-        await this.store.save(runId, checkpoint);
+        await saveCheckpoint();
         onEvent?.(failureMessage); onEvent?.(failureEvent);
         return { checkpoint, events };
       } finally {
@@ -341,10 +354,10 @@ export class AgentLoopRunner {
           checkpoint.status = "completed";
           checkpoint.finalText = decision.text;
           emit({ type: "turn.completed", text: decision.text });
-          await this.store.save(runId, checkpoint);
+          await saveCheckpoint();
           return { checkpoint, events };
         }
-        await this.store.save(runId, checkpoint);
+        await saveCheckpoint();
         continue;
       }
       if (decision.kind === "ask_user") {
@@ -352,7 +365,7 @@ export class AgentLoopRunner {
         checkpoint.pendingInteraction = { interactionId: crypto.randomUUID(), type: "user_input", question: decision.text };
         checkpoint.messages.push({ role: "assistant", content: decision.text });
         emit({ type: "assistant.message", text: decision.text });
-        await this.store.save(runId, checkpoint);
+        await saveCheckpoint();
         return { checkpoint, events };
       }
       for (const call of decision.calls) {
@@ -360,10 +373,10 @@ export class AgentLoopRunner {
         if (checkpoint.toolCallCount > this.maxToolCalls) {
           checkpoint.status = "failed";
           checkpoint.finalText = "Agent stopped after reaching its tool-call safety budget.";
-          await this.store.save(runId, checkpoint);
+          await saveCheckpoint();
           const failureMessage = emit({ type: "assistant.message", text: checkpoint.finalText }, false);
           const failureEvent = emit({ type: "turn.failed", error: checkpoint.finalText }, false);
-          await this.store.save(runId, checkpoint);
+          await saveCheckpoint();
           onEvent?.(failureMessage); onEvent?.(failureEvent);
           return { checkpoint, events };
         }
@@ -376,7 +389,7 @@ export class AgentLoopRunner {
         if (!tool) {
           checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: `Unknown agent tool: ${call.name}` }), toolCallId: call.id, toolName: call.name });
           emit({ type: "tool.failed", callId: call.id, name: call.name, error: `Unknown agent tool: ${call.name}` });
-          await this.store.save(runId, checkpoint);
+          await saveCheckpoint();
           continue;
         }
         let input: unknown;
@@ -386,7 +399,7 @@ export class AgentLoopRunner {
           const message = error instanceof Error ? error.message : "Tool input validation failed";
           checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: message }), toolCallId: call.id, toolName: call.name });
           emit({ type: "tool.failed", callId: call.id, name: call.name, error: message });
-          await this.store.save(runId, checkpoint);
+          await saveCheckpoint();
           continue;
         }
         if (tool.requiresApproval && checkpoint.permissionMode !== "full") {
@@ -394,7 +407,7 @@ export class AgentLoopRunner {
           checkpoint.pendingInteraction = { interactionId, type: "approval", callId: call.id, toolName: call.name, input };
           checkpoint.status = "awaiting_approval";
           const approvalEvent = emit({ type: "approval.required", interactionId, callId: call.id, name: call.name, input }, false);
-          await this.store.save(runId, checkpoint);
+          await saveCheckpoint();
           onEvent?.(approvalEvent);
           return { checkpoint, events };
         }
@@ -403,7 +416,7 @@ export class AgentLoopRunner {
         if (existingReceipt) {
           checkpoint.messages.push({ role: "tool", content: serializeToolOutput(existingReceipt.output), toolCallId: call.id, toolName: call.name });
           const replayedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: summarizeTraceValue(existingReceipt.output) }, false);
-          await this.store.save(runId, checkpoint);
+          await saveCheckpoint();
           onEvent?.(replayedEvent);
           continue;
         }
@@ -411,7 +424,7 @@ export class AgentLoopRunner {
         // Make the side-effect boundary durable before executing the tool.
         // This is what lets recovery distinguish an in-flight operation from
         // a run that has not reached the tool yet.
-        await this.store.save(runId, checkpoint);
+        await saveCheckpoint();
         onEvent?.(toolStartedEvent);
         const toolStartedAt = Date.now();
         try {
@@ -421,13 +434,13 @@ export class AgentLoopRunner {
             : { idempotencyKey, callId: call.id, toolName: call.name, output, completedAt: new Date().toISOString() };
           checkpoint.messages.push({ role: "tool", content: serializeToolOutput(receipt.output), toolCallId: call.id, toolName: call.name });
           const toolCompletedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: { ...((receipt.output && typeof receipt.output === "object") ? receipt.output : { value: receipt.output }), durationMs: Date.now() - toolStartedAt } }, false);
-          await this.store.save(runId, checkpoint);
+          await saveCheckpoint();
           onEvent?.(toolCompletedEvent);
         } catch (error) {
           const message = error instanceof Error ? error.message : "Tool execution failed";
           checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: message }), toolCallId: call.id, toolName: call.name });
           const toolFailedEvent = emit({ type: "tool.failed", callId: call.id, name: call.name, error: message, durationMs: Date.now() - toolStartedAt }, false);
-          await this.store.save(runId, checkpoint);
+          await saveCheckpoint();
           onEvent?.(toolFailedEvent);
         }
       }
@@ -435,14 +448,14 @@ export class AgentLoopRunner {
       // checkpoint at its side-effect boundary. Avoid an unconditional second
       // read/update round-trip, which is noticeable with remote stores such as
       // Supabase. Empty tool batches still need a save so the model boundary
-      // and any trace event remain durable.
-      if (decision.calls.length === 0) await this.store.save(runId, checkpoint);
+      // and all structural activity is flushed before the next model boundary.
+      if (decision.calls.length === 0) await saveCheckpoint();
     }
     checkpoint.status = "failed";
     checkpoint.finalText = "本轮操作未能在安全步数内完成。已保留已完成的读取结果，未提交未确认的写入；请缩小范围后重试。";
     const terminalMessage = emit({ type: "assistant.message", text: checkpoint.finalText }, false);
     const terminalFailure = emit({ type: "turn.failed", error: checkpoint.finalText }, false);
-    await this.store.save(runId, checkpoint);
+    await saveCheckpoint();
     onEvent?.(terminalMessage); onEvent?.(terminalFailure);
     return { checkpoint, events };
   }
@@ -475,21 +488,36 @@ export class AgentLoopRunner {
     if (!tool) throw new Error(`Unknown agent tool: ${toolName}`);
     const input = tool.inputSchema.parse(inputValue);
     const events: AgentEvent[] = [];
-    const emit = (event: AgentEventPayload, notify = true) => {
-      const traceEvent = createAgentEvent(runId, event);
-      events.push(traceEvent);
-      this.observe(runId, traceEvent, checkpoint.permissionMode);
-      checkpoint.trace = [...(checkpoint.trace ?? []), traceEvent].slice(-200);
-      void this.store.appendEvents?.(runId, [traceEvent]).catch(() => undefined);
-      if (traceEvent.type === "assistant.message" && traceEvent.text) {
-        void this.store.appendAssistantMessage?.(runId, { id: traceEvent.eventId ?? crypto.randomUUID(), text: traceEvent.text }).catch(() => undefined);
+    const durableEvents: AgentEvent[] = [];
+    const flushDurableEvents = async () => {
+      if (!durableEvents.length || !this.store.appendEvents) return;
+      const batch = durableEvents.splice(0, durableEvents.length);
+      try {
+        await this.store.appendEvents(runId, batch);
+      } catch {
+        for (const event of batch) {
+          this.onEngineeringEvent?.({ event: "agent.event.persist_failed", metadata: { runId, eventId: event.eventId, eventType: event.type } });
+        }
       }
-      if (notify) onEvent?.(traceEvent);
-      return traceEvent;
+    };
+    const saveCheckpoint = async () => {
+      await flushDurableEvents();
+      await this.store.save(runId, checkpoint);
+    };
+    const emit = (event: AgentEventPayload, notify = true) => {
+      const activityEvent = createAgentEvent(runId, event);
+      events.push(activityEvent);
+      this.observe(runId, activityEvent, checkpoint.permissionMode);
+      if (shouldPersistAgentEvent(activityEvent)) durableEvents.push(activityEvent);
+      if (activityEvent.type === "assistant.message" && activityEvent.text) {
+        void this.store.appendAssistantMessage?.(runId, { id: activityEvent.eventId ?? crypto.randomUUID(), text: activityEvent.text }).catch(() => undefined);
+      }
+      if (notify) onEvent?.(activityEvent);
+      return activityEvent;
     };
     if (!existingResolution) {
       const approvalEvent = emit({ type: "approval.resolved", interactionId: resolved.interactionId, callId: resolved.callId, name: resolved.toolName, decision: resolved.decision }, false);
-      await this.store.save(runId, checkpoint);
+      await saveCheckpoint();
       onEvent?.(approvalEvent);
     }
     if (resolved.decision === "approved") {
@@ -499,14 +527,14 @@ export class AgentLoopRunner {
         checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval: resolved.decision, output: existingReceipt.output }), toolCallId: resolved.callId, toolName: resolved.toolName });
         const replayedEvent = emit({ type: "tool.completed", callId: resolved.callId, name: resolved.toolName, output: summarizeTraceValue(existingReceipt.output) }, false);
         checkpoint.pendingResolution = undefined;
-        await this.store.save(runId, checkpoint);
+        await saveCheckpoint();
         onEvent?.(replayedEvent);
       } else {
       const startedEvent = emit({ type: "tool.started", callId: resolved.callId, name: resolved.toolName, input: summarizeTraceValue(input) }, false);
       // Persist the approval claim and the operation start before side effects.
-      // If the request is interrupted, the trace tells us exactly whether a
-      // write was started, completed, or needs safe investigation.
-      await this.store.save(runId, checkpoint);
+      // If the request is interrupted, the checkpoint and effect receipt
+      // remain the recovery source; activity is persisted independently.
+      await saveCheckpoint();
       onEvent?.(startedEvent);
       const toolStartedAt = Date.now();
       try {
@@ -517,14 +545,14 @@ export class AgentLoopRunner {
         checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval: resolved.decision, output: receipt.output }), toolCallId: resolved.callId, toolName: resolved.toolName });
         const completedEvent = emit({ type: "tool.completed", callId: resolved.callId, name: resolved.toolName, output: summarizeTraceValue({ ...((receipt.output && typeof receipt.output === "object") ? receipt.output : { value: receipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
         checkpoint.pendingResolution = undefined;
-        await this.store.save(runId, checkpoint);
+        await saveCheckpoint();
         onEvent?.(completedEvent);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Tool execution failed";
         checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: resolved.decision, error: message }), toolCallId: resolved.callId, toolName: resolved.toolName });
         const failedEvent = emit({ type: "tool.failed", callId: resolved.callId, name: resolved.toolName, error: message, durationMs: Date.now() - toolStartedAt }, false);
         checkpoint.pendingResolution = undefined;
-        await this.store.save(runId, checkpoint);
+        await saveCheckpoint();
         onEvent?.(failedEvent);
       }
       }
@@ -532,7 +560,7 @@ export class AgentLoopRunner {
       checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: "rejected", reason: "The user rejected this action." }), toolCallId: resolved.callId, toolName: resolved.toolName });
       const rejectedEvent = emit({ type: "tool.failed", callId: resolved.callId, name: resolved.toolName, error: "User rejected the tool call." }, false);
       checkpoint.pendingResolution = undefined;
-      await this.store.save(runId, checkpoint);
+      await saveCheckpoint();
       onEvent?.(rejectedEvent);
     }
     const continuation = await this.runWithPermission(runId, "", checkpoint.permissionMode ?? "default", signal, onEvent);

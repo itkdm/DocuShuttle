@@ -1,9 +1,10 @@
 import type { AgentLoopMessage } from "./loop";
 
 /**
- * Policy for the model-facing context. Durable checkpoints keep the execution
- * trace separately; this policy only decides how much conversational history
- * is sent to the next model turn.
+ * Policy for the model-facing context. Durable checkpoints keep the
+ * conversational recovery state; activity history is stored separately. This
+ * policy only decides how much conversational history is sent to the next
+ * model turn.
  *
  * The interface is intentionally small so a provider-backed summarizer can be
  * added later without coupling the loop to a particular model or framework.

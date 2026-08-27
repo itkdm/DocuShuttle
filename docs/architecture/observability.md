@@ -1,6 +1,9 @@
 # PaperDuck observability
 
-PaperDuck keeps three streams separate: Engineering Log is structured diagnostic/performance data, Agent Trace is the user-visible resumable execution timeline, and Business Event is the durable audit/state-machine stream. Engineering logs may correlate with the other streams by IDs but never replace them.
+PaperDuck keeps four boundaries separate: Checkpoint is the resumable execution snapshot,
+EventStore is the durable structural activity projection, Live Stream is transient connection
+transport, and Engineering Log is structured diagnostic/performance data. Logs may correlate
+with the other boundaries by IDs but never replace them.
 
 The server logger lives in `src/infrastructure/observability`. It uses Pino, AsyncLocalStorage context, centralized redaction, and `measure()`/`createTimer()` for consistent durations. Stable dotted events use the form `area.operation.outcome`, such as `http.request.completed`, `agent.model.failed`, and `document.inspect.completed`. Context fields include `requestId`, `taskId`, `runId`, `conversationId`, `documentId`, `callId`, `toolName`, `revision`, and `versionId`.
 

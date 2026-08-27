@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isAgentEvent } from "../application/events";
+import { isAgentEvent, shouldPersistAgentEvent } from "../application/events";
 
 const identity = { eventId: "event-1", runId: "run-1", timestamp: "2026-01-01T00:00:00.000Z" };
 
@@ -18,5 +18,11 @@ describe("isAgentEvent", () => {
     expect(isAgentEvent({ ...identity, type: "tool.started", callId: "call-1", name: "inspect_document", input: null })).toBe(true);
     expect(isAgentEvent({ ...identity, type: "model.delta", text: "片段", channel: "final" })).toBe(true);
     expect(isAgentEvent({ ...identity, type: "approval.resolved", interactionId: "interaction-1", callId: "call-1", name: "apply_change", decision: "rejected" })).toBe(true);
+  });
+
+  it("keeps model deltas live-only while retaining structural events", () => {
+    expect(shouldPersistAgentEvent({ ...identity, type: "model.delta", text: "片段" })).toBe(false);
+    expect(shouldPersistAgentEvent({ ...identity, type: "tool.started", callId: "call-1", name: "inspect_document", input: {} })).toBe(true);
+    expect(shouldPersistAgentEvent({ ...identity, type: "turn.completed", text: "完成" })).toBe(true);
   });
 });

@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { AGENT_LEASE_MANAGED_STATUSES, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentLoopStore } from "../../application/loop";
 import { createAgentEvent, type AgentEvent } from "../../application/events";
 import { ConcurrentRunUpdateError } from "../../domain/errors";
-import { measure } from "@/infrastructure/observability";
+import { logger, measure } from "@/infrastructure/observability";
 
 type RunRow = { state: Record<string, unknown>; lock_version: number; owner_user_id: string };
 
@@ -16,7 +16,11 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       const result = await this.client.from("agent_runs").select("state").eq("id", runId).maybeSingle();
       if (result.error) throw new Error(`Unable to load agent loop checkpoint: ${result.error.message}`);
       const state = result.data?.state as Record<string, unknown> | undefined;
-      return state?.loopCheckpoint as AgentLoopCheckpoint | undefined;
+      const legacyCheckpoint = state?.loopCheckpoint as (AgentLoopCheckpoint & Record<string, unknown>) | undefined;
+      if (!legacyCheckpoint) return undefined;
+      const checkpoint = { ...legacyCheckpoint } as AgentLoopCheckpoint & Record<string, unknown>;
+      delete (checkpoint as Record<string, unknown>)["trace"];
+      return checkpoint;
     });
   }
 
@@ -127,13 +131,19 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     }
     if (checkpoint.status === "cancelled") return;
     const event = createAgentEvent(runId, { type: "turn.cancelled", text: "本轮操作已取消。" });
-    const nextCheckpoint: AgentLoopCheckpoint = { ...checkpoint, status: "cancelled", pendingInteraction: undefined, pendingResolution: undefined, finalText: event.text, trace: [...(checkpoint.trace ?? []), event].slice(-200) };
+    const checkpointWithoutTrace = { ...checkpoint } as AgentLoopCheckpoint & Record<string, unknown>;
+    delete (checkpointWithoutTrace as Record<string, unknown>)["trace"];
+    const nextCheckpoint: AgentLoopCheckpoint = { ...checkpointWithoutTrace, status: "cancelled", pendingInteraction: undefined, pendingResolution: undefined, finalText: event.text };
     const nextState = { ...state, status: "cancelled", pendingInteraction: null, pendingResolution: null, loopCheckpoint: nextCheckpoint, version: current.data.lock_version + 1 };
     const updated = await this.client.from("agent_runs")
       .update({ state: nextState, status: "cancelled", resume_cursor: nextCheckpoint, lock_version: current.data.lock_version + 1, updated_at: new Date().toISOString() })
       .eq("id", runId).eq("lock_version", current.data.lock_version).select("id").maybeSingle();
     if (updated.error || !updated.data) throw new ConcurrentRunUpdateError(runId);
-    await this.appendEvents(runId, [event]);
+    try {
+      await this.appendEvents(runId, [event]);
+    } catch {
+      logger.error("agent.event.persist_failed", { runId, eventId: event.eventId, eventType: event.type });
+    }
   }
 
   async resolvePendingApproval(runId: string, interactionId: string, callId: string, decision: "approved" | "rejected"): Promise<AgentLoopCheckpoint | undefined> {

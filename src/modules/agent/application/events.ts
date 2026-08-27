@@ -100,3 +100,8 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
 export function isDurableAgentEvent(value: unknown): value is DurableAgentEvent {
   return isAgentEvent(value) && typeof value.sequence === "number" && Number.isInteger(value.sequence) && value.sequence > 0;
 }
+
+/** Only structural activity is durable; token deltas belong to the live stream. */
+export function shouldPersistAgentEvent(event: AgentEvent): boolean {
+  return event.type !== "model.delta";
+}

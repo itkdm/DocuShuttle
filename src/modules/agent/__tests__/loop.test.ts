@@ -2,18 +2,23 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { AgentLoopRunner, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentModelPort, type AgentTool } from "../application/loop";
+import type { AgentEvent } from "../application/events";
 
 class MemoryStore {
   private value?: AgentLoopCheckpoint;
   private receipts = new Map<string, AgentEffectReceipt>();
   saves = 0;
   heartbeats = 0;
+  durableEvents: AgentEvent[] = [];
+  appendEventsCalls = 0;
+  failEventPersistence = false;
   failFromSave?: number;
   async load() { return structuredClone(this.value); }
   async save(_runId: string, checkpoint: AgentLoopCheckpoint) { this.saves += 1; if (this.failFromSave !== undefined && this.saves >= this.failFromSave) throw new Error("simulated checkpoint failure"); this.value = structuredClone(checkpoint); }
   async heartbeat() { this.heartbeats += 1; return true; }
   async loadEffectReceipt(_runId: string, idempotencyKey: string) { return this.receipts.get(idempotencyKey); }
   async saveEffectReceipt(_runId: string, receipt: AgentEffectReceipt) { this.receipts.set(receipt.idempotencyKey, receipt); return receipt; }
+  async appendEvents(_runId: string, events: readonly AgentEvent[]) { this.appendEventsCalls += 1; if (this.failEventPersistence) throw new Error("simulated event persistence failure"); this.durableEvents.push(...events); }
   async markCancelled() {
     if (!this.value) return;
     this.value = { ...this.value, status: "cancelled", pendingInteraction: undefined, pendingResolution: undefined };
@@ -146,6 +151,7 @@ describe("AgentLoopRunner", () => {
     const runner = new AgentLoopRunner(model, store, [applyTool]);
     const paused = await runner.run("run-2", "修改正文");
     expect(paused.checkpoint.status).toBe("awaiting_approval");
+    expect("trace" in paused.checkpoint).toBe(false);
     expect(paused.events.some((event) => event.type === "approval.required")).toBe(true);
     const pending = paused.checkpoint.pendingInteraction;
     expect(pending?.type).toBe("approval");
@@ -153,6 +159,7 @@ describe("AgentLoopRunner", () => {
     const streamed: string[] = [];
     const resumed = await runner.resume("run-2", "approved", pending!.interactionId, pending?.type === "approval" ? pending.callId : "", undefined, (event) => streamed.push(event.type));
     expect(resumed.checkpoint.status).toBe("completed");
+    expect("trace" in resumed.checkpoint).toBe(false);
     expect(executions).toBe(1);
     expect(resumed.checkpoint.messages.some((message) => message.toolName === "apply_change" && message.content.includes("revision"))).toBe(true);
     expect(streamed).toContain("assistant.message");
@@ -214,7 +221,9 @@ describe("AgentLoopRunner", () => {
       decide: async () => ({ kind: "message", text: "已完成。" }),
     }, store, []).run("run-model-boundary", "检查");
     expect(result.checkpoint.status).toBe("completed");
-    expect((await store.load())?.trace?.some((event) => event.type === "model.started")).toBe(true);
+    const saved = await store.load();
+    expect(saved && "trace" in saved).toBe(false);
+    expect(store.durableEvents.some((event) => event.type === "model.started")).toBe(true);
   });
 
   it("heartbeats during a long provider call instead of relying on checkpoint saves", async () => {
@@ -229,11 +238,45 @@ describe("AgentLoopRunner", () => {
     expect(store.heartbeats).toBeGreaterThanOrEqual(3);
   });
 
+  it("keeps model deltas live without persisting them", async () => {
+    const store = new MemoryStore();
+    const liveEvents: AgentEvent[] = [];
+    const result = await new AgentLoopRunner({
+      decide: async ({ onTextDelta }) => {
+        for (let index = 0; index < 100; index += 1) onTextDelta?.(`片段${index}`);
+        return { kind: "message", text: "已完成。" };
+      },
+    }, store, []).runWithPermission("run-live-deltas", "生成", "default", undefined, (event) => liveEvents.push(event));
+    expect(result.checkpoint.status).toBe("completed");
+    expect(liveEvents.filter((event) => event.type === "model.delta")).toHaveLength(100);
+    expect(store.durableEvents.filter((event) => event.type === "model.delta")).toHaveLength(0);
+    expect(store.appendEventsCalls).toBeGreaterThan(0);
+  });
+
+  it("keeps runtime correctness when event persistence fails and records a diagnostic", async () => {
+    const store = new MemoryStore();
+    store.failEventPersistence = true;
+    const diagnostics: string[] = [];
+    const result = await new AgentLoopRunner(
+      { decide: async () => ({ kind: "message", text: "已完成。" }) },
+      store,
+      [],
+      24,
+      48,
+      30_000,
+      undefined,
+      30_000,
+      (event) => diagnostics.push(event.event),
+    ).run("run-event-persistence-failure", "检查");
+    expect(result.checkpoint.status).toBe("completed");
+    expect(diagnostics).toContain("agent.event.persist_failed");
+  });
+
   it("persists the tool boundary before executing a side effect", async () => {
     const store = new MemoryStore();
     let boundarySeen = false;
     const tool: AgentTool = { ...inspectTool, async execute() {
-      boundarySeen = (await store.load())?.trace?.some((event) => event.type === "tool.started") ?? false;
+      boundarySeen = store.durableEvents.some((event) => event.type === "tool.started");
       return { ok: true };
     } };
     const result = await new AgentLoopRunner({

@@ -24,14 +24,14 @@ PaperDuck 使用模型驱动的、可恢复的 Tool Loop。模型每一轮都可
 最近的对话单元，以及由历史用户目标和工具事实（revision、nodeId、变更数、风险、
 校验结果）组成的确定性摘要。assistant tool-call 与对应的 tool result 始终作为一个
 单元保留，避免 OpenAI-compatible 消息失配；摘要不会额外调用模型，也不会把隐藏
-Chain-of-Thought 写入用户界面。`trace` 只保留最近 200 条诊断快照；完整执行事实写入
-`agent_run_events`，用户语义消息单独写入 `messages`。
+Chain-of-Thought 写入用户界面。结构化执行事实写入独立的 `agent_run_events`，高频
+`model.delta` 只进入当前 Live Stream，用户语义消息单独写入 `messages`。
 
 同一任务拥有一个稳定的 conversation/thread；每个用户 turn 创建一个独立、可审计的
 run，但新 run 会从该 conversation 的上一条模型 transcript 继续，并在下一次工具调用
 前重新读取和校验当前文档 revision。Timeline 只负责回放所有 run 的真实事件，不能把
-trace 原样当作模型上下文；模型上下文仍由 checkpoint messages 和上述 compaction policy
-独立维护。
+EventStore 的结构化事件原样回放；模型上下文仍由 checkpoint messages 和上述 compaction
+policy 独立维护。
 
 数据库对每个 task 强制最多一个非终态 run（`queued`、执行中或等待 HITL）。创建新
 run 前 API 会先检查当前 conversation 的 pending interaction；即使两个浏览器请求
@@ -71,7 +71,11 @@ conversation，而不是创建无上下文的新 run。Token、assistant 消息�
 用于实时展示，刷新后由持久化事件重放。文档画布只在一次原子版本提交成功后更新，
 避免半写入 DOCX。
 
-运行诊断以独立 EventStore 为事实源，事件序列由数据库 RPC 在单次事务中分配并去重；checkpoint 只保留最近 200 条 bounded trace 作为恢复快照。每个副作用工具使用 `runId:callId` 作为稳定幂等键，结果写入 Effect Receipt，重试优先重放 Receipt。服务端异常日志不得记录模型密钥、系统提示词或未脱敏工具详情。
+Checkpoint 是 resumable execution snapshot，只保存恢复执行所需的 transcript、工具结果、
+计数、interaction 和终态；EventStore 是 durable activity projection，事件序列由数据库
+RPC 在单次事务中分配并去重；Live Stream 是当前连接上的 transient transport；Engineering
+Logs 只记录诊断。每个副作用工具使用 `runId:callId` 作为稳定幂等键，结果写入 Effect
+Receipt，重试优先重放 Receipt。服务端异常日志不得记录模型密钥、系统提示词或未脱敏工具详情。
 
 ## Pending Interaction 与权限策略
 

@@ -224,8 +224,11 @@ export class AgentLoopRunner {
         const message = modelController.signal.aborted && !signal?.aborted
           ? `模型响应超时（${Math.round(this.modelTimeoutMs / 1000)} 秒）`
           : error instanceof Error ? error.message : "Model request failed";
+        const safeMessage = /No output generated|stream for errors|fetch failed|ECONN|ETIMEDOUT/i.test(message)
+          ? "模型暂时没有返回有效结果"
+          : message.length > 240 ? `${message.slice(0, 240)}…` : message;
         checkpoint.status = "failed";
-        checkpoint.finalText = `这次请求暂时没有完成（模型服务异常）。${message}，请稍后重试。`;
+        checkpoint.finalText = `这次请求暂时没有完成（模型服务异常）。${safeMessage}，请稍后重试。`;
         const failureMessage = emit({ type: "assistant.message", text: checkpoint.finalText }, false);
         const failureEvent = emit({ type: "turn.failed", error: checkpoint.finalText }, false);
         await this.store.save(runId, checkpoint);

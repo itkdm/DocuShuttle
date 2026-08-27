@@ -12,6 +12,7 @@ export type APIMartAdapterOptions = {
   fetch?: typeof globalThis.fetch;
   pollIntervalMs?: number;
   maxPolls?: number;
+  requestTimeoutMs?: number;
   delay?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 };
 
@@ -35,7 +36,7 @@ export class APIMartImageGenerationAdapter implements ImageGenerationPort {
 
   async generate(input: Parameters<ImageGenerationPort["generate"]>[0], signal?: AbortSignal): Promise<GeneratedImage[]> {
     const baseUrl = ensureTrailingSlash(this.options.baseUrl);
-    const response = await this.request(new URL("v1/images/generations", baseUrl), {
+    const response = await this.requestWithTimeout(new URL("v1/images/generations", baseUrl), {
       method: "POST",
       headers: { authorization: `Bearer ${this.options.apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({
@@ -55,7 +56,7 @@ export class APIMartImageGenerationAdapter implements ImageGenerationPort {
     const delay = this.options.delay ?? wait;
     for (let poll = 0; poll < (this.options.maxPolls ?? 60); poll += 1) {
       await delay(this.options.pollIntervalMs ?? 2_000, signal);
-      const taskResponse = await this.request(new URL(`v1/tasks/${encodeURIComponent(taskId)}?language=zh`, baseUrl), {
+      const taskResponse = await this.requestWithTimeout(new URL(`v1/tasks/${encodeURIComponent(taskId)}?language=zh`, baseUrl), {
         headers: { authorization: `Bearer ${this.options.apiKey}` },
         signal,
       });
@@ -68,6 +69,27 @@ export class APIMartImageGenerationAdapter implements ImageGenerationPort {
       return urls.map((remoteUrl) => ({ mimeType: "image/png", remoteUrl, providerRequestId: task.data?.id ?? taskId }));
     }
     throw new ProviderRequestError("APIMart image task timed out", "apimart", true, 408);
+  }
+
+  private async requestWithTimeout(url: URL, init: RequestInit): Promise<Response> {
+    const timeoutMs = this.options.requestTimeoutMs ?? 30_000;
+    const controller = new AbortController();
+    const parentSignal = init.signal;
+    const abort = () => controller.abort(parentSignal?.reason);
+    if (parentSignal?.aborted) abort();
+    else parentSignal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(() => controller.abort(new Error("APIMart request timed out")), timeoutMs);
+    try {
+      return await this.request(url, { ...init, signal: controller.signal });
+    } catch (error) {
+      if (controller.signal.aborted && !parentSignal?.aborted) {
+        throw new ProviderRequestError("APIMart request timed out", "apimart", true, 408);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      parentSignal?.removeEventListener("abort", abort);
+    }
   }
 }
 

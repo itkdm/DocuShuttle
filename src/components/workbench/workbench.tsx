@@ -305,8 +305,6 @@ export function Workbench() {
       }, abortController.signal);
       setLoopResult(result);
       setLiveEvents((items) => mergeTimelineEvents(items, result.events));
-      const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
-      if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
       if (result.checkpoint.status === "failed") {
         // The failed checkpoint already contains the user-facing assistant
         // message and turn.failed event. Keep the unified Timeline as the
@@ -315,6 +313,8 @@ export function Workbench() {
         setNotice(result.checkpoint.finalText ?? "这次请求没有完成，请稍后重试。");
         return;
       }
+      const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
+      if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
       const wrote = result.events.some((event) => event.type === "tool.completed" && (event.name === "apply_text_change" || event.name === "apply_text_changes"));
       if (wrote && taskId) {
         // A document mutation is not user-visible until the immutable version

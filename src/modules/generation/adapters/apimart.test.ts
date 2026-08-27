@@ -28,4 +28,12 @@ describe("APIMartImageGenerationAdapter", () => {
     const adapter = new APIMartImageGenerationAdapter({ apiKey: "test", baseUrl: "https://example.test/", model: "gpt-image-2", fetch: fetchMock, maxPolls: 2, delay: vi.fn().mockResolvedValue(undefined) });
     await expect(adapter.generate({ prompt: "x", size: "1024x1024", quality: "standard", count: 1 })).rejects.toMatchObject({ retryable: true, status: 408 });
   });
+
+  it("bounds a stalled provider request", async () => {
+    const fetchMock = vi.fn<typeof fetch>((_input, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    }));
+    const adapter = new APIMartImageGenerationAdapter({ apiKey: "test", baseUrl: "https://example.test/", model: "gpt-image-2", fetch: fetchMock, requestTimeoutMs: 5 });
+    await expect(adapter.generate({ prompt: "x", size: "1024x1024", quality: "standard", count: 1 })).rejects.toMatchObject({ retryable: true, status: 408 });
+  });
 });

@@ -143,8 +143,8 @@ describe("Agent execution timeline", () => {
       ],
     });
     expect(projection.turns).toHaveLength(1);
-    expect(projection.turns[0].assistant.streamingContent).toBe("先检查");
-    expect(projection.turns[0].assistant.activities).toHaveLength(1);
+    expect(projection.turns[0].assistant.streamingContent).toBe("已完成");
+    expect(projection.turns[0].assistant.activities).toMatchObject([{ type: "note", text: "先检查" }, { type: "tool", state: "completed" }]);
   });
 
   it("keeps equal prompts in separate turns", () => {

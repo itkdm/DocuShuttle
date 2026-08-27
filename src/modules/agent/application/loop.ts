@@ -70,6 +70,7 @@ export type AgentLoopEvent = { timestamp?: string; eventId?: string } & (
   | { type: "tool.completed"; callId: string; name: string; output: unknown }
   | { type: "tool.failed"; callId: string; name: string; error: string; durationMs?: number }
   | { type: "approval.required"; callId: string; name: string; input: unknown }
+  | { type: "approval.resolved"; callId: string; name: string; decision: "approved" | "rejected" }
   | { type: "completed"; text: string }
   | { type: "turn.failed"; error: string });
 
@@ -298,6 +299,9 @@ export class AgentLoopRunner {
       if (notify) onEvent?.(traceEvent);
       return traceEvent;
     };
+    const approvalEvent = emit({ type: "approval.resolved", callId: pending.callId, name: pending.name, decision: approval }, false);
+    await this.store.save(runId, checkpoint);
+    onEvent?.(approvalEvent);
     const startedEvent = emit({ type: "tool.started", callId: pending.callId, name: pending.name, input: summarizeTraceValue(input) }, false);
     // Persist the approval claim and the operation start before side effects.
     // If the request is interrupted, the trace tells us exactly whether a

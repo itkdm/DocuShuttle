@@ -57,6 +57,7 @@ describe("Agent execution timeline", () => {
   it("keeps approval, resume, and completion on one tool card", () => {
     const items = buildTimeline([
       { type: "approval.required", eventId: "approval", callId: "call-4", name: "apply_text_change", input: { nodeId: "p-1" } },
+      { type: "approval.resolved", eventId: "resolved", callId: "call-4", name: "apply_text_change", decision: "approved" },
       { type: "tool.started", eventId: "resume-start", callId: "call-4", name: "apply_text_change", input: { nodeId: "p-1" } },
       { type: "tool.completed", eventId: "resume-done", callId: "call-4", name: "apply_text_change", output: { revision: "r2" } },
     ]);

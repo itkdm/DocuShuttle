@@ -14,7 +14,7 @@ PaperDuck 使用模型驱动的、可恢复的 Tool Loop。模型每一轮都可
 - `AgentModelPort` 只负责把消息和工具描述交给模型并解析模型决策，不拥有 Supabase、Storage 或 DOCX 写权限。
 - `AgentTool` 是 provider-neutral 能力，参数必须由 Zod schema 校验；工具执行由应用层注入 `runId`、用户身份和当前文档 revision。
 - 所有写工具都必须经过文档引擎、临时对象、结构校验和 revision CAS；模型不能直接修改数据库或对象存储。
-- `AgentLoopCheckpoint` 只持久化模型恢复所需的 transcript、工具结果、迭代次数、pending interaction 和终态，支持故障恢复与前端刷新；取消会追加 `turn.cancelled`，不能被旧循环保存覆盖。
+- `AgentLoopCheckpoint` 只持久化模型恢复所需的 transcript、工具结果、迭代次数、pending interaction 和终态，支持故障恢复与前端刷新；它不是事件日志或消息投影。取消会追加 `turn.cancelled`，不能被旧循环保存覆盖。
 - 迭代次数、时间、token 和工具调用数量都有安全预算；工具错误作为结果返回模型，使 Agent 可以解释、重试或向用户提问。
 
 ### 上下文边界与压缩
@@ -24,7 +24,8 @@ PaperDuck 使用模型驱动的、可恢复的 Tool Loop。模型每一轮都可
 最近的对话单元，以及由历史用户目标和工具事实（revision、nodeId、变更数、风险、
 校验结果）组成的确定性摘要。assistant tool-call 与对应的 tool result 始终作为一个
 单元保留，避免 OpenAI-compatible 消息失配；摘要不会额外调用模型，也不会把隐藏
-Chain-of-Thought 写入用户界面。完整的用户可见执行过程仍保存在 `trace` 中。
+Chain-of-Thought 写入用户界面。`trace` 只保留最近 200 条诊断快照；完整执行事实写入
+`agent_run_events`，用户语义消息单独写入 `messages`。
 
 同一任务拥有一个稳定的 conversation/thread；每个用户 turn 创建一个独立、可审计的
 run，但新 run 会从该 conversation 的上一条模型 transcript 继续，并在下一次工具调用
@@ -56,4 +57,16 @@ conversation，而不是创建无上下文的新 run。Token、assistant 消息�
 用于实时展示，刷新后由持久化事件重放。文档画布只在一次原子版本提交成功后更新，
 避免半写入 DOCX。
 
-运行诊断以独立 EventStore 为事实源，checkpoint 只保留最近 200 条 bounded trace 作为恢复快照；服务端异常日志不得记录模型密钥、系统提示词或未脱敏工具详情。
+运行诊断以独立 EventStore 为事实源，事件序列由数据库 RPC 在单次事务中分配并去重；checkpoint 只保留最近 200 条 bounded trace 作为恢复快照。每个副作用工具使用 `runId:callId` 作为稳定幂等键，结果写入 Effect Receipt，重试优先重放 Receipt。服务端异常日志不得记录模型密钥、系统提示词或未脱敏工具详情。
+
+## 运行状态与恢复契约
+
+`agent_runs.status` 只表达运行生命周期：`queued`、`running`、`awaiting_approval`、
+`awaiting_user`、`awaiting_review`、`completed`、`failed`、`cancelled`。模型驱动的
+执行顺序只存在于 `AgentLoopRunner`；没有独立 TurnId，`runId` 是界面可见的一次宏观
+用户回合，`conversationId` 负责跨回合上下文归属。
+
+恢复时先读取 checkpoint，再通过 `claim_agent_loop_approval` 原子领取审批边界；
+取消先取得 `agent_runs` 行锁，文档提交 RPC 在同一行锁下拒绝 `cancelled` 运行，避免
+取消与不可变版本提交产生不一致。租约只覆盖 `queued/running`，过期运行会被回收为
+`cancelled`，并同步修正 checkpoint 状态。

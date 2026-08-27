@@ -7,15 +7,15 @@
 
 PaperDuck 自研一个 provider-neutral 的 Tool Loop，模型通过 OpenAI-compatible Chat Completions 适配器返回文本、工具调用或用户中断。工具由应用层注册并用 Zod 校验；文档工具只能通过 Document Engine、不可变版本和 revision CAS 产生副作用。
 
-Loop checkpoint 暂存于 `agent_runs.state.loopCheckpoint`，并采用乐观锁；每轮对话有独立的步数和工具预算，历史消息只作为上下文。面向用户的执行轨迹（模型开始/公开文本、工具开始/完成/失败、审批）随 checkpoint 持久化，并通过 Fetch + SSE 流即时送达界面；不展示模型的私有推理链。
+Loop checkpoint 暂存于 `agent_runs.state.loopCheckpoint`，并采用乐观锁；每轮对话有独立的步数和工具预算，历史消息只作为上下文。checkpoint 是恢复快照，`agent_run_events` 是追加事实源，`messages` 只保存面向用户的语义消息；三者不再互相扫描投影。通过 Fetch + SSE 流即时送达界面；不展示模型的私有推理链。
 
 写入工具默认需要审批；“完全批准”是当前用户、当前任务和当前文档内的显式自动执行授权，而非绕过 revision、校验或不可变版本。多处确定的文字改动用 `apply_text_changes` 先完整校验、再一次 mutate/validate/commit，保证全成或全不成。
 
 Agent 面板以持久化事件为事实源组成单一 Execution Timeline。普通执行和审批恢复都通过 SSE 发送公开文本、工具生命周期、审批请求/解决结果和终态；模型公开文本在没有工具边界时渲染为最终消息，工具前后的文本保留为阶段说明。工具输入/输出默认折叠，并在展示层做截断和敏感字段脱敏；模型的隐藏推理不会进入产品界面。
 
-事件在模型调用和工具副作用边界先写入 checkpoint，再通知浏览器；因此刷新或断线恢复时不会依赖仅存在于内存的 UI 事件。取消请求通过 AbortSignal 中止客户端流，Supabase checkpoint 更新同时拒绝覆盖已进入 `cancelled` 状态的运行。
+事件在模型调用和工具副作用边界先写入 checkpoint，再追加到事件事实源并通知浏览器；因此刷新或断线恢复时不会依赖仅存在于内存的 UI 事件。副作用以 `runId:callId` 写入 Effect Receipt 并在重试时复用。取消请求通过 AbortSignal 中止客户端流，Supabase checkpoint 更新同时拒绝覆盖已进入 `cancelled` 状态的运行，文档提交 RPC 也在锁内拒绝取消中的运行。
 
-旧四步 AgentRuntime 只作为兼容事务执行器，不能继续作为语义路由器。
+`AgentLoopRunner` 是唯一的模型驱动执行引擎；旧四步 AgentRuntime、固定步骤和固定 review/decision API 已移除。文档工具仍独立负责 OOXML 变换、校验、不可变版本和 revision CAS。
 
 ## 参考与取舍
 

@@ -68,10 +68,21 @@ export type AgentLoopStore = {
   appendEvents?(runId: string, events: readonly AgentLoopEvent[]): Promise<void>;
   /** Persist only user-visible conversation semantics, never tool transcripts. */
   appendAssistantMessage?(runId: string, message: { id: string; text: string }): Promise<void>;
+  /** Durable result for a side effect, keyed by runId:callId. */
+  loadEffectReceipt?(runId: string, idempotencyKey: string): Promise<AgentEffectReceipt | undefined>;
+  saveEffectReceipt?(runId: string, receipt: AgentEffectReceipt): Promise<AgentEffectReceipt>;
   /** Refresh the server-side lease while a provider/tool call is in flight. */
   heartbeat?(runId: string): Promise<boolean>;
   claimPendingApproval?(runId: string, callId: string): Promise<AgentLoopCheckpoint | undefined>;
   markCancelled?(runId: string): Promise<void>;
+};
+
+export type AgentEffectReceipt = {
+  idempotencyKey: string;
+  callId: string;
+  toolName: string;
+  output: unknown;
+  completedAt: string;
 };
 
 export const AGENT_LEASE_MANAGED_STATUSES = ["queued", "running"] as const;
@@ -235,9 +246,9 @@ export class AgentLoopRunner {
       events.push(traceEvent);
       this.observe(runId, traceEvent);
       checkpoint.trace = [...(checkpoint.trace ?? []), traceEvent].slice(-200);
-      void this.store.appendEvents?.(runId, [traceEvent]);
+      void this.store.appendEvents?.(runId, [traceEvent]).catch(() => undefined);
       if (traceEvent.type === "assistant.message" && traceEvent.text) {
-        void this.store.appendAssistantMessage?.(runId, { id: traceEvent.eventId ?? crypto.randomUUID(), text: traceEvent.text });
+        void this.store.appendAssistantMessage?.(runId, { id: traceEvent.eventId ?? crypto.randomUUID(), text: traceEvent.text }).catch(() => undefined);
       }
       if (notify) onEvent?.(traceEvent);
       return traceEvent;
@@ -361,6 +372,15 @@ export class AgentLoopRunner {
           onEvent?.(approvalEvent);
           return { checkpoint, events };
         }
+        const idempotencyKey = `${runId}:${call.id}`;
+        const existingReceipt = await this.store.loadEffectReceipt?.(runId, idempotencyKey);
+        if (existingReceipt) {
+          checkpoint.messages.push({ role: "tool", content: serializeToolOutput(existingReceipt.output), toolCallId: call.id, toolName: call.name });
+          const replayedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: summarizeTraceValue(existingReceipt.output) }, false);
+          await this.store.save(runId, checkpoint);
+          onEvent?.(replayedEvent);
+          continue;
+        }
         const toolStartedEvent = emit({ type: "tool.started", callId: call.id, name: call.name, input }, false);
         // Make the side-effect boundary durable before executing the tool.
         // This is what lets recovery distinguish an in-flight operation from
@@ -369,9 +389,12 @@ export class AgentLoopRunner {
         onEvent?.(toolStartedEvent);
         const toolStartedAt = Date.now();
         try {
-          const output = await this.withLeaseHeartbeat(runId, () => tool.execute(input, { runId, callId: call.id, idempotencyKey: `${runId}:${call.id}`, attempt: checkpoint.toolCallCount, signal }));
-          checkpoint.messages.push({ role: "tool", content: serializeToolOutput(output), toolCallId: call.id, toolName: call.name });
-          const toolCompletedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: { ...((output && typeof output === "object") ? output : { value: output }), durationMs: Date.now() - toolStartedAt } }, false);
+          const output = await this.withLeaseHeartbeat(runId, () => tool.execute(input, { runId, callId: call.id, idempotencyKey, attempt: checkpoint.toolCallCount, signal }));
+          const receipt = this.store.saveEffectReceipt
+            ? await this.store.saveEffectReceipt(runId, { idempotencyKey, callId: call.id, toolName: call.name, output, completedAt: new Date().toISOString() })
+            : { idempotencyKey, callId: call.id, toolName: call.name, output, completedAt: new Date().toISOString() };
+          checkpoint.messages.push({ role: "tool", content: serializeToolOutput(receipt.output), toolCallId: call.id, toolName: call.name });
+          const toolCompletedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: { ...((receipt.output && typeof receipt.output === "object") ? receipt.output : { value: receipt.output }), durationMs: Date.now() - toolStartedAt } }, false);
           await this.store.save(runId, checkpoint);
           onEvent?.(toolCompletedEvent);
         } catch (error) {
@@ -416,9 +439,9 @@ export class AgentLoopRunner {
       events.push(traceEvent);
       this.observe(runId, traceEvent);
       checkpoint.trace = [...(checkpoint.trace ?? []), traceEvent].slice(-200);
-      void this.store.appendEvents?.(runId, [traceEvent]);
+      void this.store.appendEvents?.(runId, [traceEvent]).catch(() => undefined);
       if (traceEvent.type === "assistant.message" && traceEvent.text) {
-        void this.store.appendAssistantMessage?.(runId, { id: traceEvent.eventId ?? crypto.randomUUID(), text: traceEvent.text });
+        void this.store.appendAssistantMessage?.(runId, { id: traceEvent.eventId ?? crypto.randomUUID(), text: traceEvent.text }).catch(() => undefined);
       }
       if (notify) onEvent?.(traceEvent);
       return traceEvent;
@@ -427,6 +450,14 @@ export class AgentLoopRunner {
     await this.store.save(runId, checkpoint);
     onEvent?.(approvalEvent);
     if (approval === "approved") {
+      const idempotencyKey = `${runId}:${pending.callId}`;
+      const existingReceipt = await this.store.loadEffectReceipt?.(runId, idempotencyKey);
+      if (existingReceipt) {
+        checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval, output: existingReceipt.output }), toolCallId: pending.callId, toolName: pending.name });
+        const replayedEvent = emit({ type: "tool.completed", callId: pending.callId, name: pending.name, output: summarizeTraceValue(existingReceipt.output) }, false);
+        await this.store.save(runId, checkpoint);
+        onEvent?.(replayedEvent);
+      } else {
       const startedEvent = emit({ type: "tool.started", callId: pending.callId, name: pending.name, input: summarizeTraceValue(input) }, false);
       // Persist the approval claim and the operation start before side effects.
       // If the request is interrupted, the trace tells us exactly whether a
@@ -435,9 +466,12 @@ export class AgentLoopRunner {
       onEvent?.(startedEvent);
       const toolStartedAt = Date.now();
       try {
-        const output = await this.withLeaseHeartbeat(runId, () => tool.execute(input, { runId, callId: pending.callId, idempotencyKey: `${runId}:${pending.callId}`, attempt: checkpoint.toolCallCount, signal }));
-        checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval, output }), toolCallId: pending.callId, toolName: pending.name });
-        const completedEvent = emit({ type: "tool.completed", callId: pending.callId, name: pending.name, output: summarizeTraceValue({ ...((output && typeof output === "object") ? output : { value: output }), durationMs: Date.now() - toolStartedAt }) }, false);
+        const output = await this.withLeaseHeartbeat(runId, () => tool.execute(input, { runId, callId: pending.callId, idempotencyKey, attempt: checkpoint.toolCallCount, signal }));
+        const receipt = this.store.saveEffectReceipt
+          ? await this.store.saveEffectReceipt(runId, { idempotencyKey, callId: pending.callId, toolName: pending.name, output, completedAt: new Date().toISOString() })
+          : { idempotencyKey, callId: pending.callId, toolName: pending.name, output, completedAt: new Date().toISOString() };
+        checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval, output: receipt.output }), toolCallId: pending.callId, toolName: pending.name });
+        const completedEvent = emit({ type: "tool.completed", callId: pending.callId, name: pending.name, output: summarizeTraceValue({ ...((receipt.output && typeof receipt.output === "object") ? receipt.output : { value: receipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
         await this.store.save(runId, checkpoint);
         onEvent?.(completedEvent);
       } catch (error) {
@@ -446,6 +480,7 @@ export class AgentLoopRunner {
         const failedEvent = emit({ type: "tool.failed", callId: pending.callId, name: pending.name, error: message, durationMs: Date.now() - toolStartedAt }, false);
         await this.store.save(runId, checkpoint);
         onEvent?.(failedEvent);
+      }
       }
     } else {
       checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: "rejected", reason: "The user rejected this action." }), toolCallId: pending.callId, toolName: pending.name });

@@ -42,6 +42,7 @@ export class SupabaseWorkingDocumentAccess implements WorkingDocumentAccessPort 
       }));
       if (committed.error) throw new Error(`DOCUMENT_COMMIT_FAILED: ${committed.error.message}`);
       const result = committed.data as { kind: string; actualRevision?: string; revision?: string };
+      if (result.kind === "run-cancelled") throw new Error("RUN_CANCELLED");
       if (result.kind === "revision-conflict") throw new Error(`DOCUMENT_REVISION_CONFLICT:${result.actualRevision ?? ""}`);
       return { revision: result.revision ?? input.revision };
     } catch (error) {

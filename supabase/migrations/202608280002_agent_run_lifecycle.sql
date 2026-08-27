@@ -23,6 +23,10 @@ declare v_owner uuid := auth.uid();
 begin
   update public.agent_runs
     set status = 'cancelled',
+        state = jsonb_set(
+          jsonb_set(coalesce(state, '{}'::jsonb), '{status}', '"cancelled"'::jsonb, true),
+          '{loopCheckpoint,status}', '"cancelled"'::jsonb, true
+        ),
         error_code = 'STALE_RUN_RECOVERED',
         error_message = '运行租约已过期，已安全回收。',
         finished_at = now(), updated_at = now(), lease_expires_at = null

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { AGENT_LEASE_MANAGED_STATUSES, type AgentLoopCheckpoint, type AgentLoopEvent, type AgentLoopStore } from "../../application/loop";
+import { AGENT_LEASE_MANAGED_STATUSES, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentLoopEvent, type AgentLoopStore } from "../../application/loop";
 import { ConcurrentRunUpdateError } from "../../domain/errors";
 import { measure } from "@/infrastructure/observability";
 
@@ -81,6 +81,21 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     if (result.error) throw new Error(`Unable to persist assistant message: ${result.error.message}`);
   }
 
+  async loadEffectReceipt(runId: string, idempotencyKey: string): Promise<AgentEffectReceipt | undefined> {
+    const result = await this.client.from("agent_effect_receipts").select("receipt").eq("run_id", runId).eq("idempotency_key", idempotencyKey).maybeSingle();
+    if (result.error) throw new Error(`Unable to load effect receipt: ${result.error.message}`);
+    return (result.data?.receipt ?? undefined) as AgentEffectReceipt | undefined;
+  }
+
+  async saveEffectReceipt(runId: string, receipt: AgentEffectReceipt): Promise<AgentEffectReceipt> {
+    const result = await this.client.rpc("save_effect_receipt", {
+      p_run_id: runId,
+      p_receipt: { ...receipt, stepId: receipt.callId, effect: receipt.toolName },
+    });
+    if (result.error) throw new Error(`Unable to save effect receipt: ${result.error.message}`);
+    return (result.data ?? receipt) as AgentEffectReceipt;
+  }
+
   async heartbeat(runId: string): Promise<boolean> {
     return measure("agent.checkpoint.heartbeat", { runId, table: "agent_runs", operation: "lease_update" }, async () => {
       const result = await this.client.from("agent_runs").update({ lease_expires_at: new Date(Date.now() + 120_000).toISOString() }).eq("id", runId).in("status", [...AGENT_LEASE_MANAGED_STATUSES]).select("id").maybeSingle();
@@ -94,7 +109,14 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     if (current.error || !current.data) throw new Error("RUN_NOT_FOUND");
     const state = (current.data.state ?? {}) as Record<string, unknown>;
     const checkpoint = state.loopCheckpoint as AgentLoopCheckpoint | undefined;
-    if (!checkpoint || checkpoint.status === "cancelled") return;
+    if (!checkpoint) {
+      const updated = await this.client.from("agent_runs")
+        .update({ state: { ...state, status: "cancelled" }, status: "cancelled", resume_cursor: {}, lock_version: current.data.lock_version + 1, updated_at: new Date().toISOString(), lease_expires_at: null })
+        .eq("id", runId).eq("lock_version", current.data.lock_version).select("id").maybeSingle();
+      if (updated.error || !updated.data) throw new ConcurrentRunUpdateError(runId);
+      return;
+    }
+    if (checkpoint.status === "cancelled") return;
     const event = { type: "turn.cancelled", text: "本轮操作已取消。", eventId: crypto.randomUUID(), timestamp: new Date().toISOString() } as const;
     const nextCheckpoint: AgentLoopCheckpoint = { ...checkpoint, status: "cancelled", pendingApproval: undefined, finalText: event.text, trace: [...(checkpoint.trace ?? []), event].slice(-200) };
     const nextState = { ...state, status: "cancelled", loopCheckpoint: nextCheckpoint, version: current.data.lock_version + 1 };
@@ -102,6 +124,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       .update({ state: nextState, status: "cancelled", resume_cursor: nextCheckpoint, lock_version: current.data.lock_version + 1, updated_at: new Date().toISOString() })
       .eq("id", runId).eq("lock_version", current.data.lock_version).select("id").maybeSingle();
     if (updated.error || !updated.data) throw new ConcurrentRunUpdateError(runId);
+    await this.appendEvents(runId, [event]);
   }
 
   async claimPendingApproval(runId: string, callId: string): Promise<AgentLoopCheckpoint | undefined> {

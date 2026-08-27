@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { AgentLoopRunner, type AgentLoopCheckpoint, type AgentModelPort, type AgentTool } from "../application/loop";
+import { AgentLoopRunner, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentModelPort, type AgentTool } from "../application/loop";
 
 class MemoryStore {
   private value?: AgentLoopCheckpoint;
@@ -45,6 +45,31 @@ describe("AgentLoopRunner", () => {
     await new AgentLoopRunner(model, store, [tool]).run("run-save-once", "检查");
     expect(hasToolResult).toBe(true);
     expect(store.saves).toBe(5);
+  });
+
+  it("replays a durable effect receipt instead of executing the same call twice", async () => {
+    const receipts = new Map<string, AgentEffectReceipt>();
+    const store = new MemoryStore() as MemoryStore & {
+      loadEffectReceipt: (runId: string, idempotencyKey: string) => Promise<AgentEffectReceipt | undefined>;
+      saveEffectReceipt: (runId: string, receipt: AgentEffectReceipt) => Promise<AgentEffectReceipt>;
+    };
+    store.loadEffectReceipt = async (_runId, idempotencyKey) => receipts.get(idempotencyKey);
+    store.saveEffectReceipt = async (_runId, receipt) => { receipts.set(receipt.idempotencyKey, receipt); return receipt; };
+    let executions = 0;
+    const tool: AgentTool = { ...inspectTool, async execute() { executions += 1; return { revision: "r1" }; } };
+    let decisions = 0;
+    const model: AgentModelPort = { decide: async () => {
+      decisions += 1;
+      if (decisions === 2) throw new Error("temporary provider failure");
+      if (decisions === 4) return { kind: "message", text: "已完成。" };
+      return { kind: "tool_calls", calls: [{ id: "receipt-call", name: "inspect_document", input: { query: "summary" } }] };
+    } };
+    const first = await new AgentLoopRunner(model, store, [tool]).run("run-receipt", "检查");
+    expect(first.checkpoint.status).toBe("failed");
+    expect(executions).toBe(1);
+    const second = await new AgentLoopRunner(model, store, [tool]).run("run-receipt", "重试");
+    expect(second.checkpoint.status).toBe("completed");
+    expect(executions).toBe(1);
   });
 
   it("compacts a long model transcript without breaking tool evidence", async () => {

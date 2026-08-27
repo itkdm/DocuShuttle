@@ -70,7 +70,8 @@ const eventDetail = (event: BrowserAgentLoopResult["events"][number]) => {
   const value = event.output ?? event.input;
   if (value && typeof value === "object" && "summary" in value && typeof value.summary === "string") {
     const duration = "durationMs" in value && typeof value.durationMs === "number" ? ` · ${(value.durationMs / 1000).toFixed(value.durationMs < 1000 ? 1 : 0)} 秒` : "";
-    return `${value.summary}${duration}`;
+    const validation = "validationValid" in value && value.validationValid === false ? " · 校验未通过" : "";
+    return `${value.summary}${validation}${duration}`;
   }
   if (event.type === "model.completed" && typeof event.durationMs === "number") return `耗时 ${(event.durationMs / 1000).toFixed(event.durationMs < 1000 ? 1 : 0)} 秒`;
   return event.text ?? event.error ?? event.name ?? "";

@@ -87,11 +87,11 @@ const summarizeTraceValue = (value: unknown): unknown => {
   if (!value || typeof value !== "object") return value;
   const record = value as Record<string, unknown>;
   const durationMs = typeof record.durationMs === "number" ? record.durationMs : undefined;
-  if (typeof record.changedCount === "number") return { summary: `已原子更新 ${record.changedCount} 处`, revision: record.revision, durationMs };
+  if (typeof record.changedCount === "number") return { summary: `已原子更新 ${record.changedCount} 处`, revision: record.revision, validationValid: (record.validation as { valid?: unknown } | undefined)?.valid, durationMs };
   if (typeof record.nodeId === "string" && typeof record.revision === "string") {
     return "text" in record
       ? { summary: "已读取目标文本", nodeId: record.nodeId, revision: record.revision, durationMs }
-      : { summary: "已生成新的文档版本", nodeId: record.nodeId, revision: record.revision, durationMs };
+      : { summary: "已生成新的文档版本", nodeId: record.nodeId, revision: record.revision, validationValid: (record.validation as { valid?: unknown } | undefined)?.valid, durationMs };
   }
   if (record.counts && typeof record.counts === "object") return { summary: "已读取文档概览", revision: record.revision, counts: record.counts, durationMs };
   if (Array.isArray(record.nodes)) return { summary: `已定位 ${record.nodes.length} 个文档节点`, revision: record.revision, durationMs };

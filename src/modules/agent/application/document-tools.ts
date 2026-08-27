@@ -191,7 +191,14 @@ export function createDocumentTools(
       const validated = await documents.validate(mutation.bytes);
       if (blockingPackageErrors(validated.diagnostics).length > 0) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
       const committed = await working.commit({ expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
-      return { nodeId: input.nodeId, previousRevision: input.expectedRevision, revision: committed.revision, changedEntries: mutation.changedEntries, riskLevel: plan?.riskLevel };
+      return {
+        nodeId: input.nodeId,
+        previousRevision: input.expectedRevision,
+        revision: committed.revision,
+        changedEntries: mutation.changedEntries,
+        riskLevel: plan?.riskLevel,
+        validation: mutation.validation ? { valid: mutation.validation.valid, tiers: mutation.validation.tiers.map(({ tier, status }) => ({ tier, status })) } : undefined,
+      };
     },
   };
 
@@ -219,7 +226,15 @@ export function createDocumentTools(
       const validated = await documents.validate(mutation.bytes);
       if (blockingPackageErrors(validated.diagnostics).length > 0) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
       const committed = await working.commit({ expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
-      return { changedCount: input.changes.length, nodeIds: input.changes.map((change) => change.nodeId), previousRevision: input.expectedRevision, revision: committed.revision, changedEntries: mutation.changedEntries, riskLevel: plan?.riskLevel };
+      return {
+        changedCount: input.changes.length,
+        nodeIds: input.changes.map((change) => change.nodeId),
+        previousRevision: input.expectedRevision,
+        revision: committed.revision,
+        changedEntries: mutation.changedEntries,
+        riskLevel: plan?.riskLevel,
+        validation: mutation.validation ? { valid: mutation.validation.valid, tiers: mutation.validation.tiers.map(({ tier, status }) => ({ tier, status })) } : undefined,
+      };
     },
   };
 

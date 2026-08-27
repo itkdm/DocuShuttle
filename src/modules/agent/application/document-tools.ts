@@ -24,6 +24,7 @@ const regionListSchema = z.object({
   limit: z.number().int().min(1).max(80).default(80),
 });
 const regionReadSchema = z.object({ nodeId: nodeIdSchema });
+const capabilitySchema = z.object({ nodeId: nodeIdSchema });
 const textChangeSchema = z.object({
   nodeId: nodeIdSchema,
   expectedRevision: z.string().trim().min(1).max(300),
@@ -137,6 +138,26 @@ export function createDocumentTools(
     },
   };
 
+  const inspectNodeCapabilities: AgentTool<typeof capabilitySchema> = {
+    name: "inspect_node_capabilities",
+    description: "Read the supported, guarded or unsupported operations for one semantic document node without modifying it.",
+    inputSchema: capabilitySchema,
+    async execute(input) {
+      const { inspection } = await inspectCurrent(documents, working);
+      const node = inspection.manifest.nodes.find((candidate) => candidate.nodeId === input.nodeId);
+      if (!node) throw new Error("DOCUMENT_REGION_NOT_FOUND");
+      const text = inspection.paragraphs.find(({ address }) => address.nodeId === input.nodeId)?.text
+        ?? inspection.tableCells.find(({ address }) => address.nodeId === input.nodeId)?.text;
+      return {
+        nodeId: node.nodeId,
+        kind: node.kind,
+        story: node.locator?.story,
+        capabilities: node.capabilities,
+        ...(text === undefined ? {} : { text: text.length > 240 ? `${text.slice(0, 240)}…` : text }),
+      };
+    },
+  };
+
   const planTextChange: AgentTool<typeof planTextChangeSchema> = {
     name: "plan_text_change",
     description: "Dry-run one exact text replacement and return the targets, changed parts, risk and validation diagnostics. This never writes the document and does not require approval.",
@@ -238,5 +259,5 @@ export function createDocumentTools(
     },
   };
 
-  return [inspectDocument, listRegions, readRegion, planTextChange, applyTextChange, applyTextChanges];
+  return [inspectDocument, listRegions, readRegion, inspectNodeCapabilities, planTextChange, applyTextChange, applyTextChanges];
 }

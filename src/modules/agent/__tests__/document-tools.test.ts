@@ -48,4 +48,20 @@ describe("document mutation planning tool", () => {
     expect(result.nodes[0]).not.toHaveProperty("path");
     expect(result.nodes[0]).not.toHaveProperty("locator");
   });
+
+  it("exposes node capabilities without exposing its locator", async () => {
+    const source = await createDocx();
+    const documents = new OoxmlPreservationKernel();
+    const inspection = await documents.inspect(source);
+    const target = inspection.paragraphs[0];
+    const tools = createDocumentTools(documents, { async load() { return { bytes: source, revision: inspection.manifest.revision }; }, async commit() { return { revision: inspection.manifest.revision }; } });
+    const tool = tools.find((candidate) => candidate.name === "inspect_node_capabilities");
+    expect(tool).toBeDefined();
+    if (!tool) return;
+    const result = await tool.execute({ nodeId: target.address.nodeId }, { runId: "run", callId: "call", idempotencyKey: "key", attempt: 1 }) as Record<string, unknown>;
+    expect(result).toHaveProperty("nodeId", target.address.nodeId);
+    expect(result).toHaveProperty("capabilities");
+    expect(result).not.toHaveProperty("locator");
+    expect(result).not.toHaveProperty("entry");
+  });
 });

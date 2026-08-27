@@ -34,6 +34,9 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       .update({ state, status, resume_cursor: checkpoint, lock_version: nextVersion, updated_at: new Date().toISOString() })
       .eq("id", runId)
       .eq("lock_version", row.lock_version)
+      // The legacy cancel command owns the terminal cancelled state. Never
+      // let an in-flight loop write its stale checkpoint back over it.
+      .neq("status", "cancelled")
       .select("id")
       .maybeSingle();
     if (updated.error || !updated.data) throw new ConcurrentRunUpdateError(runId);

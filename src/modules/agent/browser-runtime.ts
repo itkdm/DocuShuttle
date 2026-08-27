@@ -6,14 +6,18 @@ import type { AgentPermissionMode } from "./application/loop";
 type AgentResponse = { run: AgentRun };
 type AdvanceResponse = { kind: string; run: AgentRun };
 
+const userFacingError = (code: string | undefined, fallback: string) => ({
+  IMAGE_GENERATION_FAILED: "图片候选暂时生成失败，请稍后重试；如果持续失败，请检查图片服务配置。",
+  IMAGE_APPLY_FAILED: "图片候选应用失败，请刷新文档后重试。",
+  AGENT_LOOP_FAILED: "这次请求没有完成，请稍后重试；已保留执行记录。",
+  AGENT_LOOP_RESUME_FAILED: "这次操作没有恢复成功，请重新确认当前请求。",
+}[code ?? ""] ?? fallback);
+
 const json = async <T>(url: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(url, init);
   const body = await response.json().catch(() => ({})) as T & { code?: string; message?: string };
   if (!response.ok) {
-    const userMessage = body.message ?? ({
-      IMAGE_GENERATION_FAILED: "图片候选暂时生成失败，请稍后重试；如果持续失败，请检查图片服务配置。",
-      IMAGE_APPLY_FAILED: "图片候选应用失败，请刷新文档后重试。",
-    } as Record<string, string>)[body.code ?? ""] ?? `请求未完成（HTTP ${response.status}）`;
+    const userMessage = body.message ?? userFacingError(body.code, `请求未完成（HTTP ${response.status}）`);
     throw new Error(userMessage);
   }
   return body;
@@ -50,7 +54,10 @@ async function consumeAgentStream(
       const data = JSON.parse(raw) as BrowserAgentLoopResult | BrowserAgentLoopResult["events"][number] | { code?: string };
       if (event === "event") onEvent(data as BrowserAgentLoopResult["events"][number]);
       if (event === "result") finalResult = data as BrowserAgentLoopResult;
-      if (event === "error") throw new Error((data as { code?: string }).code ?? "AGENT_LOOP_FAILED");
+      if (event === "error") {
+        const code = (data as { code?: string }).code;
+        throw new Error(userFacingError(code, "这次请求没有完成，请稍后重试。"));
+      }
     }
   }
   if (!finalResult) throw new Error("AGENT_STREAM_INCOMPLETE");

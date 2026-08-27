@@ -21,6 +21,7 @@ interface OutlinePanelProps {
   onLoadMoreTasks?: () => void;
   hasMoreTasks?: boolean;
   loadingMoreTasks?: boolean;
+  loadingTasks?: boolean;
 }
 
 export function OutlinePanel({
@@ -38,6 +39,7 @@ export function OutlinePanel({
   onLoadMoreTasks,
   hasMoreTasks = false,
   loadingMoreTasks = false,
+  loadingTasks = false,
 }: OutlinePanelProps) {
   const inTask = Boolean(activeTaskId);
   const [open, setOpen] = useState({ taskId: activeTaskId, tasks: !inTask, parse: inTask });
@@ -84,7 +86,7 @@ export function OutlinePanel({
           </div>
           {tasksOpen && (
             <div className="workspace-section-body">
-              <TaskList tasks={tasks} activeTaskId={activeTaskId} onSelectTask={onSelectTask} onCreateTask={onCreateTask} heading={false} onLoadMore={onLoadMoreTasks} hasMore={hasMoreTasks} loadingMore={loadingMoreTasks} />
+              <TaskList tasks={tasks} activeTaskId={activeTaskId} onSelectTask={onSelectTask} onCreateTask={onCreateTask} heading={false} onLoadMore={onLoadMoreTasks} hasMore={hasMoreTasks} loadingMore={loadingMoreTasks} loading={loadingTasks} />
             </div>
           )}
         </section>

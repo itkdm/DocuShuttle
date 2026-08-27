@@ -10,6 +10,7 @@ interface TaskListProps {
   onLoadMore?: () => void;
   hasMore?: boolean;
   loadingMore?: boolean;
+  loading?: boolean;
 }
 
 function formatTaskTime(iso: string) {
@@ -18,7 +19,7 @@ function formatTaskTime(iso: string) {
   return date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-export function TaskList({ tasks, activeTaskId, onSelectTask, onCreateTask, heading = true, onLoadMore, hasMore = false, loadingMore = false }: TaskListProps) {
+export function TaskList({ tasks, activeTaskId, onSelectTask, onCreateTask, heading = true, onLoadMore, hasMore = false, loadingMore = false, loading = false }: TaskListProps) {
   return (
     <section className="task-list" aria-label="任务列表">
       {heading && (
@@ -33,7 +34,9 @@ export function TaskList({ tasks, activeTaskId, onSelectTask, onCreateTask, head
           </button>
         </div>
       )}
-      {tasks.length === 0 ? (
+      {loading ? (
+        <p className="task-list-empty" aria-live="polite">正在加载任务…</p>
+      ) : tasks.length === 0 ? (
         <p className="task-list-empty">还没有任务。上传一份文档会创建新会话。</p>
       ) : (
         <ol className="task-list-items">

@@ -10,7 +10,7 @@ export type TimelineItem =
   | { kind: "message"; id: string; text: string }
   | { kind: "thought"; id: string; text: string }
   | { kind: "tool"; id: string; name: string; state: ToolState; input?: unknown; output?: unknown; error?: string; durationMs?: number }
-  | { kind: "status"; id: string; state: "completed" | "failed"; text: string };
+  | { kind: "status"; id: string; state: "completed" | "failed" | "cancelled"; text: string };
 
 const toolNames: Record<string, { label: string; detail: string }> = {
   inspect_document: { label: "读取当前文档", detail: "查看文档结构和版本" },
@@ -135,6 +135,7 @@ export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
       streamedText = ""; streamedIndex = undefined;
       items.push({ kind: "status", id, state: "completed", text: eventText(event) ?? "本轮已完成" });
     } else if (event.type === "turn.failed") items.push({ kind: "status", id, state: "failed", text: eventError(event) ?? "本轮未完成" });
+    else if (event.type === "turn.cancelled") items.push({ kind: "status", id, state: "cancelled", text: eventText(event) ?? "本轮操作已取消。" });
   }
   // A disconnected/partial stream may not include assistant.message yet;
   // keep the visible text as a thought until a terminal event arrives.
@@ -155,7 +156,7 @@ export function AgentTimeline({ events, onApproval, deciding = false }: { events
       if (item.kind === "user") return <div className="timeline-message user" key={item.id}><div className="message-meta"><span>你</span><strong>你的目标</strong></div><p>{item.text}</p></div>;
       if (item.kind === "thought") return <div className="timeline-thought" key={item.id}><span className="timeline-label">纸上鸭</span><p className="agent-rich-text">{renderAgentMarkdown(item.text)}</p></div>;
       if (item.kind === "message") return <div className="timeline-message agent" key={item.id}><div className="message-meta"><span>鸭</span><strong>纸上鸭</strong></div><p className="agent-rich-text">{renderAgentMarkdown(item.text)}</p></div>;
-      if (item.kind === "status") return <div className={`timeline-status ${item.state}`} key={item.id}><StateIcon state={item.state === "completed" ? "completed" : "failed"} /><span>{item.text}</span></div>;
+      if (item.kind === "status") return <div className={`timeline-status ${item.state}`} key={item.id}><StateIcon state={item.state === "completed" ? "completed" : item.state === "cancelled" ? "approval" : "failed"} /><span>{item.text}</span></div>;
       const presentation = toolPresentation(item.name);
       const detailText = typeof item.error === "string" ? item.error : compact(item.output ?? item.input);
       return <div className={`timeline-tool ${item.state}`} key={item.id}><div className="timeline-tool-head"><span className="timeline-tool-icon"><StateIcon state={item.state} /></span><div><strong>{presentation.label}</strong><small>{presentation.detail} · <code>{item.name}</code>{item.durationMs !== undefined && <> · {item.durationMs}ms</>}</small></div><ChevronRight size={14} /></div>{item.state === "approval" && onApproval && <div className="timeline-approval"><p>这一步会修改文档并创建新的版本，需要你的确认。</p><div><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并执行</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div></div>}{detailText && <details><summary>查看详情</summary><pre>{detailText}</pre></details>}</div>;

@@ -74,6 +74,11 @@ describe("Agent execution timeline", () => {
     expect(items[0]).toMatchObject({ kind: "tool", state: "failed", error: "用户已拒绝此操作。" });
   });
 
+  it("renders cancellation as a terminal timeline status", () => {
+    const items = buildTimeline([{ type: "turn.cancelled", text: "本轮操作已取消。" }]);
+    expect(items).toEqual([{ kind: "status", id: "turn.cancelled-0", state: "cancelled", text: "本轮操作已取消。" }]);
+  });
+
   it("redacts secrets from expandable tool details", () => {
     expect(sanitizeForDisplay({ apiKey: "secret", nested: { password: "pw", value: "ok" } })).toEqual({ apiKey: "[已隐藏]", nested: { password: "[已隐藏]", value: "ok" } });
   });

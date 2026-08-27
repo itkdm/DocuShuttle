@@ -62,7 +62,7 @@ export const advanceBrowserAgentRun = async (runId: string) =>
 
 export type BrowserAgentLoopResult = {
   checkpoint: {
-    status: "running" | "awaiting_user" | "completed" | "failed";
+    status: "running" | "awaiting_user" | "completed" | "failed" | "cancelled";
     finalText?: string;
     iterations: number;
     pendingApproval?: { callId: string; name: string; input: unknown };

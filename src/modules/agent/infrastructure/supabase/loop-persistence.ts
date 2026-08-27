@@ -25,6 +25,8 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       ? "completed"
       : checkpoint.status === "failed"
         ? "failed"
+        : checkpoint.status === "cancelled"
+          ? "cancelled"
         : checkpoint.status === "awaiting_user"
           ? "awaiting_scope_confirmation"
           : "analyzing";
@@ -39,6 +41,21 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       .neq("status", "cancelled")
       .select("id")
       .maybeSingle();
+    if (updated.error || !updated.data) throw new ConcurrentRunUpdateError(runId);
+  }
+
+  async markCancelled(runId: string): Promise<void> {
+    const current = await this.client.from("agent_runs").select("state, lock_version, status").eq("id", runId).maybeSingle();
+    if (current.error || !current.data) throw new Error("RUN_NOT_FOUND");
+    const state = (current.data.state ?? {}) as Record<string, unknown>;
+    const checkpoint = state.loopCheckpoint as AgentLoopCheckpoint | undefined;
+    if (!checkpoint || checkpoint.status === "cancelled") return;
+    const event = { type: "turn.cancelled", text: "本轮操作已取消。", eventId: crypto.randomUUID(), timestamp: new Date().toISOString() } as const;
+    const nextCheckpoint: AgentLoopCheckpoint = { ...checkpoint, status: "cancelled", pendingApproval: undefined, finalText: event.text, trace: [...(checkpoint.trace ?? []), event].slice(-200) };
+    const nextState = { ...state, status: "cancelled", loopCheckpoint: nextCheckpoint, version: current.data.lock_version + 1 };
+    const updated = await this.client.from("agent_runs")
+      .update({ state: nextState, status: "cancelled", resume_cursor: nextCheckpoint, lock_version: current.data.lock_version + 1, updated_at: new Date().toISOString() })
+      .eq("id", runId).eq("lock_version", current.data.lock_version).select("id").maybeSingle();
     if (updated.error || !updated.data) throw new ConcurrentRunUpdateError(runId);
   }
 

@@ -47,7 +47,7 @@ export type AgentLoopCheckpoint = {
   iterations: number;
   toolCallCount: number;
   pendingApproval?: { callId: string; name: string; input: unknown };
-  status: "running" | "awaiting_user" | "completed" | "failed";
+  status: "running" | "awaiting_user" | "completed" | "failed" | "cancelled";
   finalText?: string;
   permissionMode?: AgentPermissionMode;
   /** Durable, user-visible execution trace. Kept bounded by the runner. */
@@ -58,6 +58,7 @@ export type AgentLoopStore = {
   load(runId: string): Promise<AgentLoopCheckpoint | undefined>;
   save(runId: string, checkpoint: AgentLoopCheckpoint): Promise<void>;
   claimPendingApproval?(runId: string, callId: string): Promise<AgentLoopCheckpoint | undefined>;
+  markCancelled?(runId: string): Promise<void>;
 };
 
 export type AgentLoopEvent = { timestamp?: string; eventId?: string } & (
@@ -72,7 +73,8 @@ export type AgentLoopEvent = { timestamp?: string; eventId?: string } & (
   | { type: "approval.required"; callId: string; name: string; input: unknown }
   | { type: "approval.resolved"; callId: string; name: string; decision: "approved" | "rejected" }
   | { type: "completed"; text: string }
-  | { type: "turn.failed"; error: string });
+  | { type: "turn.failed"; error: string }
+  | { type: "turn.cancelled"; text: string });
 
 export type AgentLoopResult = {
   checkpoint: AgentLoopCheckpoint;
@@ -136,7 +138,7 @@ export class AgentLoopRunner {
       checkpoint.toolCallCount = 0;
     }
     else checkpoint.permissionMode ??= permissionMode;
-    if ((checkpoint.status === "completed" || checkpoint.status === "failed") && !userText.trim()) {
+    if ((checkpoint.status === "completed" || checkpoint.status === "failed" || checkpoint.status === "cancelled") && !userText.trim()) {
       return { checkpoint, events: checkpoint.finalText ? [{ type: "completed", text: checkpoint.finalText }] : [] };
     }
     if (userText.trim()) checkpoint.messages.push({ role: "user", content: userText });

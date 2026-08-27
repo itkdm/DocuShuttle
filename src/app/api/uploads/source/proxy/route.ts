@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { logger } from "@/infrastructure/observability";
 
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
 import { OoxmlPreservationKernel } from "@/modules/documents";
@@ -37,7 +38,7 @@ export async function POST(request: Request) {
   } catch (error) {
     const code = error instanceof z.ZodError ? "INVALID_REQUEST" : error instanceof Error ? error.message : "PROXY_UPLOAD_FAILED";
     const status = code === "AUTHENTICATION_REQUIRED" ? 401 : code === "TASK_NOT_FOUND" ? 404 : code === "INVALID_REQUEST" ? 400 : 500;
-    if (status === 500) console.error("proxy_upload_failed", code);
+    if (status === 500) logger.error("http.request.failed", { route: "/api/uploads/source/proxy", error: { code } });
     return NextResponse.json({ code: status === 500 ? "PROXY_UPLOAD_FAILED" : code }, { status });
   }
 }

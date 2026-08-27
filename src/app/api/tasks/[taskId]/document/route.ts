@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { logger } from "@/infrastructure/observability";
 
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
 import { SupabaseStorageAdapter } from "@/modules/storage/adapters/supabase-storage";
@@ -35,7 +36,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tas
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") {
       return NextResponse.json({ code: error.message }, { status: 401 });
     }
-    console.error("current_document_failed", error instanceof Error ? error.message : "unknown");
+    logger.error("http.request.failed", { route: "/api/tasks/:taskId/document", error });
     return NextResponse.json({ code: "CURRENT_DOCUMENT_FAILED" }, { status: 500 });
   }
 }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { logger } from "@/infrastructure/observability";
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
 import { SupabaseStorageAdapter } from "@/modules/storage/adapters/supabase-storage";
 import { OoxmlPreservationKernel } from "@/modules/documents/infrastructure/ooxml/ooxml-preservation-kernel";
@@ -15,7 +16,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tas
     return NextResponse.json({ revision: version.data.sha256, counts: { paragraphs: inspection.paragraphs.length, tableCells: inspection.tableCells.length, images: inspection.images.length }, images: inspection.images.map(({ address, contentType, byteLength }) => ({ nodeId: address.nodeId, contentType, byteLength, path: address.path })) });
   } catch (error) {
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
-    console.error("document_inspection_failed", error instanceof Error ? error.message : "unknown");
+    logger.error("http.request.failed", { route: "/api/tasks/:taskId/document/inspect", error });
     return NextResponse.json({ code: "DOCUMENT_INSPECTION_FAILED" }, { status: 500 });
   }
 }

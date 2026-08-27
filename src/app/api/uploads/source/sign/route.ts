@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { logger } from "@/infrastructure/observability";
 
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
 import { SupabaseStorageAdapter } from "@/modules/storage/adapters/supabase-storage";
@@ -26,7 +27,7 @@ export async function POST(request: Request) {
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });
     const code = error instanceof Error ? error.message : "SIGN_UPLOAD_FAILED";
     const status = code === "AUTHENTICATION_REQUIRED" ? 401 : code === "TASK_NOT_FOUND" ? 404 : code === "DOCX_REQUIRED" || code === "FILE_SIZE_OUT_OF_RANGE" ? 400 : 500;
-    if (status === 500) console.error("sign_upload_failed", code);
+    if (status === 500) logger.error("http.request.failed", { route: "/api/uploads/source/sign", error: { code } });
     return NextResponse.json({ code: status === 500 ? "SIGN_UPLOAD_FAILED" : code }, { status });
   }
 }

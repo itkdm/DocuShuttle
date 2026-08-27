@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { logger } from "@/infrastructure/observability";
 
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
 import { SupabaseTaskRepository } from "@/modules/tasks/adapters/supabase-task-repository";
@@ -20,7 +21,7 @@ export async function GET() {
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") {
       return NextResponse.json({ code: error.message }, { status: 401 });
     }
-    console.error("list_tasks_failed", error instanceof Error ? error.message : "unknown");
+    logger.error("http.request.failed", { route: "/api/tasks", error });
     return NextResponse.json({ code: "LIST_TASKS_FAILED" }, { status: 500 });
   }
 }
@@ -42,7 +43,7 @@ export async function POST(request: Request) {
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") {
       return NextResponse.json({ code: error.message }, { status: 401 });
     }
-    console.error("create_task_failed", error instanceof Error ? error.message : "unknown");
+    logger.error("http.request.failed", { route: "/api/tasks", error });
     return NextResponse.json({ code: "CREATE_TASK_FAILED" }, { status: 500 });
   }
 }

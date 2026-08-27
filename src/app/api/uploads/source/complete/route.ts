@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { logger } from "@/infrastructure/observability";
 
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
 import { OoxmlPreservationKernel } from "@/modules/documents";
@@ -31,7 +32,7 @@ export async function POST(request: Request) {
     const code = error instanceof Error && "code" in error ? String(error.code) : error instanceof Error ? error.message : "COMPLETE_UPLOAD_FAILED";
     const clientCodes = new Set(["UPLOAD_SIZE_MISMATCH", "UPLOAD_CHECKSUM_MISMATCH", "OBJECT_SCOPE_MISMATCH", "INVALID_OBJECT_KEY"]);
     const status = code === "AUTHENTICATION_REQUIRED" ? 401 : code === "TASK_NOT_FOUND" ? 404 : clientCodes.has(code) || code.startsWith("DOCX_") ? 400 : 500;
-    if (status === 500) console.error("complete_upload_failed", code);
+    if (status === 500) logger.error("http.request.failed", { route: "/api/uploads/source/complete", error: { code } });
     return NextResponse.json({ code: status === 500 ? "COMPLETE_UPLOAD_FAILED" : code }, { status });
   }
 }

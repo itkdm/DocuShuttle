@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
+import { logger } from "@/infrastructure/observability";
 
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
 import { SupabaseStorageAdapter } from "@/modules/storage/adapters/supabase-storage";
@@ -26,7 +27,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ tas
       return NextResponse.json({ code: "INVALID_IMAGE_REQUEST", message: error instanceof ZodError ? "Invalid image request." : error.message }, { status: 400 });
     }
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
-    console.error("image_generation_failed", error instanceof Error ? error.message : "unknown");
+    logger.error("http.request.failed", { route: "/api/tasks/:taskId/images", error });
     return NextResponse.json({ code: "IMAGE_GENERATION_FAILED" }, { status: 502 });
   }
 }

@@ -15,6 +15,7 @@ import type {
 import { ConcurrentRunUpdateError } from "../../domain/errors";
 import { createAgentRun, type AgentRun, type SideEffectReceipt } from "../../domain/model";
 import type { AgentLoopCheckpoint } from "../../application/loop";
+import { measure } from "@/infrastructure/observability";
 
 const fail = (context: string, error: { message: string; code?: string } | null): void => {
   if (error) throw new Error(`${context}: ${error.code ?? "DATABASE_ERROR"}: ${error.message}`);
@@ -69,7 +70,7 @@ export class SupabaseAgentRunStore implements AgentRunStore {
         }
       : undefined;
     const state = loopCheckpoint ? { ...run, conversationId: conversation.data.id, loopCheckpoint } : { ...run, conversationId: conversation.data.id };
-    const created = await this.client.rpc("create_agent_turn", {
+    const created = await measure("db.rpc", { rpc: "create_agent_turn", operation: "create", table: "agent_runs", taskId: input.taskId }, async () => await this.client.rpc("create_agent_turn", {
       p_task_id: input.taskId,
       p_run_id: run.id,
       p_working_document_id: documentId,
@@ -78,7 +79,7 @@ export class SupabaseAgentRunStore implements AgentRunStore {
       p_goal: input.goal ?? null,
       p_user_message_id: input.clientMessageId ?? crypto.randomUUID(),
       p_user_message: input.goal ?? "",
-    });
+    }));
     if (created.error?.code === "23505" && created.error.message.includes("agent_runs_one_active_per_task_idx")) {
       throw new Error("CONCURRENT_TURN");
     }
@@ -93,18 +94,18 @@ export class SupabaseAgentRunStore implements AgentRunStore {
   }
 
   async save(run: AgentRun, expectedVersion: number, events: readonly AgentRunEvent[]): Promise<AgentRun> {
-    const result = await this.client.rpc("save_agent_run", {
+    const result = await measure("db.rpc", { rpc: "save_agent_run", operation: "save", table: "agent_runs", runId: run.id }, async () => await this.client.rpc("save_agent_run", {
       p_run_id: run.id,
       p_expected_version: expectedVersion,
       p_state: run,
       p_events: events,
-    });
+    }));
     if (result.error) throw new ConcurrentRunUpdateError(run.id);
     return result.data as AgentRun;
   }
 
   private async currentRevision(documentId: string): Promise<string> {
-    const result = await this.client.rpc("get_current_document_revision", { p_document_id: documentId });
+    const result = await measure("db.rpc", { rpc: "get_current_document_revision", operation: "select", table: "working_documents", documentId }, async () => await this.client.rpc("get_current_document_revision", { p_document_id: documentId }));
     fail("Unable to load document revision", result.error);
     if (typeof result.data !== "string" || !result.data) throw new Error("DOCUMENT_REVISION_NOT_FOUND");
     return result.data;
@@ -146,7 +147,7 @@ export class SupabaseDocumentVersionCommit implements DocumentVersionCommitPort 
   }
 
   async commitDerivedVersion(input: CommitDerivedVersionInput): Promise<CommitDerivedVersionResult> {
-    const result = await this.client.rpc("commit_derived_document_version", {
+    const result = await measure("db.rpc", { rpc: "commit_derived_document_version", operation: "commit", table: "document_versions", runId: input.runId, documentId: input.documentId }, async () => await this.client.rpc("commit_derived_document_version", {
       p_run_id: input.runId,
       p_expected_run_version: input.expectedRunVersion,
       p_document_id: input.documentId,
@@ -154,7 +155,7 @@ export class SupabaseDocumentVersionCommit implements DocumentVersionCommitPort 
       p_derived_revision: input.derivedRevision,
       p_output_ref: input.outputRef,
       p_idempotency_key: input.idempotencyKey,
-    });
+    }));
     fail("Unable to commit document version", result.error);
     return result.data as CommitDerivedVersionResult;
   }

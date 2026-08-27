@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { WorkingDocumentAccessPort } from "../../application/document-tools";
 import { SupabaseStorageAdapter } from "../../../storage/adapters/supabase-storage";
 import { buildTaskObjectKey } from "@/modules/storage/object-key";
+import { measure } from "@/infrastructure/observability";
 
 export class SupabaseWorkingDocumentAccess implements WorkingDocumentAccessPort {
   constructor(
@@ -29,7 +30,7 @@ export class SupabaseWorkingDocumentAccess implements WorkingDocumentAccessPort 
     try {
       await this.storage.put(objectKey, input.bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
       await this.storage.put(manifestObjectKey, new TextEncoder().encode(JSON.stringify({ revision: input.revision, changedEntries: input.changedEntries })), "application/json");
-      const committed = await this.client.rpc("commit_loop_document_version", {
+      const committed = await measure("db.rpc", { rpc: "commit_loop_document_version", operation: "commit", table: "document_versions", runId: this.runId, documentId: run.data.working_document_id }, async () => await this.client.rpc("commit_loop_document_version", {
         p_run_id: this.runId,
         p_expected_run_version: run.data.lock_version,
         p_document_id: run.data.working_document_id,
@@ -37,7 +38,7 @@ export class SupabaseWorkingDocumentAccess implements WorkingDocumentAccessPort 
         p_derived_revision: input.revision,
         p_output_ref: JSON.stringify({ objectKey, manifestObjectKey, operationLog }),
         p_idempotency_key: `loop:${this.runId}:${input.revision}`,
-      });
+      }));
       if (committed.error) throw new Error(`DOCUMENT_COMMIT_FAILED: ${committed.error.message}`);
       const result = committed.data as { kind: string; actualRevision?: string; revision?: string };
       if (result.kind === "revision-conflict") throw new Error(`DOCUMENT_REVISION_CONFLICT:${result.actualRevision ?? ""}`);

@@ -28,11 +28,11 @@ async function createRunner(runId: string) {
   const kernel = new OoxmlPreservationKernel();
   const taskId = run.data.task_id as string;
   const tools = [
-    ...createDocumentTools(kernel, new SupabaseWorkingDocumentAccess(client, taskId, runId)),
+    ...createDocumentTools(kernel, new SupabaseWorkingDocumentAccess(client, taskId, runId), ({ event, metadata }) => logger.info(event, { ...metadata, runId, taskId })),
     ...createSourceContextTools(taskId, new SupabaseSourceDocumentContext(client), kernel),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
-  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), new SupabaseAgentLoopStore(client), tools);
+  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), new SupabaseAgentLoopStore(client), tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata));
 }
 
 async function runResume(request: Request, runId: string, stream: boolean) {

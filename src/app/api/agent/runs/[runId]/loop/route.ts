@@ -33,7 +33,7 @@ async function createRunner(runId: string) {
   const kernel = new OoxmlPreservationKernel();
   const taskId = run.data.task_id as string;
   const tools = [
-    ...createDocumentTools(kernel, new SupabaseWorkingDocumentAccess(client, taskId, runId)),
+    ...createDocumentTools(kernel, new SupabaseWorkingDocumentAccess(client, taskId, runId), ({ event, metadata }) => logger.info(event, { ...metadata, runId, taskId })),
     ...createSourceContextTools(taskId, new SupabaseSourceDocumentContext(client), kernel),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];

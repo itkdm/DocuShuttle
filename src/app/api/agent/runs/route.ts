@@ -48,7 +48,7 @@ export async function POST(request: Request) {
     // durable HITL boundary. Approval and ask_user answers must continue the
     // existing run/checkpoint; creating here would fork and lose context.
     const latest = await client.from("agent_runs")
-      .select("id, state, status")
+      .select("id, state, status, lease_expires_at")
       .eq("task_id", input.taskId)
       .eq("owner_user_id", user.id)
       .order("updated_at", { ascending: false })
@@ -56,22 +56,22 @@ export async function POST(request: Request) {
       .maybeSingle();
     if (latest.error) throw new Error(`Unable to inspect active agent run: ${latest.error.message}`);
     const checkpoint = (latest.data?.state as { loopCheckpoint?: { pendingApproval?: unknown; pendingUserQuestion?: unknown } } | null)?.loopCheckpoint;
-    if (checkpoint?.pendingApproval || checkpoint?.pendingUserQuestion || [
+    const activeStatus = [
       "queued", "analyzing", "awaiting_scope_confirmation", "generating", "applying", "validating", "awaiting_review",
-    ].includes(latest.data?.status as string)) {
+    ].includes(latest.data?.status as string);
+    const leaseExpired = activeStatus && latest.data?.lease_expires_at && new Date(latest.data.lease_expires_at as string).getTime() <= Date.now();
+    if (leaseExpired && latest.data?.id) {
+      const reclaimed = await client.rpc("reclaim_stale_agent_run", { p_run_id: latest.data.id });
+      if (reclaimed.error) throw new Error(`Unable to reclaim stale agent run: ${reclaimed.error.message}`);
+    } else if (checkpoint?.pendingApproval || checkpoint?.pendingUserQuestion || activeStatus) {
       return NextResponse.json({ code: "TURN_NOT_ALLOWED", runId: latest.data?.id }, { status: 409 });
     }
     const run = await new SupabaseAgentRunStore(client).createForTask({
       taskId: input.taskId,
       ownerUserId: user.id,
       now: new Date().toISOString(),
+      goal: input.goal,
     });
-    // Allocate the uniquely-guarded turn before changing task metadata. A
-    // concurrent request that loses the active-run constraint must not
-    // overwrite the conversation goal as a side effect of its failed turn.
-    const updated = await client.from("tasks").update({ goal: input.goal, updated_at: new Date().toISOString() })
-      .eq("id", input.taskId).eq("owner_user_id", user.id).select("id").single();
-    if (updated.error || !updated.data) return NextResponse.json({ code: "TASK_NOT_FOUND" }, { status: 404 });
     return NextResponse.json({ run }, { status: 201 });
   } catch (error) {
     if (error instanceof Error && error.message === "CONCURRENT_TURN") {

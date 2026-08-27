@@ -176,7 +176,8 @@ export function Workbench() {
             setProposalSummary(resumed.proposal?.summary);
           }
           setAwaitingFinalReview(resumed.status === "awaiting_review");
-          setStage(resumed.status === "awaiting_scope_confirmation" || resumed.status === "awaiting_review" ? "awaiting" : resumed.status === "completed" ? "complete" : "idle");
+          const resumedIsActive = ["queued", "analyzing", "generating", "applying", "validating"].includes(resumed.status);
+          setStage(resumed.status === "awaiting_scope_confirmation" || resumed.status === "awaiting_review" ? "awaiting" : resumed.status === "completed" ? "complete" : resumedIsActive ? "analyzing" : "idle");
         } else {
           setStage("idle");
         }

@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "4.0.47",
+    "@streamdown/cjk": "^1.0.3",
     "@supabase/ssr": "0.12.5",
     "@supabase/supabase-js": "2.112.4",
     "ai": "7.0.79",
@@ -32,6 +33,7 @@
     "pino": "^10.3.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "streamdown": "^2.6.0",
     "tailwind-merge": "3.6.0",
     "zod": "4.4.3"
   },

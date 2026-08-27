@@ -90,7 +90,9 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
   const [prompt, setPrompt] = useState("");
   const [deciding, setDeciding] = useState(false);
   const [imageToolOpen, setImageToolOpen] = useState(false);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
   const stickToBottomRef = useRef(true);
   const prependHeightRef = useRef<number | null>(null);
   const currentTimeline = liveEvents.length ? liveEvents : loopResult?.events ?? [];
@@ -106,6 +108,7 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
     const element = contentRef.current;
     if (!element || !stickToBottomRef.current) return;
     element.scrollTop = element.scrollHeight;
+    setShowScrollToBottom(false);
   }, [timelineEvents.length, latestTimelineEventId, latestTimelineText, stage]);
   useEffect(() => {
     const element = contentRef.current;
@@ -114,10 +117,18 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
     element.scrollTop += element.scrollHeight - previousHeight;
     prependHeightRef.current = null;
   }, [conversation.length]);
+  useEffect(() => {
+    const element = promptRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 170)}px`;
+  }, [prompt]);
   const handleContentScroll = () => {
     const element = contentRef.current;
     if (!element) return;
-    stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+    const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+    stickToBottomRef.current = atBottom;
+    setShowScrollToBottom(!atBottom);
   };
   const handleLoopApproval = async (choice: "approved" | "rejected") => {
     if (!onLoopApproval) return;
@@ -140,9 +151,10 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
           {imageNodes.length > 0 && <div className="scope-card image-tool-card"><button type="button" className="image-tool-toggle" onClick={() => setImageToolOpen((open) => !open)} aria-expanded={imageToolOpen}><span><span className="scope-kicker">图片工具</span><strong>生成图片候选</strong></span><ChevronDown size={16} className={imageToolOpen ? "rotate" : ""} /></button>{imageToolOpen && <div className="image-tool-body"><p>选择图片节点并生成候选；候选不会自动写回文档。</p><label>目标图片<select value={imageTargetNodeId} onChange={(event) => onImageTargetNodeIdChange(event.target.value)} disabled={imageBusy}><option value="">请选择图片节点</option>{imageNodes.map((node, index) => <option key={node.nodeId} value={node.nodeId}>图片 {index + 1} · {node.nodeId.slice(0, 12)}</option>)}</select></label><label>图片描述<textarea value={imagePrompt} onChange={(event) => onImagePromptChange(event.target.value)} placeholder="例如：简洁的三模块系统结构图" rows={2} disabled={imageBusy} /></label><button type="button" className="primary-small" onClick={() => void onGenerateImages()} disabled={imageBusy || !imageTargetNodeId.trim() || !imagePrompt.trim()}>{imageBusy ? "生成中…" : "生成图片候选"}</button></div>}</div>}
           {imageCandidates.length > 0 && <div className="scope-card image-candidate-card"><span className="scope-kicker">图片候选</span><strong>选择要应用的候选</strong><p>候选不会自动写回；选择后仍会按当前权限策略执行。</p>{imageCandidates.map((candidate) => <button key={candidate.id} onClick={() => onApplyImage(candidate)} disabled={imageBusy}><Image src={candidate.downloadUrl} alt="图片候选" width={240} height={140} unoptimized /><span>应用此候选</span></button>)}</div>}
           {stage !== "idle" && stage !== "awaiting" && !timelineEvents.length && <div className="progress-card"><div className="progress-top"><strong>{stage === "complete" ? "已完成" : liveEvents.at(-1) ? eventSummary(liveEvents.at(-1)!) : "正在准备"}</strong><span>{stage === "complete" ? "完成" : "进行中"}</span></div><small>{stage === "complete" ? "结果已保存为新的文档版本" : "执行过程会实时显示在上方对话时间线"}</small>{stage !== "complete" && <button className="cancel-run" onClick={onCancel}><StopCircle size={13} /> 取消</button>}</div>}
+        {showScrollToBottom && <button type="button" className="scroll-to-bottom" onClick={() => { const element = contentRef.current; if (!element) return; element.scrollTo({ top: element.scrollHeight, behavior: "smooth" }); stickToBottomRef.current = true; setShowScrollToBottom(false); }} aria-label="回到底部">↓ 回到底部</button>}
       </div>
       <div className="agent-composer">
-        <textarea id="agent-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !inputBlocked && workspaceReady) { event.preventDefault(); submit(); } }} placeholder={awaitingUserQuestion ? "请回答纸上鸭的问题…" : !workspaceReady ? "请先打开一份 DOCX" : inputBlocked ? "Agent 运行中，可先输入下一条提示词…" : "例如：把实验结论改得更专业，只改一个单元格…"} rows={2} disabled={!workspaceReady} />
+        <textarea ref={promptRef} id="agent-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter" && !event.shiftKey && !inputBlocked && workspaceReady) { event.preventDefault(); submit(); } }} placeholder={awaitingUserQuestion ? "请回答纸上鸭的问题…" : !workspaceReady ? "请先打开一份 DOCX" : inputBlocked ? "Agent 运行中，可先输入下一条提示词…" : "例如：把实验结论改得更专业，只改一个单元格…"} rows={2} disabled={!workspaceReady} />
         <div className="composer-toolbar">
           <CustomSelect
             value={permissionMode}
@@ -155,8 +167,8 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
             icon={permissionMode === "full" ? <Unlock size={12} className="permission-icon full" /> : <Shield size={12} className="permission-icon" />}
           />
           <div className="composer-actions">
-            <span>Enter 发送 · Shift + Enter 换行</span>
-            <button className="composer-send" onClick={submit} disabled={!prompt.trim() || inputBlocked || !workspaceReady} aria-label="发送要求"><Send size={14} /></button>
+            <span>{inputBlocked ? "当前任务完成后即可发送" : "Enter 发送 · Shift + Enter 换行"}</span>
+            {stage === "analyzing" || stage === "applying" ? <button className="composer-stop" onClick={() => void onCancel()} aria-label="停止当前任务"><StopCircle size={14} /> 停止</button> : <button className="composer-send" onClick={submit} disabled={!prompt.trim() || inputBlocked || !workspaceReady} aria-label="发送要求"><Send size={14} /></button>}
           </div>
         </div>
       </div>

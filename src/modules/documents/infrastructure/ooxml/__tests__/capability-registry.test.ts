@@ -13,4 +13,8 @@ describe("OOXML capability registry", () => {
     expect(capabilitiesFor("table-cell")).toContainEqual({ operation: "set-cell-text", state: "supported" });
     expect(capabilitiesFor("image")).toContainEqual({ operation: "replace-image", state: "supported" });
   });
+
+  it("guards paragraphs whose visible text crosses formatting runs", () => {
+    expect(capabilitiesFor("paragraph", { crossRun: true })).toContainEqual(expect.objectContaining({ operation: "replace-text", state: "guarded", reasonCode: "UNSAFE_CROSS_RUN_EDIT" }));
+  });
 });

@@ -2,6 +2,7 @@ import type { DocumentNodeKind, NodeCapability } from "../../domain/types";
 
 export type NodeCapabilityContext = {
   textBox?: boolean;
+  crossRun?: boolean;
   containsNestedTable?: boolean;
   sharedMedia?: boolean;
 };
@@ -14,6 +15,10 @@ export function capabilitiesFor(kind: DocumentNodeKind, context: NodeCapabilityC
   if (kind === "paragraph" && context.textBox) return [
     { operation: "read", state: "supported" },
     { operation: "replace-text", state: "guarded", reasonCode: "TEXTBOX_MUTATION_UNSUPPORTED", reason: "Text box representations require a coherence-safe feature adapter before writing." },
+  ];
+  if (kind === "paragraph" && context.crossRun) return [
+    { operation: "read", state: "supported" },
+    { operation: "replace-text", state: "guarded", reasonCode: "UNSAFE_CROSS_RUN_EDIT", reason: "Use an explicit inherit-start format policy before replacing text across formatting runs." },
   ];
   if (kind === "table-cell" && context.containsNestedTable) return [
     { operation: "read", state: "supported" },

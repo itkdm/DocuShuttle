@@ -13,7 +13,7 @@ import {
   getContentType,
   type LoadedPackage,
 } from "./package-model";
-import { attributes, findElementRanges, visibleText, type XmlRange } from "./xml";
+import { attributes, findElementRanges, textNodes, visibleText, type XmlRange } from "./xml";
 import { flattenLosslessXml, parseLosslessXml, type LosslessXmlNode } from "./lossless-xml";
 import { capabilitiesFor } from "./capability-registry";
 import { relationshipPartFor } from "./opc-graph";
@@ -142,7 +142,9 @@ async function indexParagraphs(
         path,
         paraId ? `paraId:${paraId}` : path,
       );
-      const capabilities: readonly NodeCapability[] | undefined = textBoxPath ? capabilitiesFor("paragraph", { textBox: true }) : undefined;
+      const capabilities: readonly NodeCapability[] | undefined = textBoxPath
+        ? capabilitiesFor("paragraph", { textBox: true })
+        : textNodes(range.xml).length > 1 ? capabilitiesFor("paragraph", { crossRun: true }) : undefined;
       const address: ParagraphAddress = {
         kind: "paragraph",
         nodeId,

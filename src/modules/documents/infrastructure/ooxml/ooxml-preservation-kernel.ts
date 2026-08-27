@@ -24,13 +24,8 @@ import {
 import { blockingPackageErrors } from "./diagnostic-policy";
 import { loadPackage, type LoadedPackage } from "./package-model";
 import { assertSupportedImage } from "./media";
-import {
-  decodeXml,
-  replaceRange,
-  setElementText,
-  setTextNodeText,
-  textNodes,
-} from "./xml";
+import { replaceRange, setElementText } from "./xml";
+import { replaceProjectedText } from "./text-projection";
 import { capabilitiesFor } from "./capability-registry";
 import { remapNodeIdentities } from "./node-identity";
 
@@ -181,41 +176,8 @@ function textPatch(target: IndexedParagraph, operation: Extract<DocumentMutation
   if (operation.expectedText.length === 0) {
     throw new DocumentKernelError("EMPTY_TEXT_PRECONDITION", "replaceText requires a non-empty expectedText.");
   }
-  const nodes = textNodes(target.range.xml);
-  const decoded = nodes.map((node) => decodeXml(node.xml));
-  const combined = decoded.join("");
-  const first = combined.indexOf(operation.expectedText);
-  if (first < 0 || combined.indexOf(operation.expectedText, first + 1) >= 0) {
-    throw new DocumentKernelError(
-      "TEXT_PRECONDITION_FAILED",
-      "Expected text must occur exactly once in the addressed paragraph.",
-    );
-  }
-  let cursor = 0;
-  for (let index = 0; index < nodes.length; index += 1) {
-    const nodeStart = cursor;
-    const nodeEnd = cursor + decoded[index].length;
-    const selectionEnd = first + operation.expectedText.length;
-    if (first >= nodeStart && selectionEnd <= nodeEnd) {
-      const localStart = first - nodeStart;
-      const localEnd = selectionEnd - nodeStart;
-      const replacementText =
-        decoded[index].slice(0, localStart) + operation.replacement + decoded[index].slice(localEnd);
-      const node = nodes[index];
-      const replacementNode = setTextNodeText(target.range.xml, node, replacementText);
-      return {
-        start: target.range.start,
-        end: target.range.end,
-        replacement: replacementNode,
-        operation,
-      };
-    }
-    cursor = nodeEnd;
-  }
-  throw new DocumentKernelError(
-    "UNSAFE_CROSS_RUN_EDIT",
-    "The requested text spans formatted runs; V1 refuses to move text across run boundaries.",
-  );
+  const replacement = replaceProjectedText(target.range.xml, operation.expectedText, operation.replacement, operation.formatPolicy);
+  return { start: target.range.start, end: target.range.end, replacement, operation };
 }
 
 function cellPatch(target: IndexedCell, operation: Extract<DocumentMutation, { kind: "set-cell-text" }>): EntryPatch {

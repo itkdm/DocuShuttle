@@ -97,7 +97,7 @@ export function findElementRanges(xml: string, qualifiedName: string): XmlRange[
 
 `mutate` 只接受：
 
-- `replace-text`：目标段落的 `w:t` 里，期望串必须恰好出现一次，且不能跨 run。
+- `replace-text`：目标段落通过 `TextProjection` 映射可见文本；同一 run 可直接替换，跨 run 默认 guarded，显式 `formatPolicy: inherit-start` 后才允许安全合并到起始格式。
 - `set-cell-text`：替换整个单元格可见文本。
 - `replace-image`：同 content-type 替换 media part。
 

@@ -150,6 +150,7 @@ export interface ReplaceTextOperation {
   address: ParagraphAddress;
   expectedText: string;
   replacement: string;
+  formatPolicy?: "inherit-start";
 }
 
 export interface SetCellTextOperation {

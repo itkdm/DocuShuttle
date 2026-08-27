@@ -201,6 +201,18 @@ describe("OoxmlPreservationKernel", () => {
     ).rejects.toMatchObject({ code: "UNSAFE_CROSS_RUN_EDIT" });
   });
 
+  it("supports explicit inherit-start policy for cross-run replacement", async () => {
+    const splitXml = documentXml.replace("<w:r><w:t>Hello duck</w:t></w:r>", "<w:r><w:t>Hello </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>duck</w:t></w:r>");
+    const bytes = await createDocx({ "word/document.xml": splitXml });
+    const kernel = new OoxmlPreservationKernel();
+    const inspected = await kernel.inspect(bytes);
+    const paragraph = inspected.paragraphs.find(({ text }) => text.includes("Hello duck"));
+    if (!paragraph) throw new Error("missing split-run fixture paragraph");
+    const result = await kernel.mutate(bytes, { expectedRevision: inspected.manifest.revision, operations: [{ kind: "replace-text", address: paragraph.address, expectedText: "Hello duck", replacement: "PaperDuck", formatPolicy: "inherit-start" }] });
+    const after = await kernel.inspect(result.bytes);
+    expect(after.paragraphs.find(({ address }) => address.nodeId === paragraph.address.nodeId)?.text).toContain("PaperDuck");
+  });
+
   it("reports broken relationship targets and refuses mutation", async () => {
     const bytes = await createDocx({ "word/media/image1.png": null });
     const kernel = new OoxmlPreservationKernel();

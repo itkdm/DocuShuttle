@@ -1,0 +1,16 @@
+import { describe, expect, it } from "vitest";
+import { capabilitiesFor } from "../capability-registry";
+
+describe("OOXML capability registry", () => {
+  it("marks text boxes and nested containers guarded while keeping reads supported", () => {
+    expect(capabilitiesFor("paragraph", { textBox: true })).toContainEqual(expect.objectContaining({ operation: "read", state: "supported" }));
+    expect(capabilitiesFor("paragraph", { textBox: true })).toContainEqual(expect.objectContaining({ operation: "replace-text", state: "guarded" }));
+    expect(capabilitiesFor("table-cell", { containsNestedTable: true })).toContainEqual(expect.objectContaining({ reasonCode: "NESTED_TABLE_CONTAINER_UNSUPPORTED" }));
+  });
+
+  it("keeps ordinary nodes independently writable", () => {
+    expect(capabilitiesFor("paragraph")).toContainEqual({ operation: "replace-text", state: "supported" });
+    expect(capabilitiesFor("table-cell")).toContainEqual({ operation: "set-cell-text", state: "supported" });
+    expect(capabilitiesFor("image")).toContainEqual({ operation: "replace-image", state: "supported" });
+  });
+});

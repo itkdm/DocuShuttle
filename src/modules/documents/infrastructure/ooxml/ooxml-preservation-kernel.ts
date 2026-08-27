@@ -28,6 +28,7 @@ import {
   setTextNodeText,
   textNodes,
 } from "./xml";
+import { capabilitiesFor } from "./capability-registry";
 
 interface EntryPatch {
   start: number;
@@ -71,7 +72,7 @@ function manifestWithNodes(
       entry: address.entry,
       path: address.path,
       fingerprint: address.fingerprint,
-      ...(address.capabilities ? { capabilities: address.capabilities } : {}),
+      capabilities: address.capabilities ?? capabilitiesFor(address.kind),
     })),
     ...index.cells.map(({ address }) => ({
       nodeId: address.nodeId,

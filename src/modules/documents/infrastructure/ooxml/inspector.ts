@@ -16,6 +16,7 @@ import {
 } from "./package-model";
 import { attributes, findElementRanges, visibleText, type XmlRange } from "./xml";
 import { flattenLosslessXml, parseLosslessXml, type LosslessXmlNode } from "./lossless-xml";
+import { capabilitiesFor } from "./capability-registry";
 
 /** Deterministic logical identity independent of visible text and revision. */
 async function logicalNodeId(
@@ -105,7 +106,7 @@ async function indexCells(
         const cell = cells[cellIndex];
         const path = `${tablePath}/tr[${rowIndex}]/tc[${cellIndex}]`;
         const text = visibleText(cell.rawSource);
-        const address: TableCellAddress = { kind: "table-cell", nodeId: await logicalNodeId("table-cell", entry, path), sourceRevision: revision, fingerprint: await sha256(utf8(text)), entry, path };
+        const address: TableCellAddress = { kind: "table-cell", nodeId: await logicalNodeId("table-cell", entry, path), sourceRevision: revision, fingerprint: await sha256(utf8(text)), entry, path, capabilities: capabilitiesFor("table-cell", { containsNestedTable: cell.children.some((child) => child.name === "w:tbl") }) };
         result.push({ address, text, range: toRange(cell) });
         const nestedTables = cell.children.filter((child) => child.name === "w:tbl");
         for (let nestedIndex = 0; nestedIndex < nestedTables.length; nestedIndex += 1) {
@@ -141,12 +142,7 @@ async function indexParagraphs(
         path,
         paraId ? `paraId:${paraId}` : path,
       );
-      const capabilities: readonly NodeCapability[] | undefined = textBoxPath ? [{
-        operation: "replace-text",
-        state: "guarded",
-        reasonCode: "TEXTBOX_MUTATION_UNSUPPORTED",
-        reason: "Text box text is readable but requires a coherence-safe feature adapter before writing.",
-      }] : undefined;
+      const capabilities: readonly NodeCapability[] | undefined = textBoxPath ? capabilitiesFor("paragraph", { textBox: true }) : undefined;
       const address: ParagraphAddress = {
         kind: "paragraph",
         nodeId,

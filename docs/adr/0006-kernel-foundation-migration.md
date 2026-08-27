@@ -18,12 +18,13 @@ Document Kernel 的 XML 寻址采用 source-preserving、namespace-aware 的元�
 - `xml.ts` 的 `findElementRanges` 已通过该索引返回完整嵌套范围；现有 kernel patch compiler 的外部契约保持不变。
 - `lossless-xml.test.ts` 覆盖嵌套范围、原始 lexical source、注释/CDATA/声明；kernel 回归覆盖真实 DOCX、未触及 ZIP part 哈希、嵌套 cell 写入和外层容器 fail-closed。
 - 文本框段落会以 `textbox[n]/p[n]` 语义路径暴露，并携带 `replace-text: guarded` 能力；`mc:AlternateContent` 会被识别为需要 Choice/Fallback coherence 的保留组，尚未开放写入。
+- `capability-registry.ts` 集中产生节点级 operation capability；Agent 只消费 `supported/guarded/unsupported` 与稳定 reason code，不感知 OOXML parser 类型。
 
 ## 后续迁移顺序
 
 1. P3 完整写入：建立文本框/AlternateContent Feature Adapter，Choice 与 Fallback 必须作为 coherence group 一起更新。
 2. P4：以 Feature Adapter 识别内容控件，保留 `sdtPr` 与锁定策略。
-3. Foundation 2/3/4：把 OPC relationship graph、NodeId/Locator/Fingerprint/Remap 和 capability registry 从 inspector 中进一步拆出。
+3. Foundation 2/3/4：把 OPC relationship graph、NodeId/Locator/Fingerprint/Remap 进一步拆出，并将 registry 接入所有 Feature Adapter。
 4. Foundation 5/6：将 mutation planner、dry-run 和分层 validation report 提升为明确的 application port；保持现有 `mutate` 兼容入口。
 
 ## 不变的安全边界

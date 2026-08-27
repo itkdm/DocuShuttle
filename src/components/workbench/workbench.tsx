@@ -12,7 +12,7 @@ import { TaskList } from "./task-list";
 import { formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
-import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserAgentLoopResult, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserAgentLoopResult, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
 import { listBrowserTasks, loadBrowserTaskWorkspace } from "@/modules/tasks/browser-tasks";
 import type { TaskSummary } from "@/modules/tasks/domain";
 import { taskIdFromPathname, taskUrl } from "@/modules/tasks/task-url";
@@ -67,6 +67,7 @@ export function Workbench() {
   const [conversation, setConversation] = useState<Array<{ role: "user" | "agent"; text: string }>>([]);
   const [loopResult, setLoopResult] = useState<BrowserAgentLoopResult>();
   const [liveEvents, setLiveEvents] = useState<BrowserAgentLoopResult["events"]>([]);
+  const [timelineHistory, setTimelineHistory] = useState<BrowserAgentLoopResult["events"]>([]);
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>("default");
 
   const resetWorkspace = () => {
@@ -92,6 +93,7 @@ export function Workbench() {
     setConversation([]);
     setLoopResult(undefined);
     setLiveEvents([]);
+    setTimelineHistory([]);
     setNotice("请选择真实 DOCX，或从左侧打开一个历史任务");
   };
 
@@ -140,6 +142,7 @@ export function Workbench() {
         setConversation([]);
         setLoopResult(undefined);
         setLiveEvents([]);
+        setTimelineHistory([]);
         setRun(undefined);
         setProposalSummary(undefined);
         setAwaitingFinalReview(false);
@@ -177,6 +180,15 @@ export function Workbench() {
         } else {
           setStage("idle");
         }
+        try {
+          const history = await loadBrowserAgentTaskTimeline(workspace.task.id);
+          const historicalEvents = history.runs
+            .filter((item) => item.id !== workspace.latestRunId && ["completed", "failed", "cancelled"].includes(item.checkpoint?.status ?? item.status))
+            .flatMap((item) => item.events);
+          setTimelineHistory(historicalEvents);
+        } catch {
+          setTimelineHistory([]);
+        }
         loadedTaskIdRef.current = workspace.task.id;
         setNotice(workspace.workingDocumentId ? "已打开这个任务的最新文档和对话" : "已打开历史任务；请继续上传文档");
       } catch (error) {
@@ -188,6 +200,25 @@ export function Workbench() {
     })();
     return () => abort.abort();
   }, [routeTaskId]);
+
+  // Load completed runs independently from the document bootstrap. A large
+  // DOCX preview can take several seconds; the conversation history should
+  // not depend on that work finishing in the same effect or on a Strict Mode
+  // bootstrap being aborted and restarted.
+  useEffect(() => {
+    if (!taskId) return;
+    let cancelled = false;
+    void loadBrowserAgentTaskTimeline(taskId).then((history) => {
+      if (cancelled) return;
+      const historicalEvents = history.runs
+        .filter((item) => item.id !== run?.id && ["completed", "failed", "cancelled"].includes(item.checkpoint?.status ?? item.status))
+        .flatMap((item) => item.events);
+      setTimelineHistory(historicalEvents);
+    }).catch(() => {
+      if (!cancelled) setTimelineHistory([]);
+    });
+    return () => { cancelled = true; };
+  }, [taskId, run?.id]);
 
   async function refreshVersions(id: string) {
     const history = await loadBrowserDocumentVersions(id);
@@ -258,6 +289,8 @@ export function Workbench() {
       // the explicit approval controls.
       const startsFreshRun = !run || stage !== "awaiting" || run.status === "cancelled" || run.status === "completed" || run.status === "failed";
       if (startsFreshRun) {
+        const previousEvents = liveEvents.length ? liveEvents : loopResult?.events ?? [];
+        if (previousEvents.length) setTimelineHistory((items) => mergeTimelineEvents(items, previousEvents));
         setLiveEvents([]);
         setLoopResult(undefined);
       }
@@ -521,7 +554,7 @@ export function Workbench() {
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
         {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
         <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} proposal={proposal} onChoose={chooseWorkingDocument} onDecide={decide} proposalSummary={proposalSummary} /></div>
-        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} liveEvents={liveEvents} onLoopApproval={decideLoop} conversation={conversation} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onDecide={decide} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
+        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} liveEvents={liveEvents} timelineHistory={timelineHistory} onLoopApproval={decideLoop} conversation={conversation} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onDecide={decide} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 
       <div className="mobile-dock" aria-label="移动端工作台导航"><button onClick={() => setMobilePanel("outline")} className={mobilePanel === "outline" ? "active" : ""}><FilePlus2 size={18} /><span>文档</span></button><button onClick={() => setMobilePanel("agent")} className={mobilePanel === "agent" ? "active" : ""}><Sparkles size={18} /><span>审批</span><i>1</i></button><button onClick={() => setMobilePanel("versions")} className={mobilePanel === "versions" ? "active" : ""}><History size={18} /><span>版本</span></button><button onClick={downloadCurrent}><Download size={18} /><span>下载</span></button></div>

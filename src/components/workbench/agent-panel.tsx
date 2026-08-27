@@ -5,7 +5,7 @@ import type { AgentStage, ProposalState } from "./types";
 import type { BrowserAgentLoopResult, BrowserImageCandidate, BrowserImageNode } from "@/modules/agent/browser-runtime";
 import type { AgentRun } from "@/modules/agent";
 import type { AgentPermissionMode } from "@/modules/agent/application/loop";
-import { AgentTimeline } from "./agent-timeline";
+import { AgentTimeline, mergeTimelineEvents } from "./agent-timeline";
 import { renderAgentMarkdown } from "./agent-markdown";
 
 interface AgentPanelProps {
@@ -27,6 +27,7 @@ interface AgentPanelProps {
   run?: AgentRun;
   loopResult?: BrowserAgentLoopResult;
   liveEvents?: BrowserAgentLoopResult["events"];
+  timelineHistory?: BrowserAgentLoopResult["events"];
   onLoopApproval?: (choice: "approved" | "rejected") => void | Promise<void>;
   conversation?: ReadonlyArray<{ role: "user" | "agent"; text: string }>;
   permissionMode: AgentPermissionMode;
@@ -35,8 +36,8 @@ interface AgentPanelProps {
 
 const eventSummary = (event: BrowserAgentLoopResult["events"][number]) => {
   if (event.type === "turn.started") return "已接收你的请求";
-  if (event.type === "model.started") return "正在规划下一步";
-  if (event.type === "model.completed") return "已完成本次规划";
+  if (event.type === "model.started") return "正在处理请求";
+  if (event.type === "model.completed") return "已完成本次判断";
   if (event.type === "model.delta") return "正在生成回复";
   if (event.type === "tool.started") return `正在调用 ${event.name ?? "工具"}`;
   if (event.type === "tool.completed") return `已完成 ${event.name ?? "工具"}`;
@@ -80,10 +81,11 @@ function CustomSelect({ value, options, onChange, disabled, icon }: { value: str
   );
 }
 
-export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDecide, workspaceReady, proposalSummary, awaitingFinalReview, onFinalReview, imageCandidates = [], onApplyImage, imageBusy, conversation = [], loopResult, liveEvents = [], onLoopApproval, permissionMode, onPermissionModeChange }: AgentPanelProps) {
+export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDecide, workspaceReady, proposalSummary, awaitingFinalReview, onFinalReview, imageCandidates = [], onApplyImage, imageBusy, conversation = [], loopResult, liveEvents = [], timelineHistory = [], onLoopApproval, permissionMode, onPermissionModeChange }: AgentPanelProps) {
   const [prompt, setPrompt] = useState("");
   const [deciding, setDeciding] = useState(false);
-  const timelineEvents = liveEvents.length ? liveEvents : loopResult?.events ?? [];
+  const currentTimeline = liveEvents.length ? liveEvents : loopResult?.events ?? [];
+  const timelineEvents = mergeTimelineEvents(timelineHistory, currentTimeline);
   const handleLoopApproval = async (choice: "approved" | "rejected") => {
     if (!onLoopApproval) return;
     setDeciding(true);

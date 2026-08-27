@@ -7,6 +7,36 @@ import { agentErrorResponse } from "../http";
 
 const schema = z.object({ taskId: z.uuid(), goal: z.string().trim().min(1).max(8_000) });
 
+export async function GET(request: Request) {
+  try {
+    const taskId = z.uuid().parse(new URL(request.url).searchParams.get("taskId"));
+    const { client } = await requireSupabaseUser();
+    const result = await client
+      .from("agent_runs")
+      .select("id, state, status, created_at, updated_at")
+      .eq("task_id", taskId)
+      .order("created_at", { ascending: true })
+      .limit(20);
+    if (result.error) throw new Error(`Unable to load task agent runs: ${result.error.message}`);
+    const runs = (result.data ?? []).map((row) => {
+      const state = (row.state ?? {}) as { loopCheckpoint?: { trace?: unknown[]; status?: string } };
+      const checkpoint = state.loopCheckpoint;
+      return {
+        id: row.id as string,
+        status: row.status as string,
+        createdAt: row.created_at as string,
+        updatedAt: row.updated_at as string,
+        checkpoint: checkpoint ? { status: checkpoint.status } : undefined,
+        events: checkpoint?.trace ?? [],
+      };
+    });
+    return NextResponse.json({ runs });
+  } catch (error) {
+    if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST" }, { status: 400 });
+    return agentErrorResponse(error);
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const input = schema.parse(await request.json());

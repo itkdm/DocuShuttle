@@ -57,6 +57,20 @@ export const createBrowserAgentRun = async (taskId: string, goal: string) =>
 export const loadBrowserAgentRun = async (runId: string) =>
   (await json<AgentResponse>(`/api/agent/runs/${runId}`)).run;
 
+export type BrowserAgentTaskTimeline = {
+  runs: ReadonlyArray<{
+    id: string;
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+    checkpoint?: { status?: string };
+    events: ReadonlyArray<BrowserAgentLoopResult["events"][number]>;
+  }>;
+};
+
+export const loadBrowserAgentTaskTimeline = async (taskId: string) =>
+  json<BrowserAgentTaskTimeline>(`/api/agent/runs?taskId=${encodeURIComponent(taskId)}`);
+
 export const advanceBrowserAgentRun = async (runId: string) =>
   (await json<AdvanceResponse>(`/api/agent/runs/${runId}/advance`, post())).run;
 

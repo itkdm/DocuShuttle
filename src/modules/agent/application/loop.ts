@@ -173,7 +173,7 @@ export class AgentLoopRunner {
 
     while (checkpoint.iterations < this.maxIterations) {
       checkpoint.iterations += 1;
-      const modelStartedEvent = emit({ type: "model.started", text: "正在整理下一步" }, false);
+      const modelStartedEvent = emit({ type: "model.started", text: "正在处理请求" }, false);
       // Persist the observable boundary before entering a potentially long
       // provider call so a refresh can recover the real in-flight phase.
       await this.store.save(runId, checkpoint);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTimeline, mergeTimelineEvents } from "./agent-timeline";
+import { buildTimeline, mergeTimelineEvents, sanitizeForDisplay } from "./agent-timeline";
 
 describe("Agent execution timeline", () => {
   it("keeps the original turn when resumed events arrive", () => {
@@ -62,5 +62,9 @@ describe("Agent execution timeline", () => {
     ]);
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ kind: "tool", id: "call-4", state: "completed" });
+  });
+
+  it("redacts secrets from expandable tool details", () => {
+    expect(sanitizeForDisplay({ apiKey: "secret", nested: { password: "pw", value: "ok" } })).toEqual({ apiKey: "[已隐藏]", nested: { password: "[已隐藏]", value: "ok" } });
   });
 });

@@ -29,10 +29,21 @@ const toolNames: Record<string, { label: string; detail: string }> = {
 
 export const toolPresentation = (name: string) => toolNames[name] ?? { label: "执行文档操作", detail: name };
 
+const sensitiveKey = /(api[-_]?key|access[-_]?token|refresh[-_]?token|secret|password|authorization|credential|system[-_]?prompt|base64)/i;
+export function sanitizeForDisplay(value: unknown, depth = 0): unknown {
+  if (depth > 4) return "[已省略更深内容]";
+  if (typeof value === "string") return value.length > 2000 ? `${value.slice(0, 2000)}…` : value;
+  if (Array.isArray(value)) return value.slice(0, 20).map((item) => sanitizeForDisplay(item, depth + 1));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 40).map(([key, entry]) => [key, sensitiveKey.test(key) ? "[已隐藏]" : sanitizeForDisplay(entry, depth + 1)]));
+  }
+  return value;
+}
+
 const compact = (value: unknown) => {
   if (value === undefined) return "";
   try {
-    const text = JSON.stringify(value, null, 2);
+    const text = JSON.stringify(sanitizeForDisplay(value), null, 2);
     return text.length > 1600 ? `${text.slice(0, 1600)}…` : text;
   } catch { return ""; }
 };

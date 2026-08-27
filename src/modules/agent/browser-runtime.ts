@@ -94,9 +94,9 @@ export type BrowserConversationMessage = {
   message_key: string;
 };
 
-export const loadBrowserConversationMessages = async (taskId: string) =>
+export const loadBrowserConversationMessages = async (taskId: string, before?: string) =>
   json<{ conversationId: string | null; messages: ReadonlyArray<BrowserConversationMessage>; nextCursor: string | null }>(
-    `/api/agent/messages?taskId=${encodeURIComponent(taskId)}&limit=100`,
+    `/api/agent/messages?taskId=${encodeURIComponent(taskId)}&limit=30${before ? `&before=${encodeURIComponent(before)}` : ""}`,
   );
 
 export const advanceBrowserAgentRun = async (runId: string) =>

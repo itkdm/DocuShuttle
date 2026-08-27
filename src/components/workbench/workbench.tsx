@@ -65,6 +65,8 @@ export function Workbench() {
   const [paragraphCount, setParagraphCount] = useState(0);
   const [tableCellCount, setTableCellCount] = useState(0);
   const [conversation, setConversation] = useState<Array<{ role: "user" | "agent"; text: string }>>([]);
+  const [conversationCursor, setConversationCursor] = useState<string | null>(null);
+  const [loadingEarlierMessages, setLoadingEarlierMessages] = useState(false);
   const [loopResult, setLoopResult] = useState<BrowserAgentLoopResult>();
   const [liveEvents, setLiveEvents] = useState<BrowserAgentLoopResult["events"]>([]);
   const [timelineHistory, setTimelineHistory] = useState<BrowserAgentLoopResult["events"]>([]);
@@ -141,6 +143,7 @@ export function Workbench() {
         setTaskId(workspace.task.id);
         setWorkspaceReady(Boolean(workspace.workingDocumentId));
         setConversation([]);
+        setConversationCursor(null);
         setLoopResult(undefined);
         setLiveEvents([]);
         setTimelineHistory([]);
@@ -154,6 +157,7 @@ export function Workbench() {
           const durable = await loadBrowserConversationMessages(workspace.task.id);
           if (!abort.signal.aborted) {
             durableConversationLoaded = durable.messages.length > 0;
+            setConversationCursor(durable.nextCursor);
             setConversation(durable.messages.flatMap((message) => {
               const text = message.parts.find((part) => part.type === "text")?.text;
               if (!text || (message.role !== "user" && message.role !== "assistant")) return [];
@@ -238,6 +242,23 @@ export function Workbench() {
     });
     return () => { cancelled = true; };
   }, [taskId, run?.id]);
+
+  async function loadEarlierConversationMessages() {
+    if (!taskId || !conversationCursor || loadingEarlierMessages) return;
+    setLoadingEarlierMessages(true);
+    try {
+      const page = await loadBrowserConversationMessages(taskId, conversationCursor);
+      const older = page.messages.flatMap((message) => {
+        const text = message.parts.find((part) => part.type === "text")?.text;
+        if (!text || (message.role !== "user" && message.role !== "assistant")) return [];
+        return [{ role: message.role === "user" ? "user" as const : "agent" as const, text }];
+      });
+      setConversation((items) => [...older, ...items]);
+      setConversationCursor(page.nextCursor);
+    } finally {
+      setLoadingEarlierMessages(false);
+    }
+  }
 
   async function refreshVersions(id: string) {
     const history = await loadBrowserDocumentVersions(id);
@@ -597,7 +618,7 @@ export function Workbench() {
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
         {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
         <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} proposal={proposal} onChoose={chooseWorkingDocument} onDecide={decide} proposalSummary={proposalSummary} /></div>
-        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} liveEvents={liveEvents} timelineHistory={timelineHistory} onLoopApproval={decideLoop} conversation={conversation} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onDecide={decide} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
+        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} liveEvents={liveEvents} timelineHistory={timelineHistory} onLoopApproval={decideLoop} conversation={conversation} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onDecide={decide} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 
       <div className="mobile-dock" aria-label="移动端工作台导航"><button onClick={() => setMobilePanel("outline")} className={mobilePanel === "outline" ? "active" : ""}><FilePlus2 size={18} /><span>文档</span></button><button onClick={() => setMobilePanel("agent")} className={mobilePanel === "agent" ? "active" : ""}><Sparkles size={18} /><span>审批</span><i>1</i></button><button onClick={() => setMobilePanel("versions")} className={mobilePanel === "versions" ? "active" : ""}><History size={18} /><span>版本</span></button><button onClick={downloadCurrent}><Download size={18} /><span>下载</span></button></div>

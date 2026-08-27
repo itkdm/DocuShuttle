@@ -103,40 +103,41 @@ export class SupabaseTaskRepository implements TaskRepositoryPort {
   }
 
   async getWorkspace(taskId: string, ownerUserId: string) {
-    const task = await this.client
-      .from("tasks")
-      .select("id, workspace_id, title, goal, status")
-      .eq("id", taskId)
-      .eq("owner_user_id", ownerUserId)
-      .maybeSingle();
+    // These projections are independent. Run them concurrently so a slow
+    // Supabase round-trip does not multiply the time needed to open a task.
+    const [task, sources, working, latestRun] = await Promise.all([
+      this.client
+        .from("tasks")
+        .select("id, workspace_id, title, goal, status")
+        .eq("id", taskId)
+        .eq("owner_user_id", ownerUserId)
+        .maybeSingle(),
+      this.client
+        .from("source_files")
+        .select("id, role, original_name, byte_length")
+        .eq("task_id", taskId)
+        .eq("owner_user_id", ownerUserId)
+        .order("created_at", { ascending: true }),
+      this.client
+        .from("working_documents")
+        .select("id")
+        .eq("task_id", taskId)
+        .eq("owner_user_id", ownerUserId)
+        .maybeSingle(),
+      this.client
+        .from("agent_runs")
+        .select("id")
+        .eq("task_id", taskId)
+        .eq("owner_user_id", ownerUserId)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
     fail("Unable to read task", task.error);
-    if (!task.data) return undefined;
-
-    const sources = await this.client
-      .from("source_files")
-      .select("id, role, original_name, byte_length")
-      .eq("task_id", taskId)
-      .eq("owner_user_id", ownerUserId)
-      .order("created_at", { ascending: true });
     fail("Unable to read source files", sources.error);
-
-    const working = await this.client
-      .from("working_documents")
-      .select("id")
-      .eq("task_id", taskId)
-      .eq("owner_user_id", ownerUserId)
-      .maybeSingle();
     fail("Unable to read working document", working.error);
-
-    const latestRun = await this.client
-      .from("agent_runs")
-      .select("id")
-      .eq("task_id", taskId)
-      .eq("owner_user_id", ownerUserId)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
     fail("Unable to read agent run", latestRun.error);
+    if (!task.data) return undefined;
 
     const sourceRecords: TaskSourceRecord[] = (sources.data ?? []).map((row) => ({
       id: row.id as string,

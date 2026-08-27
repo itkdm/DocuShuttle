@@ -3,6 +3,7 @@ import JSZip from "jszip";
 import type { DocumentEnginePort } from "../../application/document-engine-port";
 import {
   DocumentKernelError,
+  type DocumentDiagnostic,
   type DocumentInspection,
   type DocumentManifest,
   type DocumentNodeManifest,
@@ -10,6 +11,7 @@ import {
   type MutationRequest,
   type MutationResult,
   type MutationPlan,
+  type ValidationReport,
 } from "../../domain/types";
 import { sha256, utf8 } from "./hash";
 import {
@@ -44,6 +46,21 @@ function inspection(
   index: DocumentIndex,
 ): DocumentInspection {
   const manifest = manifestWithNodes(loaded.manifest, index);
+  const diagnostics = [...loaded.diagnostics, ...index.diagnostics];
+  const failed = (codes: readonly string[]) => diagnostics.filter((diagnostic) => codes.includes(diagnostic.code) && diagnostic.severity === "error");
+  const warned = (codes: readonly string[]) => diagnostics.filter((diagnostic) => codes.includes(diagnostic.code) && diagnostic.severity === "warning");
+  const tier = (name: ValidationReport["tiers"][number]["tier"], errors: readonly DocumentDiagnostic[], warnings: readonly DocumentDiagnostic[] = []) => ({ tier: name, status: errors.length ? "failed" as const : warnings.length ? "warning" as const : "passed" as const, diagnostics: [...errors, ...warnings] });
+  const validation: ValidationReport = {
+    valid: diagnostics.every((diagnostic) => diagnostic.severity !== "error"),
+    tiers: [
+      tier("zip-security", failed(["XML_NOT_UTF8", "ZIP_DIRECTORY_INVALID"])),
+      tier("xml-well-formed", failed(["XML_INVALID"])),
+      tier("source-preservation", [], diagnostics.filter((diagnostic) => diagnostic.code === "SOURCE_PRESERVATION_WARNING")),
+      tier("opc-integrity", failed(["CONTENT_TYPES_MISSING", "CONTENT_TYPE_MISSING", "RELATIONSHIP_SOURCE_MISSING", "RELATIONSHIP_TARGET_MISSING", "RELATIONSHIP_INVALID", "OFFICE_DOCUMENT_RELATIONSHIP_MISSING"]), warned(["RELATIONSHIP_EXTERNAL_TARGET"])),
+      tier("semantic", failed(["TARGET_SEMANTIC_MISMATCH"]), diagnostics.filter((diagnostic) => diagnostic.severity === "warning" && !["RELATIONSHIP_EXTERNAL_TARGET"].includes(diagnostic.code))),
+      tier("identity", failed(["IDENTITY_REBASE_AMBIGUOUS"])),
+    ],
+  };
   return {
     manifest,
     paragraphs: index.paragraphs.map(({ address, text }) => ({ address, text })),
@@ -53,7 +70,8 @@ function inspection(
       contentType,
       byteLength,
     })),
-    diagnostics: [...loaded.diagnostics, ...index.diagnostics],
+    diagnostics,
+    validation,
     capabilities: {
       replaceText: true,
       setCellText: true,

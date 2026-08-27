@@ -111,6 +111,8 @@ export function findElementRanges(xml: string, qualifiedName: string): XmlRange[
 
 `CompleteSourceUpload` 只对 **包完整性 error** 拒绝。能力 warning 会进 manifest，文档仍成为 Working Document。Agent 的 `inspect_document` 同样不再因为 warning 整工具失败。
 
+`DocumentInspection.validation` 同时提供分层报告：ZIP/security、XML well-formed、source preservation、OPC integrity、semantic 和 identity。报告与诊断并存，便于 Agent/UI 展示可解释状态，而不把单一 schema/renderer 结果误当作完整安全证明。
+
 ## 4. 真实文档上的缺口（有证据）
 
 对工作区实验报告的粗测：

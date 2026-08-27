@@ -129,12 +129,20 @@ export interface DocumentInspection {
   tableCells: readonly InspectedTableCell[];
   images: readonly InspectedImage[];
   diagnostics: readonly DocumentDiagnostic[];
+  validation?: ValidationReport;
   capabilities: Readonly<{
     replaceText: true;
     setCellText: true;
     replaceImage: true;
     trackedChanges: false;
   }>;
+}
+
+export type ValidationTier = "zip-security" | "xml-well-formed" | "source-preservation" | "opc-integrity" | "semantic" | "identity";
+
+export interface ValidationReport {
+  valid: boolean;
+  tiers: readonly { tier: ValidationTier; status: "passed" | "warning" | "failed"; diagnostics: readonly DocumentDiagnostic[] }[];
 }
 
 export interface ReplaceTextOperation {

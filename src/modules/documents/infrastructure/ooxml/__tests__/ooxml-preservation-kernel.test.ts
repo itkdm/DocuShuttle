@@ -42,6 +42,10 @@ describe("OoxmlPreservationKernel", () => {
     const inspected = await kernel.inspect(bytes);
 
     expect(inspected.diagnostics.filter(({ severity }) => severity === "error")).toEqual([]);
+    expect(inspected.validation?.valid).toBe(true);
+    expect(inspected.validation?.tiers.map(({ tier }) => tier)).toEqual([
+      "zip-security", "xml-well-formed", "source-preservation", "opc-integrity", "semantic", "identity",
+    ]);
     expect(inspected.manifest.revision).toMatch(/^[a-f0-9]{64}$/);
     expect(inspected.manifest.nodes).toHaveLength(
       inspected.paragraphs.length + inspected.tableCells.length + inspected.images.length,

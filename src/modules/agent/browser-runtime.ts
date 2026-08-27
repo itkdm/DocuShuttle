@@ -9,7 +9,13 @@ type AdvanceResponse = { kind: string; run: AgentRun };
 const json = async <T>(url: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(url, init);
   const body = await response.json().catch(() => ({})) as T & { code?: string; message?: string };
-  if (!response.ok) throw new Error(body.message ?? body.code ?? `HTTP_${response.status}`);
+  if (!response.ok) {
+    const userMessage = body.message ?? ({
+      IMAGE_GENERATION_FAILED: "图片候选暂时生成失败，请稍后重试；如果持续失败，请检查图片服务配置。",
+      IMAGE_APPLY_FAILED: "图片候选应用失败，请刷新文档后重试。",
+    } as Record<string, string>)[body.code ?? ""] ?? `请求未完成（HTTP ${response.status}）`;
+    throw new Error(userMessage);
+  }
   return body;
 };
 

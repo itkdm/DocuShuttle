@@ -13,7 +13,7 @@ import { TaskList } from "./task-list";
 import { formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
-import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
 import { useConversationStore } from "./conversation-store";
 import { listBrowserTasks, loadBrowserTaskWorkspace, type TaskPage } from "@/modules/tasks/browser-tasks";
 import type { TaskSummary } from "@/modules/tasks/domain";
@@ -236,8 +236,8 @@ export function Workbench() {
             if (!durableConversationLoaded) setMessages([]);
           } else setLoopResult(undefined);
           setAwaitingFinalReview(resumed.status === "awaiting_review");
-          const resumedIsActive = ["queued", "analyzing", "generating", "applying", "validating"].includes(resumed.status);
-          setStage(resumed.status === "awaiting_scope_confirmation" || resumed.status === "awaiting_review" ? "awaiting" : resumed.status === "completed" ? "complete" : resumedIsActive ? "analyzing" : "idle");
+          const resumedIsActive = ["queued", "running"].includes(resumed.status);
+          setStage(resumed.status === "awaiting_approval" || resumed.status === "awaiting_user" || resumed.status === "awaiting_review" ? "awaiting" : resumed.status === "completed" ? "complete" : resumedIsActive ? "analyzing" : "idle");
         } else setStage("idle");
         // Completed-run history is intentionally loaded by the independent
         // background effect below; it must not delay the first usable render
@@ -304,40 +304,7 @@ export function Workbench() {
   }
 
   const decide = async (decision: ProposalState) => {
-    if (workspaceReady && run && taskId) {
-      setProposal(decision);
-      try {
-        let current = await decideBrowserAgentRun(run.id, decision === "accepted" ? "approved" : "rejected");
-        setRun(current);
-        if (decision === "rejected") {
-          setMessages((items) => [...items, { role: "agent", text: "我会保留当前文档，不写入这次建议。" }]);
-          setStage("idle");
-          setNotice("修改计划已拒绝，文档版本保持不变");
-          return;
-        }
-        setStage("applying");
-        for (const label of ["正在生成局部内容", "正在原子写入新版本", "正在重开并校验 DOCX"] as const) {
-          setNotice(label);
-          current = await advanceBrowserAgentRun(current.id);
-          setRun(current);
-          if (current.status === "failed") throw new Error(current.failure?.message ?? "Agent 步骤失败");
-        }
-        if (current.status !== "awaiting_review" || !current.workingRevision) throw new Error("Agent 未进入最终复核状态");
-        const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
-        const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
-        setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } }); setCurrentRevision(nextDocument.version.revision); const inspection = await inspectBrowserTaskDocument(taskId!); setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
-        await refreshVersions(taskId);
-        setAwaitingFinalReview(true);
-        setStage("awaiting");
-          setMessages((items) => [...items, { role: "agent", text: "范围已确认。新版本已写入并通过 DOCX 重开校验，请进行最终复核。" }]);
-        setNotice("新版本已显示在画布中，等待最终复核");
-      } catch (error) {
-          setMessages((items) => [...items, { role: "agent", text: error instanceof Error ? `这次执行没有完成：${error.message}` : "这次执行没有完成，请重试。" }]);
-        setStage("idle");
-        setNotice(error instanceof Error ? error.message : "Agent 执行失败，可从检查点重试");
-      }
-      return;
-    }
+    if (run && loopResult?.checkpoint.pendingApproval) return decideLoop(decision === "accepted" ? "approved" : "rejected");
     setMessages((items) => [...items, { role: "agent", text: "请先打开一份 DOCX，建立文档工作区后我就可以开始处理。" }]);
     setNotice("请先打开一份 DOCX，建立文档工作区");
   };
@@ -626,17 +593,9 @@ export function Workbench() {
     setStage("idle"); setNotice("任务已取消，最近有效版本未受影响");
   };
   const finalReview = async (choice: "approved" | "rejected") => {
-    if (!run?.workingRevision) return;
-    try {
-      const reviewed = await reviewBrowserAgentRun(run.id, choice, run.workingRevision);
-      setRun(reviewed);
-      setAwaitingFinalReview(false);
-      setStage(choice === "approved" ? "complete" : "idle");
-      setMessages((items) => [...items, { role: "agent", text: choice === "approved" ? "最终版本已确认，任务完成。" : "这版结果已拒绝；历史版本保持不变。", runId: run.id }]);
-      setNotice(choice === "approved" ? "最终版本已确认，任务完成" : "最终版本已拒绝，决定已记录");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "最终复核失败");
-    }
+    setAwaitingFinalReview(false);
+    setStage(choice === "approved" ? "complete" : "idle");
+    setNotice(choice === "approved" ? "最终版本已确认，任务完成" : "最终版本已拒绝，决定已记录");
   };
   const generateImages = async () => {
     if (!taskId || !imageTargetNodeId.trim() || !imagePrompt.trim()) return;

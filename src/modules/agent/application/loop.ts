@@ -70,7 +70,7 @@ export type AgentLoopStore = {
   markCancelled?(runId: string): Promise<void>;
 };
 
-export const AGENT_LEASE_MANAGED_STATUSES = ["queued", "analyzing", "generating", "applying", "validating"] as const;
+export const AGENT_LEASE_MANAGED_STATUSES = ["queued", "running"] as const;
 
 export type AgentLoopEvent = { timestamp?: string; eventId?: string } & (
   | { type: "turn.started"; text: string; clientMessageId?: string }

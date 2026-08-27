@@ -2,24 +2,13 @@ import { IllegalRunTransitionError } from "./errors";
 import type { AgentRunStatus } from "./model";
 
 const transitions: Readonly<Record<AgentRunStatus, readonly AgentRunStatus[]>> = {
-  queued: ["analyzing", "cancelled", "failed"],
-  analyzing: ["awaiting_scope_confirmation", "cancelled", "failed"],
-  awaiting_scope_confirmation: ["analyzing", "generating", "cancelled", "failed"],
-  generating: ["applying", "cancelled", "failed"],
-  applying: ["analyzing", "validating", "cancelled", "failed"],
-  validating: ["awaiting_review", "analyzing", "cancelled", "failed"],
-  awaiting_review: ["completed", "generating", "cancelled", "failed"],
+  queued: ["running", "cancelled", "failed"],
+  running: ["awaiting_approval", "awaiting_user", "awaiting_review", "completed", "failed", "cancelled"],
+  awaiting_approval: ["running", "failed", "cancelled"],
+  awaiting_user: ["running", "failed", "cancelled"],
+  awaiting_review: ["completed", "failed", "cancelled"],
   completed: [],
-  failed: [
-    "queued",
-    "analyzing",
-    "awaiting_scope_confirmation",
-    "generating",
-    "applying",
-    "validating",
-    "awaiting_review",
-    "cancelled",
-  ],
+  failed: ["queued", "running", "cancelled"],
   cancelled: [],
 };
 
@@ -28,11 +17,9 @@ export function canTransition(from: AgentRunStatus, to: AgentRunStatus): boolean
 }
 
 export function assertTransition(from: AgentRunStatus, to: AgentRunStatus): void {
-  if (!canTransition(from, to)) {
-    throw new IllegalRunTransitionError(from, to);
-  }
+  if (!canTransition(from, to)) throw new IllegalRunTransitionError(from, to);
 }
 
 export function isTerminalStatus(status: AgentRunStatus): boolean {
-  return status === "completed" || status === "cancelled";
+  return status === "completed" || status === "failed" || status === "cancelled";
 }

@@ -71,7 +71,7 @@ export async function POST(request: Request) {
       .maybeSingle();
     if (latest.error) throw new Error(`Unable to inspect active agent run: ${latest.error.message}`);
     const checkpoint = (latest.data?.state as { loopCheckpoint?: { pendingApproval?: unknown; pendingUserQuestion?: unknown } } | null)?.loopCheckpoint;
-    const activeStatus = [...AGENT_LEASE_MANAGED_STATUSES, "awaiting_scope_confirmation", "awaiting_review"].includes(latest.data?.status as string);
+    const activeStatus = [...AGENT_LEASE_MANAGED_STATUSES, "awaiting_approval", "awaiting_user", "awaiting_review"].includes(latest.data?.status as string);
     // HITL waits are intentionally lease-less: a user may take hours to
     // answer. Only an invocation phase can become stale and be reclaimed.
     const leaseManagedStatus = AGENT_LEASE_MANAGED_STATUSES.includes(latest.data?.status as typeof AGENT_LEASE_MANAGED_STATUSES[number]);

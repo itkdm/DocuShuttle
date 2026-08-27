@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
-import { createAgentRuntime } from "@/modules/agent/infrastructure/runtime-factory";
 import { agentErrorResponse } from "../../../http";
 import { SupabaseAgentLoopStore } from "@/modules/agent/infrastructure/supabase/loop-persistence";
+import { SupabaseAgentRunStore } from "@/modules/agent/infrastructure/supabase/runtime-persistence";
 
 const schema = z.object({ commandId: z.uuid() });
 
@@ -13,8 +13,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
     const { runId } = await params;
     const input = schema.parse(await request.json());
     const { client } = await requireSupabaseUser();
-    const run = await createAgentRuntime(client, runId).cancel(runId, input.commandId);
     await new SupabaseAgentLoopStore(client).markCancelled?.(runId);
+    const run = await new SupabaseAgentRunStore(client).load(runId);
+    if (!run) return NextResponse.json({ code: "RUN_NOT_FOUND" }, { status: 404 });
     return NextResponse.json({ run });
   } catch (error) {
     return agentErrorResponse(error);

@@ -34,9 +34,11 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
         ? "failed"
         : checkpoint.status === "cancelled"
           ? "cancelled"
-        : checkpoint.status === "awaiting_user"
-          ? "awaiting_scope_confirmation"
-          : "analyzing";
+          : checkpoint.pendingApproval
+            ? "awaiting_approval"
+            : checkpoint.pendingUserQuestion
+              ? "awaiting_user"
+              : "running";
     const state = { ...row.state, version: nextVersion, status, loopCheckpoint: checkpoint };
     const updated = await this.client
       .from("agent_runs")

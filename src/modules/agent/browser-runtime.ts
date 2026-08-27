@@ -5,7 +5,6 @@ import type { AgentPermissionMode } from "./application/loop";
 import { SseParser } from "./browser/sse-parser";
 
 type AgentResponse = { run: AgentRun };
-type AdvanceResponse = { kind: string; run: AgentRun };
 
 const userFacingError = (code: string | undefined, fallback: string) => ({
   IMAGE_GENERATION_FAILED: "图片候选暂时生成失败，请稍后重试；如果持续失败，请检查图片服务配置。",
@@ -161,9 +160,6 @@ export const loadBrowserConversationMessages = async (taskId: string, before?: s
     `/api/agent/messages?taskId=${encodeURIComponent(taskId)}&limit=30${before ? `&before=${encodeURIComponent(before)}` : ""}`,
   );
 
-export const advanceBrowserAgentRun = async (runId: string) =>
-  (await json<AdvanceResponse>(`/api/agent/runs/${runId}/advance`, post())).run;
-
 export type BrowserAgentEvent = {
   eventId: string;
   runId: string;
@@ -245,24 +241,6 @@ export const resumeBrowserAgentLoopStream = async (
   runId,
   onEvent,
 );
-
-export const decideBrowserAgentRun = async (runId: string, choice: "approved" | "rejected") =>
-  (await json<AgentResponse>(`/api/agent/runs/${runId}/decision`, post({
-    commandId: crypto.randomUUID(),
-    decisionId: crypto.randomUUID(),
-    choice,
-  }))).run;
-
-export const reviewBrowserAgentRun = async (
-  runId: string,
-  choice: "approved" | "rejected",
-  reviewedRevision: string,
-) => (await json<AgentResponse>(`/api/agent/runs/${runId}/review`, post({
-  commandId: crypto.randomUUID(),
-  decisionId: crypto.randomUUID(),
-  choice,
-  reviewedRevision,
-}))).run;
 
 export const cancelBrowserAgentRun = async (runId: string) =>
   (await json<AgentResponse>(`/api/agent/runs/${runId}/cancel`, post({ commandId: crypto.randomUUID() }))).run;

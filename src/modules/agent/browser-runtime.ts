@@ -11,6 +11,7 @@ const userFacingError = (code: string | undefined, fallback: string) => ({
   IMAGE_APPLY_FAILED: "图片候选应用失败，请刷新文档后重试。",
   AGENT_LOOP_FAILED: "这次请求没有完成，请稍后重试；已保留执行记录。",
   AGENT_LOOP_RESUME_FAILED: "这次操作没有恢复成功，请重新确认当前请求。",
+  TURN_NOT_ALLOWED: "当前对话正在等待处理，请先完成待处理的确认或回答。",
 }[code ?? ""] ?? fallback);
 
 const json = async <T>(url: string, init?: RequestInit): Promise<T> => {
@@ -93,6 +94,7 @@ export type BrowserAgentLoopResult = {
     finalText?: string;
     iterations: number;
     pendingApproval?: { callId: string; name: string; input: unknown };
+    pendingUserQuestion?: { text: string };
     messages: ReadonlyArray<{ role: "system" | "user" | "assistant" | "tool"; content: string }>;
     permissionMode?: AgentPermissionMode;
   };

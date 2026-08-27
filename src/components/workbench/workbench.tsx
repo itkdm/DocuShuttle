@@ -330,8 +330,12 @@ export function Workbench() {
         setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
         await refreshVersions(taskId);
       }
-      setStage(result.checkpoint.pendingApproval ? "awaiting" : wrote ? "complete" : "idle");
-      setNotice(result.checkpoint.pendingApproval ? "Agent 已完成读取并请求写入确认" : wrote ? "新版本已加载到文档画布" : "Agent 已完成本轮对话");
+      setStage(result.checkpoint.pendingApproval || result.checkpoint.pendingUserQuestion ? "awaiting" : wrote ? "complete" : "idle");
+      setNotice(result.checkpoint.pendingApproval
+        ? "Agent 已完成读取并请求写入确认"
+        : result.checkpoint.pendingUserQuestion
+          ? "Agent 正在等待你的回答"
+          : wrote ? "新版本已加载到文档画布" : "Agent 已完成本轮对话");
     } catch (error) {
       if (abortController.signal.aborted) return;
       // A model/provider can fail after the loop has durably saved an approval
@@ -341,10 +345,10 @@ export function Workbench() {
       if (runToRecover) {
         try {
           const recovered = await loadBrowserAgentLoop(runToRecover.id);
-          if (recovered.checkpoint.pendingApproval) {
+          if (recovered.checkpoint.pendingApproval || recovered.checkpoint.pendingUserQuestion) {
             setLoopResult(recovered);
             setStage("awaiting");
-            setNotice("Agent 已完成读取并请求写入确认");
+            setNotice(recovered.checkpoint.pendingApproval ? "Agent 已完成读取并请求写入确认" : "Agent 正在等待你的回答");
             return;
           }
         } catch { /* preserve the original error below */ }

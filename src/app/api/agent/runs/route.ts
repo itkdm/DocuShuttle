@@ -41,6 +41,21 @@ export async function POST(request: Request) {
   try {
     const input = schema.parse(await request.json());
     const { client, user } = await requireSupabaseUser();
+    // Do not allocate a new immutable run while the conversation has a
+    // durable HITL boundary. Approval and ask_user answers must continue the
+    // existing run/checkpoint; creating here would fork and lose context.
+    const latest = await client.from("agent_runs")
+      .select("id, state, status")
+      .eq("task_id", input.taskId)
+      .eq("owner_user_id", user.id)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (latest.error) throw new Error(`Unable to inspect active agent run: ${latest.error.message}`);
+    const checkpoint = (latest.data?.state as { loopCheckpoint?: { pendingApproval?: unknown; pendingUserQuestion?: unknown } } | null)?.loopCheckpoint;
+    if (checkpoint?.pendingApproval || checkpoint?.pendingUserQuestion || ["analyzing", "awaiting_scope_confirmation"].includes(latest.data?.status as string)) {
+      return NextResponse.json({ code: "TURN_NOT_ALLOWED", runId: latest.data?.id }, { status: 409 });
+    }
     const updated = await client.from("tasks").update({ goal: input.goal, updated_at: new Date().toISOString() })
       .eq("id", input.taskId).eq("owner_user_id", user.id).select("id").single();
     if (updated.error || !updated.data) return NextResponse.json({ code: "TASK_NOT_FOUND" }, { status: 404 });

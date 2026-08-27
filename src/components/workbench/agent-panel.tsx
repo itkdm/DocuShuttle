@@ -87,12 +87,16 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
   const [imageToolOpen, setImageToolOpen] = useState(false);
   const currentTimeline = liveEvents.length ? liveEvents : loopResult?.events ?? [];
   const timelineEvents = mergeTimelineEvents(timelineHistory, currentTimeline);
+  const awaitingUserQuestion = Boolean(loopResult?.checkpoint.pendingUserQuestion);
+  // Approval/final review pauses the composer; an ask_user checkpoint is
+  // specifically waiting for ordinary user text and must remain writable.
+  const inputBlocked = stage === "analyzing" || (stage === "awaiting" && !awaitingUserQuestion);
   const handleLoopApproval = async (choice: "approved" | "rejected") => {
     if (!onLoopApproval) return;
     setDeciding(true);
     try { await onLoopApproval(choice); } finally { setDeciding(false); }
   };
-  const submit = () => { if (stage === "analyzing" || !workspaceReady) return; const value = prompt.trim(); if (!value) return; onRun(value); setPrompt(""); };
+  const submit = () => { if (inputBlocked || !workspaceReady) return; const value = prompt.trim(); if (!value) return; onRun(value); setPrompt(""); };
   return (
     <aside className="agent-panel" aria-label="纸上鸭 Agent">
       <div className="agent-heading">
@@ -112,7 +116,7 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
           {stage !== "idle" && stage !== "awaiting" && !timelineEvents.length && <div className="progress-card"><div className="progress-top"><strong>{stage === "complete" ? "已完成" : liveEvents.at(-1) ? eventSummary(liveEvents.at(-1)!) : "正在准备"}</strong><span>{stage === "complete" ? "完成" : "进行中"}</span></div><small>{stage === "complete" ? "结果已保存为新的文档版本" : "执行过程会实时显示在上方对话时间线"}</small>{stage !== "complete" && <button className="cancel-run" onClick={onCancel}><StopCircle size={13} /> 取消</button>}</div>}
       </div>
       <div className="agent-composer">
-        <textarea id="agent-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && stage !== "analyzing" && stage !== "awaiting" && workspaceReady) { event.preventDefault(); submit(); } }} placeholder={workspaceReady ? "例如：把实验结论改得更专业，只改一个单元格…" : "请先打开一份 DOCX"} rows={2} disabled={!workspaceReady || stage === "awaiting"} />
+        <textarea id="agent-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !inputBlocked && workspaceReady) { event.preventDefault(); submit(); } }} placeholder={awaitingUserQuestion ? "请回答纸上鸭的问题…" : workspaceReady ? "例如：把实验结论改得更专业，只改一个单元格…" : "请先打开一份 DOCX"} rows={2} disabled={!workspaceReady || inputBlocked} />
         <div className="composer-toolbar">
           <CustomSelect
             value={permissionMode}
@@ -121,12 +125,12 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
               { value: "full", label: "允许完全访问" },
             ]}
             onChange={(value) => onPermissionModeChange(value as AgentPermissionMode)}
-            disabled={stage === "analyzing" || stage === "awaiting"}
+            disabled={stage === "analyzing" || (stage === "awaiting" && !awaitingUserQuestion)}
             icon={permissionMode === "full" ? <Unlock size={12} className="permission-icon full" /> : <Shield size={12} className="permission-icon" />}
           />
           <div className="composer-actions">
             <span>Enter 发送 · Shift + Enter 换行</span>
-            <button className="composer-send" onClick={submit} disabled={!prompt.trim() || stage === "analyzing" || stage === "awaiting" || !workspaceReady} aria-label="发送要求"><Send size={14} /></button>
+            <button className="composer-send" onClick={submit} disabled={!prompt.trim() || inputBlocked || !workspaceReady} aria-label="发送要求"><Send size={14} /></button>
           </div>
         </div>
       </div>

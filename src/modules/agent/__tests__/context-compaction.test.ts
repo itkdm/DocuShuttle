@@ -45,4 +45,19 @@ describe("agent context compaction", () => {
     expect(JSON.parse(tool!.content)).toMatchObject({ revision: "rev-9", nodeId: "p-9" });
     expect(tool!.content.length).toBeLessThan(2_000);
   });
+
+  it("never exceeds either hard provider budget, even with oversized metadata", () => {
+    const result = compactAgentMessages([
+      { role: "system", content: "系统约束".repeat(40) },
+      { role: "user", content: "用户目标".repeat(40) },
+      { role: "assistant", content: "", toolCalls: [{ id: "call-large", name: "inspect_document", input: { query: "x".repeat(500) } }] },
+      { role: "tool", content: JSON.stringify({ summary: "结果", revision: "r1", text: "y".repeat(2_000) }), toolCallId: "call-large", toolName: "inspect_document" },
+      { role: "assistant", content: "最终判断".repeat(40) },
+    ], { maxCharacters: 180, maxMessages: 4, keepRecentUnits: 3, maxUserSummaryCharacters: 30 });
+    expect(result.messages.length).toBeLessThanOrEqual(4);
+    expect(result.messages.reduce((sum, message) => sum + message.content.length + (message.toolCallId?.length ?? 0) + (message.toolName?.length ?? 0) + (message.toolCalls ? JSON.stringify(message.toolCalls).length : 0), 0)).toBeLessThanOrEqual(180);
+    for (const call of result.messages.flatMap((message) => message.toolCalls ?? [])) {
+      expect(result.messages.some((message) => message.role === "tool" && message.toolCallId === call.id)).toBe(true);
+    }
+  });
 });

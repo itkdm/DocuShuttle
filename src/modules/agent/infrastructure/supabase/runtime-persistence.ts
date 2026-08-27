@@ -14,6 +14,7 @@ import type {
 } from "../../application/ports";
 import { ConcurrentRunUpdateError } from "../../domain/errors";
 import { createAgentRun, type AgentRun, type SideEffectReceipt } from "../../domain/model";
+import type { AgentLoopCheckpoint } from "../../application/loop";
 
 const fail = (context: string, error: { message: string; code?: string } | null): void => {
   if (error) throw new Error(`${context}: ${error.code ?? "DATABASE_ERROR"}: ${error.message}`);
@@ -33,12 +34,40 @@ export class SupabaseAgentRunStore implements AgentRunStore {
     if (!document.data) throw new Error("WORKING_DOCUMENT_NOT_FOUND");
     const documentId = document.data.id as string;
     const revision = await this.currentRevision(documentId);
+    // A task owns one conversation/thread. Runs remain immutable execution
+    // records, so a later run starts from the prior run's model transcript
+    // instead of silently losing the preceding turns.
+    const conversation = await this.client.from("conversations")
+      .upsert({ task_id: input.taskId, owner_user_id: input.ownerUserId }, { onConflict: "task_id" })
+      .select("id")
+      .single();
+    fail("Unable to create task conversation", conversation.error);
+    if (!conversation.data) throw new Error("CONVERSATION_NOT_FOUND");
+    const prior = await this.client.from("agent_runs")
+      .select("state")
+      .eq("task_id", input.taskId)
+      .eq("owner_user_id", input.ownerUserId)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    fail("Unable to load prior agent run", prior.error);
+    const priorCheckpoint = (prior.data?.state as { loopCheckpoint?: AgentLoopCheckpoint } | null)?.loopCheckpoint;
     const run = createAgentRun({
       id: crypto.randomUUID(),
       documentId,
       baseRevision: revision,
       now: input.now,
     });
+    const loopCheckpoint: AgentLoopCheckpoint | undefined = priorCheckpoint && !priorCheckpoint.pendingApproval && priorCheckpoint.messages.length
+      ? {
+          conversationId: conversation.data.id as string,
+          messages: structuredClone(priorCheckpoint.messages),
+          iterations: 0,
+          toolCallCount: 0,
+          status: "completed",
+          permissionMode: priorCheckpoint.permissionMode,
+        }
+      : undefined;
     const created = await this.client.from("agent_runs").insert({
       id: run.id,
       owner_user_id: input.ownerUserId,
@@ -47,7 +76,7 @@ export class SupabaseAgentRunStore implements AgentRunStore {
       base_revision: revision,
       status: run.status,
       lock_version: run.version,
-      state: run,
+      state: loopCheckpoint ? { ...run, conversationId: conversation.data.id, loopCheckpoint } : { ...run, conversationId: conversation.data.id },
     });
     fail("Unable to create agent run", created.error);
     return run;

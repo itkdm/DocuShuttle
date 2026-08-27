@@ -103,6 +103,74 @@ const compactToolContentForContext = (content: string, maxCharacters: number) =>
 };
 
 /**
+ * Enforce the provider contract after the semantic compaction pass.  The
+ * normal pass deliberately keeps useful recent units, but a single oversized
+ * unit (or an unusually small test/configured budget) must not leak through
+ * and make the provider reject the request.  This fallback is deterministic,
+ * removes whole oldest units before touching recent context, and never keeps
+ * an assistant tool call without its paired result.
+ */
+const enforceHardBudget = (messages: readonly AgentLoopMessage[], policy: AgentContextCompactionPolicy): AgentLoopMessage[] => {
+  if (policy.maxMessages <= 0 || policy.maxCharacters <= 0) return [];
+  let units = buildUnits(messages);
+  const count = () => units.reduce((total, unit) => total + unit.length, 0);
+  const chars = () => units.flat().reduce((total, message) => total + messageCharacters(message), 0);
+  const isSystem = (unit: MessageUnit) => unit.some((message) => message.role === "system");
+
+  // Discard the oldest non-system conversational units first.  This keeps
+  // current user intent and the latest tool evidence available whenever the
+  // budget permits it.
+  while ((count() > policy.maxMessages || chars() > policy.maxCharacters) && units.length > 1) {
+    const removable = units.findIndex((unit) => !isSystem(unit));
+    if (removable < 0) break;
+    units.splice(removable, 1);
+  }
+
+  let flattened = units.flat();
+  if (count() <= policy.maxMessages && chars() <= policy.maxCharacters) return flattened;
+
+  // A remaining unit may itself be larger than the entire budget.  Reduce
+  // payloads and tool-call inputs while preserving the call/result grouping.
+  flattened = flattened.map((message) => {
+    const maxContent = Math.max(0, Math.floor(policy.maxCharacters / Math.max(1, flattened.length)));
+    if (message.role === "assistant" && message.toolCalls) {
+      const calls = message.toolCalls.map((call) => ({ ...call, input: compactValueForContext(call.input) }));
+      const candidate = { ...message, content: message.content.slice(0, maxContent), toolCalls: calls };
+      // If call metadata alone is too large, omit the call rather than emit an
+      // invalid oversized provider message; its paired result is removed too.
+      return messageCharacters(candidate) <= policy.maxCharacters ? candidate : { role: "assistant", content: "工具调用已压缩。" };
+    }
+    const content = message.role === "tool"
+      ? compactToolContentForContext(message.content, maxContent)
+      : message.content.slice(0, maxContent);
+    return { ...message, content };
+  });
+  units = buildUnits(flattened);
+
+  // Final deterministic safety net.  At this point only payload truncation is
+  // allowed; if the configured budget is smaller than protocol metadata,
+  // retain the newest messages and strip tool metadata to keep the contract.
+  flattened = units.flat();
+  // Trim by whole units so the final max-message guard cannot orphan a tool
+  // result from its assistant call.
+  units = buildUnits(flattened);
+  while (units.reduce((total, unit) => total + unit.length, 0) > policy.maxMessages && units.length > 1) units.shift();
+  flattened = units.flat();
+  if (flattened.reduce((total, message) => total + messageCharacters(message), 0) > policy.maxCharacters) {
+    flattened = flattened.map((message) => {
+      const remaining = Math.max(0, policy.maxCharacters - flattened.filter((candidate) => candidate !== message).reduce((total, candidate) => total + messageCharacters(candidate), 0));
+      if (message.role === "assistant" && message.toolCalls) return { role: "assistant", content: message.content.slice(0, remaining) };
+      return { ...message, content: message.content.slice(0, remaining) };
+    });
+  }
+  // The previous proportional trim can still overshoot due to metadata. Drop
+  // oldest messages until the exact character budget is satisfied.
+  units = buildUnits(flattened);
+  while (units.length > 0 && units.flat().reduce((total, message) => total + messageCharacters(message), 0) > policy.maxCharacters) units.shift();
+  return units.flat().slice(-policy.maxMessages);
+};
+
+/**
  * Group messages into units so an assistant tool-call record can never be
  * separated from its corresponding tool result. This mirrors the invariant
  * required by OpenAI-compatible APIs and the message-state model used by
@@ -197,5 +265,6 @@ export const compactAgentMessages = (
       ? { ...message, content: `${message.content.slice(0, 1_000)}…` }
       : message);
   }
-  return { messages: remaining, compacted: true, originalMessageCount: messages.length, originalCharacters, retainedMessageCount: remaining.length };
+  const bounded = enforceHardBudget(remaining, policy);
+  return { messages: bounded, compacted: true, originalMessageCount: messages.length, originalCharacters, retainedMessageCount: bounded.length };
 };

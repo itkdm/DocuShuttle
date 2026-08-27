@@ -247,10 +247,23 @@ describe("AgentLoopRunner", () => {
   });
 
   it("lets the model ask the user when evidence is insufficient", async () => {
-    const result = await new AgentLoopRunner({ decide: async () => ({ kind: "ask_user", text: "你希望修改哪一个实验结论区域？" }) }, new MemoryStore(), []).run("run-ask", "修改实验结论");
+    const store = new MemoryStore();
+    let calls = 0;
+    const runner = new AgentLoopRunner({ decide: async ({ messages }) => {
+      calls += 1;
+      return calls === 1
+        ? { kind: "ask_user", text: "你希望修改哪一个实验结论区域？" }
+        : { kind: "message", text: `已按你的回答继续：${messages.at(-1)?.content}` };
+    } }, store, []);
+    const result = await runner.run("run-ask", "修改实验结论");
     expect(result.checkpoint.status).toBe("awaiting_user");
     expect(result.checkpoint.finalText).toBeUndefined();
+    expect(result.checkpoint.pendingUserQuestion?.text).toContain("哪一个");
     expect(result.events.some((event) => event.type === "assistant.message")).toBe(true);
+    const resumed = await runner.run("run-ask", "修改实验结论第一段");
+    expect(resumed.checkpoint.status).toBe("completed");
+    expect(resumed.checkpoint.pendingUserQuestion).toBeUndefined();
+    expect(resumed.checkpoint.finalText).toContain("第一段");
   });
 
   it("exposes a terminal safety-budget failure in the timeline", async () => {
@@ -284,9 +297,12 @@ describe("AgentLoopRunner", () => {
     const model: AgentModelPort = { decide: async () => ({ kind: "tool_calls", calls: [{ id: "pending-1", name: "apply_change", input: { nodeId: "p-1" } }] }) };
     const runner = new AgentLoopRunner(model, store, [applyTool]);
     await runner.run("run-pending", "修改文档");
+    const before = await store.load();
     const blocked = await runner.run("run-pending", "再做另一件事");
     expect(blocked.checkpoint.status).toBe("awaiting_user");
     expect(blocked.checkpoint.pendingApproval?.callId).toBe("pending-1");
-    expect(blocked.checkpoint.finalText).toContain("等待确认");
+    expect(blocked.checkpoint.finalText).toBeUndefined();
+    expect(blocked.checkpoint.permissionMode).toBe(before?.permissionMode);
+    expect(blocked.checkpoint.messages).toEqual(before?.messages);
   });
 });

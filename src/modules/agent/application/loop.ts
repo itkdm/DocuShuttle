@@ -44,10 +44,16 @@ export interface AgentModelPort {
 }
 
 export type AgentLoopCheckpoint = {
+  /** Stable conversation/thread identity shared by immutable execution runs. */
+  conversationId?: string;
   messages: AgentLoopMessage[];
   iterations: number;
   toolCallCount: number;
   pendingApproval?: { callId: string; name: string; input: unknown };
+  /** A model question that durably suspended this conversation.  This is
+   * intentionally distinct from pendingApproval: answering it is a normal
+   * user turn, while an approval resolves a side effect boundary. */
+  pendingUserQuestion?: { text: string };
   status: "running" | "awaiting_user" | "completed" | "failed" | "cancelled";
   finalText?: string;
   permissionMode?: AgentPermissionMode;
@@ -153,6 +159,15 @@ export class AgentLoopRunner {
     checkpoint.messages = checkpoint.messages.map((message) => message.role === "tool"
       ? { ...message, content: compactPersistedToolContent(message.content) }
       : message);
+    // A pending side effect is a hard interaction boundary. Check it before
+    // changing permission, counters, or appending a new turn; a normal user
+    // request must not mutate the approval checkpoint.
+    if (userText.trim() && checkpoint.pendingApproval) {
+      return {
+        checkpoint,
+        events: [{ type: "assistant.message", text: "当前有一项文档操作等待确认，请先批准或拒绝后再继续。" }],
+      };
+    }
     // Permission is selected per user turn. A resumed approval keeps the mode
     // persisted in its checkpoint, while a new turn may intentionally switch
     // between the default guardrail profile and full autonomy.
@@ -167,17 +182,12 @@ export class AgentLoopRunner {
     if ((checkpoint.status === "completed" || checkpoint.status === "failed" || checkpoint.status === "cancelled") && !userText.trim()) {
       return { checkpoint, events: checkpoint.finalText ? [{ type: "completed", text: checkpoint.finalText }] : [] };
     }
-    // Do not start a second turn while a side-effect is waiting for an
-    // explicit decision. The user must approve or reject the pending call so
-    // its checkpoint remains the single source of truth for the run.
-    if (userText.trim() && checkpoint.pendingApproval) {
-      checkpoint.status = "awaiting_user";
-      checkpoint.finalText = "当前有一项文档操作等待确认，请先批准或拒绝后再继续。";
-      const blocked = { type: "assistant.message", text: checkpoint.finalText } as const;
-      await this.store.save(runId, checkpoint);
-      return { checkpoint, events: [blocked] };
+    if (userText.trim()) {
+      // An answer to ask_user continues the same checkpoint and therefore
+      // carries the question's preceding context into the next model call.
+      checkpoint.pendingUserQuestion = undefined;
+      checkpoint.messages.push({ role: "user", content: userText });
     }
-    if (userText.trim()) checkpoint.messages.push({ role: "user", content: userText });
     checkpoint.status = "running";
     checkpoint.finalText = undefined;
     const events: AgentLoopEvent[] = [];
@@ -254,6 +264,7 @@ export class AgentLoopRunner {
       }
       if (decision.kind === "ask_user") {
         checkpoint.status = "awaiting_user";
+        checkpoint.pendingUserQuestion = { text: decision.text };
         checkpoint.messages.push({ role: "assistant", content: decision.text });
         emit({ type: "assistant.message", text: decision.text });
         await this.store.save(runId, checkpoint);

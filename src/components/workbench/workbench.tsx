@@ -351,7 +351,7 @@ export function Workbench() {
         setLiveEvents((items) => mergeTimelineEvents(items, [event]));
         if (event.type === "model.delta") setNotice("纸上鸭正在回复");
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
-      }, abortController.signal);
+      }, abortController.signal, localMessageId);
       setLoopResult(result);
       setLiveEvents((items) => mergeTimelineEvents(items, result.events));
       setConversation((items) => items.map((item) => item.id === localMessageId ? { ...item, status: result.checkpoint.status === "failed" ? "failed" : "sent" } : item));

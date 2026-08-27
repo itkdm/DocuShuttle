@@ -126,9 +126,10 @@ export async function runBrowserAgentLoopStream(
   permissionMode: AgentPermissionMode,
   onEvent: (event: BrowserAgentLoopResult["events"][number]) => void,
   signal?: AbortSignal,
+  clientMessageId?: string,
 ) {
   return consumeAgentStream(
-    await fetch(`/api/agent/runs/${runId}/loop`, { ...post({ message, permissionMode }), method: "PUT", signal }),
+    await fetch(`/api/agent/runs/${runId}/loop`, { ...post({ message, permissionMode, ...(clientMessageId ? { clientMessageId } : {}) }), method: "PUT", signal }),
     onEvent,
   );
 }

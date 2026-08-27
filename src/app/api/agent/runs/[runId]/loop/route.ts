@@ -16,6 +16,7 @@ import { OoxmlPreservationKernel } from "@/modules/documents";
 const schema = z.object({
   message: z.string().trim().min(1).max(8_000),
   permissionMode: z.enum(["default", "full"]).optional().default("default"),
+  clientMessageId: z.uuid().optional(),
 });
 
 const eventPayload = (event: string, data: unknown) => {
@@ -36,6 +37,26 @@ async function createRunner(runId: string) {
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
   return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), new SupabaseAgentLoopStore(client), tools);
+}
+
+async function persistAskUserAnswer(runId: string, message: string, clientMessageId?: string) {
+  if (!clientMessageId) return;
+  const { client, user } = await requireSupabaseUser();
+  const run = await client.from("agent_runs").select("state, owner_user_id").eq("id", runId).eq("owner_user_id", user.id).single();
+  if (run.error || !run.data) throw new Error("RUN_NOT_FOUND");
+  const checkpoint = (run.data.state as { loopCheckpoint?: { pendingUserQuestion?: unknown; conversationId?: string } } | null)?.loopCheckpoint;
+  if (!checkpoint?.pendingUserQuestion || !checkpoint.conversationId) return;
+  const inserted = await client.from("messages").upsert({
+    id: clientMessageId,
+    owner_user_id: user.id,
+    conversation_id: checkpoint.conversationId,
+    role: "user",
+    parts: [{ type: "text", text: message }],
+    run_id: runId,
+    message_key: clientMessageId,
+    delivery_status: "sent",
+  }, { onConflict: "conversation_id,message_key", ignoreDuplicates: true });
+  if (inserted.error) throw new Error(`Unable to persist user answer: ${inserted.error.message}`);
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ runId: string }> }) {
@@ -64,6 +85,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
   try {
     const input = schema.parse(await request.json());
     const { runId } = await params;
+    await persistAskUserAnswer(runId, input.message, input.clientMessageId);
     const result = await (await createRunner(runId)).runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode);
     return NextResponse.json(result);
   } catch (error) {
@@ -79,6 +101,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
   try {
     const input = schema.parse(await request.json());
     const { runId } = await params;
+    await persistAskUserAnswer(runId, input.message, input.clientMessageId);
     const runner = await createRunner(runId);
     const encoder = new TextEncoder();
     const stream = new ReadableStream({

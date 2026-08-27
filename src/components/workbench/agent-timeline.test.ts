@@ -43,7 +43,7 @@ describe("Agent execution timeline", () => {
       { type: "completed", text: "已完成本轮处理" },
     ]);
     expect(items[0]).toMatchObject({ kind: "tool", state: "completed", durationMs: 320 });
-    expect(items[1]).toMatchObject({ kind: "status", state: "completed", text: "已完成本轮处理" });
+    expect(items[1]).toMatchObject({ kind: "status", state: "completed", text: "本轮已完成" });
   });
 
   it("renders a streamed final answer as an assistant message", () => {

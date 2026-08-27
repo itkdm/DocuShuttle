@@ -140,11 +140,14 @@ export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
         const item = items[index];
         if (item.kind === "tool") { item.state = state; if (state === "failed") item.error = "用户已拒绝此操作。"; }
       }
-    } else if (event.type === "completed") {
+      } else if (event.type === "completed") {
       const streamed = streamedIndex === undefined ? undefined : items[streamedIndex];
       if (streamed?.kind === "thought") items[streamedIndex!] = { kind: "message", id: streamed.id, text: streamed.text };
       streamedText = ""; streamedIndex = undefined;
-      items.push({ kind: "status", id, state: "completed", text: eventText(event) ?? "本轮已完成" });
+      // The assistant.message immediately before this event contains the
+      // user-facing answer. Keep the terminal marker concise so the final
+      // response is not rendered a second time as a status line.
+      items.push({ kind: "status", id, state: "completed", text: "本轮已完成" });
     } else if (event.type === "turn.failed") items.push({ kind: "status", id, state: "failed", text: eventError(event) ?? "本轮未完成" });
     else if (event.type === "turn.cancelled") items.push({ kind: "status", id, state: "cancelled", text: eventText(event) ?? "本轮操作已取消。" });
   }

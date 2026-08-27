@@ -1,5 +1,6 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import { generateText, streamText, tool } from "ai";
+import { z } from "zod";
 
 import type { AgentModelDecision, AgentModelPort, AgentLoopMessage, AgentTool } from "../application/loop";
 
@@ -56,6 +57,18 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
     onTextDelta?: (text: string) => void;
   }): Promise<AgentModelDecision> {
     const onTextDelta = input.onTextDelta;
+    // ask_user is a control-plane tool: the model may explicitly suspend the
+    // same conversation when required information is missing. It is converted
+    // back to the runner's durable HITL decision rather than executed as a
+    // document side effect.
+    const providerTools = [
+      ...input.tools,
+      {
+        name: "ask_user",
+        description: "当缺少继续执行所必需的信息时，向用户提出一个明确问题并暂停当前对话。",
+        inputSchema: z.object({ text: z.string().min(1).max(2000) }),
+      },
+    ];
     const request = {
       model: this.provider.chat(this.options.model),
       system: this.options.system ?? PAPERDUCK_AGENT_SYSTEM,
@@ -80,7 +93,7 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
               })),
             })
         : ({ role: message.role, content: message.content })),
-      tools: Object.fromEntries(input.tools.map((candidate) => [candidate.name, tool({
+      tools: Object.fromEntries(providerTools.map((candidate) => [candidate.name, tool({
         description: candidate.description,
         inputSchema: candidate.inputSchema,
       })])),
@@ -104,6 +117,10 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
           }
           const toolCalls = await response.toolCalls;
           if (toolCalls.length > 0) {
+            const ask = toolCalls.find((call) => call.toolName === "ask_user");
+            if (ask && typeof ask.input === "object" && ask.input !== null && "text" in ask.input) {
+              return { kind: "ask_user", text: String((ask.input as { text: unknown }).text) };
+            }
             return {
               kind: "tool_calls",
               calls: toolCalls.map((call) => ({ id: call.toolCallId, name: call.toolName, input: call.input })),
@@ -122,6 +139,10 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
     }
     const response = await generateText(request);
     if (response.toolCalls.length > 0) {
+      const ask = response.toolCalls.find((call) => call.toolName === "ask_user");
+      if (ask && typeof ask.input === "object" && ask.input !== null && "text" in ask.input) {
+        return { kind: "ask_user", text: String((ask.input as { text: unknown }).text) };
+      }
       return {
         kind: "tool_calls",
         calls: response.toolCalls.map((call) => ({ id: call.toolCallId, name: call.toolName, input: call.input })),

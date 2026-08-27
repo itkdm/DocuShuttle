@@ -69,7 +69,19 @@ export function mergeTimelineEvents(previous: readonly AgentEvent[], incoming: r
   const seen = new Set(previous.map((event, index) => eventId(event, `${event.type}:${index}:${event.callId ?? ""}:${event.text ?? ""}`)));
   incoming.forEach((event, index) => {
     const key = eventId(event, `${event.type}:${index}:${event.callId ?? ""}:${event.text ?? ""}`);
-    if (!seen.has(key)) { seen.add(key); result.push(event); }
+    if (seen.has(key)) return;
+    // The composer adds a local turn.started event before the network request
+    // returns. Replace that optimistic item with the durable SSE event instead
+    // of rendering the user's message twice.
+    if (event.type === "turn.started" && eventText(event)) {
+      const optimisticIndex = result.findIndex((item) => item.type === "turn.started" && typeof item.eventId === "string" && item.eventId.startsWith("local:") && eventText(item) === eventText(event));
+      if (optimisticIndex >= 0) {
+        result[optimisticIndex] = event;
+        seen.add(key);
+        return;
+      }
+    }
+    seen.add(key); result.push(event);
   });
   return result;
 }

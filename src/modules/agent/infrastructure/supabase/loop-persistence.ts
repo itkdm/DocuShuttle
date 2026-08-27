@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { AGENT_LEASE_MANAGED_STATUSES, type AgentLoopCheckpoint, type AgentLoopStore } from "../../application/loop";
 import { ConcurrentRunUpdateError } from "../../domain/errors";
 
-type RunRow = { state: Record<string, unknown>; lock_version: number };
+type RunRow = { state: Record<string, unknown>; lock_version: number; owner_user_id: string };
 
 /** Optimistic checkpoint storage nested in the existing agent run state. */
 export class SupabaseAgentLoopStore implements AgentLoopStore {
@@ -17,7 +17,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
   }
 
   async save(runId: string, checkpoint: AgentLoopCheckpoint): Promise<void> {
-    const current = await this.client.from("agent_runs").select("state, lock_version").eq("id", runId).maybeSingle();
+    const current = await this.client.from("agent_runs").select("state, lock_version, owner_user_id").eq("id", runId).maybeSingle();
     if (current.error || !current.data) throw new Error("RUN_NOT_FOUND");
     const row = current.data as RunRow;
     const nextVersion = row.lock_version + 1;
@@ -42,6 +42,59 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       .select("id")
       .maybeSingle();
     if (updated.error || !updated.data) throw new ConcurrentRunUpdateError(runId);
+    await this.persistConversationProjection(runId, checkpoint, row.state);
+    await this.persistRunEvents(runId, checkpoint, row.owner_user_id);
+  }
+
+  private async persistRunEvents(runId: string, checkpoint: AgentLoopCheckpoint, ownerUserId: string) {
+    const events = checkpoint.trace ?? [];
+    if (!events.length) return;
+    const ids = events.map((event) => event.eventId).filter((id): id is string => Boolean(id));
+    if (!ids.length) return;
+    const existing = await this.client.from("agent_run_events").select("id").eq("run_id", runId).in("id", ids);
+    if (existing.error) throw new Error(`Unable to load persisted agent events: ${existing.error.message}`);
+    const known = new Set((existing.data ?? []).map((row) => row.id as string));
+    const missing = events.filter((event) => event.eventId && !known.has(event.eventId));
+    if (!missing.length) return;
+    const last = await this.client.from("agent_run_events").select("sequence").eq("run_id", runId).order("sequence", { ascending: false }).limit(1).maybeSingle();
+    if (last.error) throw new Error(`Unable to load agent event cursor: ${last.error.message}`);
+    const start = Number(last.data?.sequence ?? 0);
+    const rows = missing.map((event, index) => ({
+      id: event.eventId as string,
+      owner_user_id: ownerUserId,
+      run_id: runId,
+      sequence: start + index + 1,
+      event,
+      occurred_at: event.timestamp ?? new Date().toISOString(),
+    }));
+    const inserted = await this.client.from("agent_run_events").insert(rows);
+    if (inserted.error && inserted.error.code !== "23505") throw new Error(`Unable to persist agent events: ${inserted.error.message}`);
+  }
+
+  /** Persist semantic assistant/tool messages once; replaying a checkpoint is
+   * idempotent and never makes the durable conversation depend on compaction. */
+  private async persistConversationProjection(runId: string, checkpoint: AgentLoopCheckpoint, state: Record<string, unknown>) {
+    const conversationId = checkpoint.conversationId ?? (state.conversationId as string | undefined);
+    if (!conversationId) return;
+    const owner = await this.client.from("conversations").select("owner_user_id").eq("id", conversationId).maybeSingle();
+    if (owner.error || !owner.data) return;
+    const ownerId = owner.data.owner_user_id as string;
+    const messages = checkpoint.messages.filter((message) => message.role === "assistant" || message.role === "tool");
+    if (!messages.length) return;
+    const rows = messages.map((message, index) => {
+      const callId = message.toolCallId ?? message.toolCalls?.[0]?.id;
+      const key = `${runId}:${message.role}:${callId ?? index}`;
+      return {
+        owner_user_id: ownerId,
+        conversation_id: conversationId,
+        role: message.role,
+        parts: [{ type: "text", text: message.content, ...(callId ? { toolCallId: callId, toolName: message.toolName } : {}), ...(message.toolCalls ? { toolCalls: message.toolCalls } : {}) }],
+        run_id: runId,
+        message_key: key,
+      };
+    });
+    const result = await this.client.from("messages").upsert(rows, { onConflict: "conversation_id,message_key", ignoreDuplicates: true });
+    if (result.error) throw new Error(`Unable to persist conversation messages: ${result.error.message}`);
   }
 
   async heartbeat(runId: string): Promise<boolean> {

@@ -76,6 +76,8 @@ export class SupabaseAgentRunStore implements AgentRunStore {
       p_base_revision: revision,
       p_state: state,
       p_goal: input.goal ?? null,
+      p_user_message_id: crypto.randomUUID(),
+      p_user_message: input.goal ?? "",
     });
     if (created.error?.code === "23505" && created.error.message.includes("agent_runs_one_active_per_task_idx")) {
       throw new Error("CONCURRENT_TURN");

@@ -85,6 +85,20 @@ export type BrowserAgentTaskTimeline = {
 export const loadBrowserAgentTaskTimeline = async (taskId: string) =>
   json<BrowserAgentTaskTimeline>(`/api/agent/runs?taskId=${encodeURIComponent(taskId)}`);
 
+export type BrowserConversationMessage = {
+  id: string;
+  role: "user" | "assistant" | "tool";
+  parts: ReadonlyArray<{ type?: string; text?: string; [key: string]: unknown }>;
+  run_id?: string | null;
+  created_at: string;
+  message_key: string;
+};
+
+export const loadBrowserConversationMessages = async (taskId: string) =>
+  json<{ conversationId: string | null; messages: ReadonlyArray<BrowserConversationMessage>; nextCursor: string | null }>(
+    `/api/agent/messages?taskId=${encodeURIComponent(taskId)}&limit=100`,
+  );
+
 export const advanceBrowserAgentRun = async (runId: string) =>
   (await json<AdvanceResponse>(`/api/agent/runs/${runId}/advance`, post())).run;
 

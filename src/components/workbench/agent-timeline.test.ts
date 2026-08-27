@@ -14,6 +14,15 @@ describe("Agent execution timeline", () => {
     expect(buildTimeline(merged).map((item) => item.kind)).toEqual(["user", "tool"]);
   });
 
+  it("replaces an optimistic user turn with the durable stream event", () => {
+    const merged = mergeTimelineEvents(
+      [{ eventId: "local:client-turn", type: "turn.started", text: "你好" }] as never,
+      [{ eventId: "server-turn", type: "turn.started", text: "你好" }] as never,
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ eventId: "server-turn", type: "turn.started", text: "你好" });
+  });
+
   it("keeps reasoning and tool results in order while merging one tool call", () => {
     const items = buildTimeline([
       { type: "turn.started", eventId: "u1", text: "请检查文档" },

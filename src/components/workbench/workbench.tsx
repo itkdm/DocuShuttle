@@ -12,7 +12,7 @@ import { TaskList } from "./task-list";
 import { formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
-import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserAgentLoopResult, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserAgentLoopResult, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
 import { listBrowserTasks, loadBrowserTaskWorkspace } from "@/modules/tasks/browser-tasks";
 import type { TaskSummary } from "@/modules/tasks/domain";
 import { taskIdFromPathname, taskUrl } from "@/modules/tasks/task-url";
@@ -121,6 +121,7 @@ export function Workbench() {
         setNotice("正在打开这个任务的最新文档和对话");
         const workspace = await loadBrowserTaskWorkspace(routeTaskId);
         if (abort.signal.aborted) return;
+        let durableConversationLoaded = false;
         let nextSource = emptySourceRegistrationState();
         for (const source of workspace.sources) {
           nextSource = reduceSourceRegistration(nextSource, {
@@ -146,6 +147,23 @@ export function Workbench() {
         setRun(undefined);
         setProposalSummary(undefined);
         setAwaitingFinalReview(false);
+        // UI history is durable conversation data, independent from the
+        // compacted model checkpoint. Hydrate it before restoring the latest
+        // run so a refresh never loses earlier turns.
+        try {
+          const durable = await loadBrowserConversationMessages(workspace.task.id);
+          if (!abort.signal.aborted) {
+            durableConversationLoaded = durable.messages.length > 0;
+            setConversation(durable.messages.flatMap((message) => {
+              const text = message.parts.find((part) => part.type === "text")?.text;
+              if (!text || (message.role !== "user" && message.role !== "assistant")) return [];
+              return [{ role: message.role === "user" ? "user" as const : "agent" as const, text }];
+            }));
+          }
+        } catch {
+          // Older/local databases may not have the projection yet; the run
+          // checkpoint fallback below still restores a usable conversation.
+        }
         if (workspace.workingDocumentId) {
           const document = await loadCurrentTaskDocument(workspace.task.id, workspace.fileName);
           if (abort.signal.aborted) return;
@@ -170,7 +188,7 @@ export function Workbench() {
             if (abort.signal.aborted) return;
             setLoopResult(resumedLoop);
             setLiveEvents((items) => mergeTimelineEvents(items, resumedLoop.events));
-            setConversation(conversationFromLoop(resumedLoop.checkpoint.messages));
+            if (!durableConversationLoaded) setConversation(conversationFromLoop(resumedLoop.checkpoint.messages));
           } catch {
             setLoopResult(undefined);
             setProposalSummary(resumed.proposal?.summary);
@@ -297,6 +315,15 @@ export function Workbench() {
         setLiveEvents([]);
         setLoopResult(undefined);
       }
+      // Show the user's turn immediately. The server emits the durable
+      // turn.started event shortly afterwards; mergeTimelineEvents replaces
+      // this local item when that event arrives.
+      setLiveEvents((items) => mergeTimelineEvents(items, [{
+        type: "turn.started",
+        eventId: `local:${crypto.randomUUID()}`,
+        timestamp: new Date().toISOString(),
+        text: prompt,
+      }]));
       const activeRun = startsFreshRun ? await createBrowserAgentRun(taskId, prompt) : run;
       activeRunForRecovery = activeRun;
       setRun(activeRun);

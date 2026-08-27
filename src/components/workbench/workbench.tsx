@@ -23,7 +23,7 @@ import type { AgentStage, DocumentLoadState, ProposalState, UploadAsset, Version
 
 const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
-  { id: "pending", label: "等待导入文档", time: "当前", actor: "纸上鸭", current: true },
+  { id: "pending", label: "等待导入文档", time: "当前", actor: "纸上鸭", versionNumber: 0, current: true },
 ];
 function conversationFromLoop(messages: BrowserAgentLoopResult["checkpoint"]["messages"]) {
   return messages
@@ -224,6 +224,7 @@ export function Workbench() {
     const history = await loadBrowserDocumentVersions(id);
     setVersions(history.versions.map((version) => ({
       id: version.id,
+      versionNumber: version.version_number,
       label: version.origin === "import" ? "导入并通过结构检查" : version.origin === "agent" ? "Agent 写入并通过重开校验" : version.origin === "restore" ? "从历史版本恢复" : "用户创建的版本",
       time: new Date(version.created_at).toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
       actor: version.origin === "agent" ? "纸上鸭" : "你",
@@ -458,7 +459,7 @@ export function Workbench() {
       const hadWorkingDocument = Boolean(sourceState.workingDocumentId);
       if (createsWorkingDocument && !hadWorkingDocument) {
         setDocumentLoad({ status: "ready", document: { file, bytes } });
-        setVersions([{ id: persisted.versionId ?? "initial", label: isTemplate ? "原始模板" : "完成示例", time: "刚刚", actor: "你", current: true }]);
+        setVersions([{ id: persisted.versionId ?? "initial", label: isTemplate ? "原始模板" : "完成示例", time: "刚刚", actor: "你", versionNumber: 0, current: true }]);
         setWorkspaceReady(true);
         await refreshVersions(persisted.taskId);
         setNotice(`${file.name} 已建立文档工作区，并创建版本 v1`);
@@ -556,7 +557,7 @@ export function Workbench() {
       <header className="topbar">
         <button className="brand-lockup" type="button" onClick={startNewTask} aria-label="回到空白工作台"><PaperDuckMark /><div><strong>纸上鸭</strong><span>把 Word 真正做完</span></div></button>
         <div className="document-identity"><span className="doc-chip">DOCX</span><div><strong>{documentLoad.status === "ready" ? documentLoad.document.file.name : "尚未载入文档"}</strong><span><Cloud size={12} /> {workspaceReady ? "工作区已保存" : "选择文件开始"}</span></div></div>
-        <div className="top-actions"><button className="quiet-action" onClick={() => setVersionsOpen((open) => !open)} aria-expanded={versionsOpen}><History size={16} /><span>版本 {versions.length}</span><ChevronDown size={13} /></button><button className="export-button" onClick={downloadCurrent} disabled={documentLoad.status !== "ready" || !workspaceReady}><Download size={16} /> 下载当前文件</button><button className="mobile-menu" onClick={() => setMobilePanel(mobilePanel === "none" ? "agent" : "none")} aria-label="打开工作台菜单"><Menu size={20} /></button></div>
+        <div className="top-actions"><button className="quiet-action" onClick={() => setVersionsOpen((open) => !open)} aria-expanded={versionsOpen}><History size={16} /><span>版本 {versions.find((version) => version.current)?.versionNumber ?? 0}</span><ChevronDown size={13} /></button><button className="export-button" onClick={downloadCurrent} disabled={documentLoad.status !== "ready" || !workspaceReady}><Download size={16} /> 下载当前文件</button><button className="mobile-menu" onClick={() => setMobilePanel(mobilePanel === "none" ? "agent" : "none")} aria-label="打开工作台菜单"><Menu size={20} /></button></div>
       </header>
 
       {versionsOpen && <div className="version-popover" role="dialog" aria-label="版本历史"><div className="version-heading"><div><span className="eyebrow">不可变历史</span><h2>版本记录</h2></div><button className="icon-button" onClick={() => setVersionsOpen(false)} aria-label="关闭版本记录"><X size={16} /></button></div><p>恢复会创建新版本，不会删除后续记录。</p><ol>{versions.map((version) => <li key={version.id} className={version.current ? "current" : ""}><span className="version-node">{version.current ? <Check size={12} /> : version.id.slice(1)}</span><div><strong>{version.label}</strong><small>{version.id} · {version.actor} · {version.time}</small></div>{!version.current && <button onClick={() => restoreVersion(version.id)}><RotateCcw size={12} /> 恢复</button>}</li>)}</ol></div>}

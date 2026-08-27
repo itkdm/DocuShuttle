@@ -1,8 +1,6 @@
 import type { BrowserAgentLoopResult, BrowserConversationMessage } from "@/modules/agent/browser-runtime";
-
-export type AgentActivity =
-  | { type: "note"; id: string; text: string }
-  | { type: "tool"; id: string; callId: string; name: string; state: "running" | "completed" | "failed" | "approval"; input?: unknown; output?: unknown; error?: string; durationMs?: number };
+import { reduceAgentEvents, type AgentActivity } from "./agent-turn-reducer";
+export type { AgentActivity } from "./agent-turn-reducer";
 
 export type AgentThreadTurn = {
   id: string;
@@ -28,29 +26,9 @@ function projectRun(runId: string, messages: readonly BrowserConversationMessage
   const assistant = messages.findLast((message) => message.role === "assistant");
   const userText = user && textPart(user);
   const finalContent = assistant && textPart(assistant);
-  const activities: AgentActivity[] = [];
-  let streamingContent = "";
-  let segment = "";
-  let sawTool = false;
-  const tools = new Map<string, Extract<AgentActivity, { type: "tool" }>>();
-  const flushNote = () => { if (segment) { activities.push({ type: "note", id: `${runId}:note:${activities.length}`, text: segment }); segment = ""; } };
-  for (const event of events) {
-    if (event.type === "model.delta") { if (sawTool) streamingContent += event.text ?? ""; else segment += event.text ?? ""; }
-    else if (event.type === "tool.started" || event.type === "approval.required") {
-      flushNote(); sawTool = true;
-      const callId = String((event as { callId?: unknown }).callId ?? "unknown");
-      const tool: Extract<AgentActivity, { type: "tool" }> = { type: "tool", id: event.eventId ?? `${runId}:tool:${callId}`, callId, name: event.name ?? "document_operation", state: event.type === "approval.required" ? "approval" : "running", input: event.input };
-      tools.set(callId, tool); activities.push(tool);
-    } else if (event.type === "tool.completed" || event.type === "tool.failed" || event.type === "approval.resolved") {
-      const tool = tools.get(String((event as { callId?: unknown }).callId ?? "unknown"));
-      if (!tool) continue;
-      if (event.type === "tool.completed") Object.assign(tool, { state: "completed" as const, output: event.output, durationMs: typeof event.output === "object" && event.output && "durationMs" in event.output ? Number(event.output.durationMs) : undefined });
-      if (event.type === "tool.failed") Object.assign(tool, { state: "failed" as const, error: event.error, durationMs: event.durationMs });
-      if (event.type === "approval.resolved") Object.assign(tool, { state: event.decision === "approved" ? "running" as const : "failed" as const, error: event.decision === "rejected" ? "已拒绝" : undefined });
-    } else if (event.type === "assistant.message" && !finalContent) streamingContent = event.text ?? "";
-    else if (event.type === "model.completed") { if (sawTool) flushNote(); else { streamingContent = segment; segment = ""; } }
-  }
-  if (sawTool) flushNote(); else if (!streamingContent) streamingContent = segment;
+  const reduced = reduceAgentEvents(events, runId);
+  const activities = reduced.activities;
+  const streamingContent = reduced.streamingContent || reduced.textBuffer;
   if (!userText && !finalContent && !events.length) return undefined;
   return { id: runId, runId, user: { id: user?.id ?? `${runId}:user`, content: userText ?? events.find((event) => event.type === "turn.started")?.text ?? "", createdAt: user?.created_at, deliveryStatus: user?.delivery_status ?? "sent" }, assistant: { messageId: assistant?.id, status: assistantStatus(events, finalContent), streamingContent: streamingContent || undefined, finalContent, activities } };
 }

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { DocumentEnginePort } from "@/modules/documents/application/document-engine-port";
-import type { DocumentInspection, ParagraphAddress, TableCellAddress } from "@/modules/documents/domain/types";
+import type { DocumentInspection, MutationRequest, ParagraphAddress, TableCellAddress } from "@/modules/documents/domain/types";
 import { blockingPackageErrors } from "@/modules/documents/infrastructure/ooxml/diagnostic-policy";
 
 import type { AgentTool } from "./loop";
@@ -67,6 +67,14 @@ async function inspectCurrent(
     throw new Error("WORKING_DOCUMENT_INSPECTION_FAILED");
   }
   return { bytes: current.bytes, inspection };
+}
+
+async function planIfAvailable(
+  documents: DocumentEnginePort,
+  bytes: Uint8Array,
+  request: MutationRequest,
+) {
+  return documents.planMutation ? documents.planMutation(bytes, request) : undefined;
 }
 
 export function createDocumentTools(
@@ -171,11 +179,12 @@ export function createDocumentTools(
       const operation = paragraph
         ? { kind: "replace-text" as const, address: paragraph.address as ParagraphAddress, expectedText: input.expectedText, replacement: input.replacement, ...(input.formatPolicy ? { formatPolicy: input.formatPolicy } : {}) }
         : { kind: "set-cell-text" as const, address: cell!.address as TableCellAddress, expectedText: input.expectedText, text: input.replacement };
+      const plan = await planIfAvailable(documents, current.bytes, { expectedRevision: input.expectedRevision, operations: [operation] });
       const mutation = await documents.mutate(current.bytes, { expectedRevision: input.expectedRevision, operations: [operation] });
       const validated = await documents.validate(mutation.bytes);
       if (blockingPackageErrors(validated.diagnostics).length > 0) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
       const committed = await working.commit({ expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
-      return { nodeId: input.nodeId, previousRevision: input.expectedRevision, revision: committed.revision, changedEntries: mutation.changedEntries };
+      return { nodeId: input.nodeId, previousRevision: input.expectedRevision, revision: committed.revision, changedEntries: mutation.changedEntries, riskLevel: plan?.riskLevel };
     },
   };
 
@@ -198,11 +207,12 @@ export function createDocumentTools(
           ? { kind: "replace-text" as const, address: paragraph.address as ParagraphAddress, expectedText: change.expectedText, replacement: change.replacement, ...(change.formatPolicy ? { formatPolicy: change.formatPolicy } : {}) }
           : { kind: "set-cell-text" as const, address: cell!.address as TableCellAddress, expectedText: change.expectedText, text: change.replacement };
       });
+      const plan = await planIfAvailable(documents, current.bytes, { expectedRevision: input.expectedRevision, operations });
       const mutation = await documents.mutate(current.bytes, { expectedRevision: input.expectedRevision, operations });
       const validated = await documents.validate(mutation.bytes);
       if (blockingPackageErrors(validated.diagnostics).length > 0) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
       const committed = await working.commit({ expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
-      return { changedCount: input.changes.length, nodeIds: input.changes.map((change) => change.nodeId), previousRevision: input.expectedRevision, revision: committed.revision, changedEntries: mutation.changedEntries };
+      return { changedCount: input.changes.length, nodeIds: input.changes.map((change) => change.nodeId), previousRevision: input.expectedRevision, revision: committed.revision, changedEntries: mutation.changedEntries, riskLevel: plan?.riskLevel };
     },
   };
 

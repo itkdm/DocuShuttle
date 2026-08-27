@@ -8,6 +8,8 @@ import type {
 import { sha256 } from "./hash";
 import { assertLoadedEntryPath, preflightZipPackage } from "./package-security";
 import { attributes, validateXml } from "./xml";
+import { relationshipBase, relationshipSource, resolveRelationshipTarget } from "./relationship-utils";
+import { buildOpcPackageGraph, type OpcPackageGraph } from "./opc-graph";
 
 export interface LoadedPackage {
   originalBytes: Uint8Array;
@@ -16,40 +18,7 @@ export interface LoadedPackage {
   manifest: DocumentManifest;
   contentTypes: ReadonlyMap<string, string>;
   diagnostics: readonly DocumentDiagnostic[];
-}
-
-function normalizePackagePath(value: string): string | undefined {
-  const parts: string[] = [];
-  if (value.includes("\\") || value.includes("?") || value.includes("#")) return undefined;
-  for (const encodedPart of value.split("/")) {
-    let part: string;
-    try {
-      part = decodeURIComponent(encodedPart);
-    } catch {
-      return undefined;
-    }
-    if (!part || part === ".") continue;
-    if (part.includes("/") || part.includes("\\") || /[\u0000-\u001f\u007f]/.test(part)) return undefined;
-    if (part === "..") {
-      if (parts.length === 0) return undefined;
-      parts.pop();
-    } else {
-      parts.push(part);
-    }
-  }
-  return parts.join("/");
-}
-
-function relationshipBase(relsPath: string): string | undefined {
-  if (relsPath === "_rels/.rels") return "";
-  const match = /^(.*)\/_rels\/([^/]+)\.rels$/.exec(relsPath);
-  return match ? match[1] : undefined;
-}
-
-function relationshipSource(relsPath: string): string | undefined {
-  if (relsPath === "_rels/.rels") return undefined;
-  const match = /^(.*)\/_rels\/([^/]+)\.rels$/.exec(relsPath);
-  return match ? `${match[1]}/${match[2]}` : undefined;
+  graph: OpcPackageGraph;
 }
 
 function parseContentTypes(xml: string): Map<string, string> {
@@ -320,6 +289,11 @@ export async function loadPackage(bytes: Uint8Array): Promise<LoadedPackage> {
     })),
   );
   manifestEntries.sort((left, right) => left.path.localeCompare(right.path));
+  const graph = await buildOpcPackageGraph({
+    entries,
+    texts,
+    contentTypeFor: (path) => contentTypeFor(path, contentTypes),
+  });
 
   return {
     originalBytes: Uint8Array.from(bytes),
@@ -332,6 +306,7 @@ export async function loadPackage(bytes: Uint8Array): Promise<LoadedPackage> {
     },
     contentTypes,
     diagnostics,
+    graph,
   };
 }
 
@@ -342,8 +317,4 @@ export function getContentType(
   return contentTypeFor(path, loaded.contentTypes);
 }
 
-export function resolveRelationshipTarget(relsPath: string, target: string): string | undefined {
-  const base = relationshipBase(relsPath);
-  if (base === undefined) return undefined;
-  return normalizePackagePath(target.startsWith("/") ? target.slice(1) : `${base}/${target}`);
-}
+export { resolveRelationshipTarget } from "./relationship-utils";

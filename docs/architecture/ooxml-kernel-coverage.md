@@ -40,7 +40,7 @@
 ```text
 字节
   → package-security.preflightZipPackage   ZIP 炸弹/路径/目录
-  → package-model.loadPackage              解压、UTF-8 XML、关系、宏、Content_Types
+  → package-model.loadPackage              解压、UTF-8 XML、OPC graph、宏、Content_Types
   → inspector.indexDocument                无损 XML 源树切段落/表/图
   → inspect 返回 nodes + diagnostics
   → mutate：对目标节点做字符串补丁
@@ -55,6 +55,7 @@
 | 内核 | `src/modules/documents/infrastructure/ooxml/ooxml-preservation-kernel.ts` |
 | ZIP 预检 | `package-security.ts` |
 | 包模型 | `package-model.ts` |
+| OPC 关系图 | `opc-graph.ts` / `relationship-utils.ts` |
 | 节点索引 | `inspector.ts` |
 | 字符串 XML | `xml.ts` |
 | 打开 vs 写入 | `diagnostic-policy.ts` |
@@ -62,7 +63,7 @@
 
 ### 3.1 打开
 
-`loadPackage` 把 DOCX 当 ZIP：列出 entry、校验 XML well-formed、检查主文档/关系/宏。  
+`loadPackage` 把 DOCX 当 OPC ZIP：列出全部 entry、建立 `parts + relationships` 图、校验 XML well-formed、检查主文档/关系/宏。  
 `diagnostic-policy` 把诊断分成两类：
 
 - **包完整性 error**：缺 `word/document.xml`、非法 XML、宏、会出网的非超链接外部关系 → 上传失败。
@@ -74,7 +75,7 @@ ZIP 结束记录后的填充字节已忽略（WPS/Word 导出常见）。
 
 节点种类只有三种：`paragraph` / `table-cell` / `image`。
 
-定位方式是 **带 UTF-16 source span 的无损 XML 源树**，不是可回写 DOM：
+定位方式是 **带 UTF-16 source span 的无损 XML 源树**，不是可回写 DOM；图片、超链接等跨 part 引用统一通过 OPC graph 解析：
 
 ```106:118:src/modules/documents/infrastructure/ooxml/xml.ts
 export function findElementRanges(xml: string, qualifiedName: string): XmlRange[] {
@@ -84,7 +85,7 @@ export function findElementRanges(xml: string, qualifiedName: string): XmlRange[
   );
 ```
 
-`lossless-xml.ts` 以栈匹配开始/闭合标签，保留原始 source slice、open/content/close/end span 和 children；因此嵌套范围不会在内层闭合标签处截断。当前 inspector 仍暂不把嵌套表 cell 提升为可写语义节点，这是 P2 的明确缺口，而不是坐标错误。
+`lossless-xml.ts` 以栈匹配开始/闭合标签，保留原始 source slice、open/content/close/end span 和 children；因此嵌套范围不会在内层闭合标签处截断。`opc-graph.ts` 保留所有未知 part，并提供按 source part 查询 relationship、规范化 target 和 source hash 的统一入口。
 
 图片靠 `r:embed` + relationships；同一 media part 被多处引用则拒绝替换（避免一改全改）。
 

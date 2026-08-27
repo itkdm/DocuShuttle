@@ -2,7 +2,7 @@
 
 import { Check, ChevronDown, Cloud, Download, FilePlus2, History, Menu, PanelLeftOpen, PanelRightOpen, RotateCcw, Sparkles, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentPanel } from "./agent-panel";
 import { mergeTimelineEvents } from "./agent-timeline";
 import { DocumentCanvas } from "./document-canvas";
@@ -13,6 +13,7 @@ import { formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
 import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserAgentLoopResult, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { useConversationStore } from "./conversation-store";
 import { listBrowserTasks, loadBrowserTaskWorkspace } from "@/modules/tasks/browser-tasks";
 import type { TaskSummary } from "@/modules/tasks/domain";
 import { taskIdFromPathname, taskUrl } from "@/modules/tasks/task-url";
@@ -64,15 +65,12 @@ export function Workbench() {
   const [imageNodes, setImageNodes] = useState<BrowserImageNode[]>([]);
   const [paragraphCount, setParagraphCount] = useState(0);
   const [tableCellCount, setTableCellCount] = useState(0);
-  const [conversation, setConversation] = useState<Array<{ role: "user" | "agent"; text: string }>>([]);
+  const { conversation, setConversation, loopResult, setLoopResult, liveEvents, setLiveEvents, timelineHistory, setTimelineHistory } = useConversationStore();
   const [conversationCursor, setConversationCursor] = useState<string | null>(null);
   const [loadingEarlierMessages, setLoadingEarlierMessages] = useState(false);
-  const [loopResult, setLoopResult] = useState<BrowserAgentLoopResult>();
-  const [liveEvents, setLiveEvents] = useState<BrowserAgentLoopResult["events"]>([]);
-  const [timelineHistory, setTimelineHistory] = useState<BrowserAgentLoopResult["events"]>([]);
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>("default");
 
-  const resetWorkspace = () => {
+  const resetWorkspace = useCallback(() => {
     loadedTaskIdRef.current = undefined;
     setProposal("pending");
     setStage("idle");
@@ -97,7 +95,7 @@ export function Workbench() {
     setLiveEvents([]);
     setTimelineHistory([]);
     setNotice("请选择真实 DOCX，或从左侧打开一个历史任务");
-  };
+  }, [setConversation, setLoopResult, setLiveEvents, setTimelineHistory]);
 
   const refreshTaskList = async () => {
     try {
@@ -222,7 +220,7 @@ export function Workbench() {
       }
     })();
     return () => abort.abort();
-  }, [routeTaskId]);
+  }, [routeTaskId, resetWorkspace, setConversation, setLiveEvents, setLoopResult, setTimelineHistory]);
 
   // Load completed runs independently from the document bootstrap. A large
   // DOCX preview can take several seconds; the conversation history should
@@ -241,7 +239,7 @@ export function Workbench() {
       if (!cancelled) setTimelineHistory([]);
     });
     return () => { cancelled = true; };
-  }, [taskId, run?.id]);
+  }, [taskId, run?.id, setTimelineHistory]);
 
   async function loadEarlierConversationMessages() {
     if (!taskId || !conversationCursor || loadingEarlierMessages) return;

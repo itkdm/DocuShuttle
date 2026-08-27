@@ -82,8 +82,15 @@ export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
     } else if (event.type === "tool.started" && eventName(event) && eventCallId(event)) {
       streamedText = "";
       streamedIndex = undefined;
-      toolIndex.set(eventCallId(event)!, items.length);
-      items.push({ kind: "tool", id: eventCallId(event)!, name: eventName(event)!, state: "running", input: event.input });
+      const callId = eventCallId(event)!;
+      const existing = toolIndex.get(callId);
+      if (existing !== undefined) {
+        const item = items[existing];
+        if (item.kind === "tool") { item.state = "running"; item.input = event.input; }
+      } else {
+        toolIndex.set(callId, items.length);
+        items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "running", input: event.input });
+      }
     } else if (event.type === "tool.completed" && eventName(event)) {
       const callId = eventCallId(event) ?? id;
       const index = toolIndex.get(callId);
@@ -97,7 +104,7 @@ export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
     } else if (event.type === "approval.required" && eventName(event)) {
       const callId = eventCallId(event) ?? id;
       const index = toolIndex.get(callId);
-      if (index === undefined) items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "approval", input: event.input });
+      if (index === undefined) { toolIndex.set(callId, items.length); items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "approval", input: event.input }); }
       else { const item = items[index]; if (item.kind === "tool") item.state = "approval"; }
     } else if (event.type === "completed") {
       const streamed = streamedIndex === undefined ? undefined : items[streamedIndex];

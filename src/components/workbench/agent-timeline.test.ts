@@ -53,4 +53,14 @@ describe("Agent execution timeline", () => {
     ]);
     expect(items[0]).toMatchObject({ kind: "message", text: "文档共有 3 个段落。" });
   });
+
+  it("keeps approval, resume, and completion on one tool card", () => {
+    const items = buildTimeline([
+      { type: "approval.required", eventId: "approval", callId: "call-4", name: "apply_text_change", input: { nodeId: "p-1" } },
+      { type: "tool.started", eventId: "resume-start", callId: "call-4", name: "apply_text_change", input: { nodeId: "p-1" } },
+      { type: "tool.completed", eventId: "resume-done", callId: "call-4", name: "apply_text_change", output: { revision: "r2" } },
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "tool", id: "call-4", state: "completed" });
+  });
 });

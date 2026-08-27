@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { compactAgentMessages, DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY, type AgentContextCompactionPolicy } from "./context-compaction";
 
 export type AgentLoopMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -129,6 +130,7 @@ export class AgentLoopRunner {
     private readonly maxIterations = 24,
     private readonly maxToolCalls = 48,
     private readonly modelTimeoutMs = 30_000,
+    private readonly contextCompactionPolicy: AgentContextCompactionPolicy = DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY,
   ) {}
 
   async run(runId: string, userText: string, signal?: AbortSignal): Promise<AgentLoopResult> {
@@ -196,6 +198,13 @@ export class AgentLoopRunner {
     while (checkpoint.iterations < this.maxIterations) {
       checkpoint.iterations += 1;
       const modelStartedEvent = emit({ type: "model.started", text: "正在处理请求" }, false);
+      const context = compactAgentMessages(checkpoint.messages, this.contextCompactionPolicy);
+      if (context.compacted) {
+        // Keep the checkpoint and the provider-facing transcript aligned. The
+        // full user-visible execution history remains in checkpoint.trace;
+        // only model context is summarized when it exceeds the policy.
+        checkpoint.messages = context.messages;
+      }
       // Persist the observable boundary before entering a potentially long
       // provider call so a refresh can recover the real in-flight phase.
       await this.store.save(runId, checkpoint);
@@ -207,7 +216,7 @@ export class AgentLoopRunner {
       const timeout = setTimeout(() => modelController.abort(new Error("模型响应超时")), this.modelTimeoutMs);
       signal?.addEventListener("abort", abortModel, { once: true });
       try {
-        decision = await this.model.decide({ messages: checkpoint.messages, tools: this.tools, signal: modelController.signal, onTextDelta: (text) => emit({ type: "model.delta", text, channel: "commentary" }) });
+        decision = await this.model.decide({ messages: context.messages, tools: this.tools, signal: modelController.signal, onTextDelta: (text) => emit({ type: "model.delta", text, channel: "commentary" }) });
       } catch (error) {
         // Provider/network failures must become a durable checkpoint instead of
         // leaving the run in `running` forever (or only returning a generic 500).

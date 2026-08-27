@@ -2,6 +2,7 @@ export * from "./application/events";
 export * from "./application/ports";
 export * from "./application/runtime";
 export * from "./application/loop";
+export * from "./application/context-compaction";
 export * from "./application/document-tools";
 export * from "./application/document-version-tools";
 export * from "./application/source-context-tools";

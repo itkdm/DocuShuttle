@@ -252,7 +252,12 @@ export function Workbench() {
     const abortController = new AbortController();
     agentAbortRef.current = abortController;
     try {
-      const activeRun = run ?? await createBrowserAgentRun(taskId, prompt);
+      const startsFreshRun = !run || run.status === "cancelled";
+      if (startsFreshRun) {
+        setLiveEvents([]);
+        setLoopResult(undefined);
+      }
+      const activeRun = startsFreshRun ? await createBrowserAgentRun(taskId, prompt) : run;
       setRun(activeRun);
       const result = await runBrowserAgentLoopStream(activeRun.id, prompt, permissionMode, (event) => {
         setLiveEvents((items) => mergeTimelineEvents(items, [event]));

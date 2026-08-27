@@ -4,6 +4,7 @@ import { createDefaultFeatureAdapterRegistry } from "./feature-adapter-registry"
 export type NodeCapabilityContext = {
   textBox?: boolean;
   crossRun?: boolean;
+  contentControl?: boolean;
   containsNestedTable?: boolean;
   sharedMedia?: boolean;
 };

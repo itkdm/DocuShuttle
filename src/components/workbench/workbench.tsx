@@ -57,6 +57,7 @@ export function Workbench() {
   const [awaitingFinalReview, setAwaitingFinalReview] = useState(false);
   const [currentRevision, setCurrentRevision] = useState<string>();
   const [imageCandidates, setImageCandidates] = useState<BrowserImageCandidate[]>([]);
+  const agentAbortRef = useRef<AbortController | undefined>(undefined);
   const [imageTargetNodeId, setImageTargetNodeId] = useState("");
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageBusy, setImageBusy] = useState(false);
@@ -249,6 +250,8 @@ export function Workbench() {
     setAwaitingFinalReview(false);
     setProposalSummary(undefined);
     setLiveEvents([]);
+    const abortController = new AbortController();
+    agentAbortRef.current = abortController;
     try {
       const activeRun = run ?? await createBrowserAgentRun(taskId, prompt);
       setRun(activeRun);
@@ -256,7 +259,7 @@ export function Workbench() {
         setLiveEvents((items) => [...items, event]);
         if (event.type === "model.delta") setNotice("纸上鸭正在回复");
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
-      });
+      }, abortController.signal);
       setLoopResult(result);
       setLiveEvents((items) => mergeTimelineEvents(items, result.events));
       const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
@@ -279,6 +282,7 @@ export function Workbench() {
       setStage(result.checkpoint.pendingApproval ? "awaiting" : wrote ? "complete" : "idle");
       setNotice(result.checkpoint.pendingApproval ? "Agent 已完成读取并请求写入确认" : wrote ? "新版本已加载到文档画布" : "Agent 已完成本轮对话");
     } catch (error) {
+      if (abortController.signal.aborted) return;
       // A model/provider can fail after the loop has durably saved an approval
       // checkpoint. Recover that checkpoint so the user sees the real next
       // action instead of a misleading generic failure message.
@@ -296,6 +300,8 @@ export function Workbench() {
       setConversation((items) => [...items, { role: "agent", text: error instanceof Error ? `这次分析没有完成：${error.message}` : "这次分析没有完成，请重试。" }]);
       setStage("idle");
       setNotice(error instanceof Error ? error.message : "Agent 分析失败");
+    } finally {
+      if (agentAbortRef.current === abortController) agentAbortRef.current = undefined;
     }
   };
 
@@ -454,6 +460,7 @@ export function Workbench() {
     setVersionsOpen(false); setMobilePanel("none"); setNotice(`已从 ${id} 创建新的恢复版本，历史记录仍完整保留`);
   };
   const cancelRun = async () => {
+    agentAbortRef.current?.abort();
     try { if (run && workspaceReady) setRun(await cancelBrowserAgentRun(run.id)); } catch { /* persisted latest state wins */ }
     setStage("idle"); setNotice("任务已取消，最近有效版本未受影响");
   };

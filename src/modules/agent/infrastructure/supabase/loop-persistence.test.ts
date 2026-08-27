@@ -19,7 +19,7 @@ describe("SupabaseAgentLoopStore interaction resolution contract", () => {
         decision: "approved" as const,
       },
     };
-    const rpc = vi.fn().mockResolvedValue({ data: checkpoint, error: null });
+    const rpc = vi.fn().mockResolvedValue({ data: { ...checkpoint, trace: [{ type: "model.started" }] }, error: null });
     const store = new SupabaseAgentLoopStore({ rpc } as unknown as SupabaseClient);
 
     await expect(store.resolvePendingApproval("run-1", "interaction-1", "call-1", "approved")).resolves.toEqual(checkpoint);
@@ -35,10 +35,11 @@ describe("SupabaseAgentLoopStore interaction resolution contract", () => {
   });
 
   it("keeps user-input message identity in the resolution RPC payload", async () => {
-    const rpc = vi.fn().mockResolvedValue({ data: { status: "running" }, error: null });
+    const rpc = vi.fn().mockResolvedValue({ data: { status: "running", trace: [{ type: "model.started" }] }, error: null });
     const store = new SupabaseAgentLoopStore({ rpc } as unknown as SupabaseClient);
 
-    await store.resolvePendingUserInput("run-2", "interaction-2", { id: "message-2", text: "第三章" });
+    const result = await store.resolvePendingUserInput("run-2", "interaction-2", { id: "message-2", text: "第三章" });
+    expect(result && "trace" in result).toBe(false);
     expect(rpc).toHaveBeenCalledWith("resolve_agent_loop_interaction", expect.objectContaining({
       p_interaction_type: "user_input",
       p_resolution: { interactionId: "interaction-2", type: "user_input", messageId: "message-2", text: "第三章" },

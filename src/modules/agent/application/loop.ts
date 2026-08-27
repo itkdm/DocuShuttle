@@ -58,6 +58,14 @@ export type AgentLoopCheckpoint = {
   permissionMode?: AgentPermissionMode;
 };
 
+/** Normalize checkpoints at persistence boundaries and discard pre-separation activity data. */
+export const normalizeAgentLoopCheckpoint = (raw: unknown): AgentLoopCheckpoint | undefined => {
+  if (!raw || typeof raw !== "object") return undefined;
+  const checkpoint = { ...(raw as Record<string, unknown>) };
+  delete checkpoint["trace"];
+  return checkpoint as AgentLoopCheckpoint;
+};
+
 export type AgentLoopStore = {
   load(runId: string): Promise<AgentLoopCheckpoint | undefined>;
   save(runId: string, checkpoint: AgentLoopCheckpoint): Promise<void>;
@@ -272,8 +280,8 @@ export class AgentLoopRunner {
       }
     };
     const saveCheckpoint = async () => {
-      await flushDurableEvents();
       await this.store.save(runId, checkpoint);
+      await flushDurableEvents();
     };
     const emit = (event: AgentEventPayload, notify = true) => {
       const timestamped = createAgentEvent(runId, event);
@@ -501,8 +509,8 @@ export class AgentLoopRunner {
       }
     };
     const saveCheckpoint = async () => {
-      await flushDurableEvents();
       await this.store.save(runId, checkpoint);
+      await flushDurableEvents();
     };
     const emit = (event: AgentEventPayload, notify = true) => {
       const activityEvent = createAgentEvent(runId, event);

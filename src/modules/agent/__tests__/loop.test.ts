@@ -272,6 +272,26 @@ describe("AgentLoopRunner", () => {
     expect(diagnostics).toContain("agent.event.persist_failed");
   });
 
+  it("does not project tool.started when checkpoint save fails first", async () => {
+    const store = new MemoryStore();
+    store.failFromSave = 2;
+    let executions = 0;
+    const tool: AgentTool = { ...inspectTool, async execute() { executions += 1; return { ok: true }; } };
+    const model: AgentModelPort = { decide: async () => ({ kind: "tool_calls", calls: [{ id: "checkpoint-before-event", name: "inspect_document", input: { query: "summary" } }] }) };
+    await expect(new AgentLoopRunner(model, store, [tool]).run("run-checkpoint-before-event", "读取")).rejects.toThrow("simulated checkpoint failure");
+    expect(store.durableEvents.some((event) => event.type === "tool.started")).toBe(false);
+    expect(store.appendEventsCalls).toBe(1);
+    expect(executions).toBe(0);
+  });
+
+  it("does not project turn.completed when terminal checkpoint save fails", async () => {
+    const store = new MemoryStore();
+    store.failFromSave = 2;
+    await expect(new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "完成" }) }, store, []).run("run-terminal-before-event", "执行")).rejects.toThrow("simulated checkpoint failure");
+    expect(store.durableEvents.some((event) => event.type === "turn.completed")).toBe(false);
+    expect(store.appendEventsCalls).toBe(1);
+  });
+
   it("persists the tool boundary before executing a side effect", async () => {
     const store = new MemoryStore();
     let boundarySeen = false;

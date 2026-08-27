@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { AGENT_LEASE_MANAGED_STATUSES, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentLoopStore } from "../../application/loop";
+import { AGENT_LEASE_MANAGED_STATUSES, normalizeAgentLoopCheckpoint, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentLoopStore } from "../../application/loop";
 import { createAgentEvent, type AgentEvent } from "../../application/events";
 import { ConcurrentRunUpdateError } from "../../domain/errors";
 import { logger, measure } from "@/infrastructure/observability";
@@ -16,11 +16,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       const result = await this.client.from("agent_runs").select("state").eq("id", runId).maybeSingle();
       if (result.error) throw new Error(`Unable to load agent loop checkpoint: ${result.error.message}`);
       const state = result.data?.state as Record<string, unknown> | undefined;
-      const legacyCheckpoint = state?.loopCheckpoint as (AgentLoopCheckpoint & Record<string, unknown>) | undefined;
-      if (!legacyCheckpoint) return undefined;
-      const checkpoint = { ...legacyCheckpoint } as AgentLoopCheckpoint & Record<string, unknown>;
-      delete (checkpoint as Record<string, unknown>)["trace"];
-      return checkpoint;
+      return normalizeAgentLoopCheckpoint(state?.loopCheckpoint);
     });
   }
 
@@ -131,8 +127,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     }
     if (checkpoint.status === "cancelled") return;
     const event = createAgentEvent(runId, { type: "turn.cancelled", text: "本轮操作已取消。" });
-    const checkpointWithoutTrace = { ...checkpoint } as AgentLoopCheckpoint & Record<string, unknown>;
-    delete (checkpointWithoutTrace as Record<string, unknown>)["trace"];
+    const checkpointWithoutTrace = normalizeAgentLoopCheckpoint(checkpoint)!;
     const nextCheckpoint: AgentLoopCheckpoint = { ...checkpointWithoutTrace, status: "cancelled", pendingInteraction: undefined, pendingResolution: undefined, finalText: event.text };
     const nextState = { ...state, status: "cancelled", pendingInteraction: null, pendingResolution: null, loopCheckpoint: nextCheckpoint, version: current.data.lock_version + 1 };
     const updated = await this.client.from("agent_runs")
@@ -176,7 +171,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
         }
         throw new Error(`Unable to claim agent interaction: ${result.error.message}`);
       }
-      return (result.data ?? undefined) as AgentLoopCheckpoint | undefined;
+      return normalizeAgentLoopCheckpoint(result.data);
     });
   }
 }

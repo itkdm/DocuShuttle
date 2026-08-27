@@ -32,6 +32,15 @@ describe("Agent execution timeline", () => {
     expect(merged[0]).toMatchObject({ eventId: "server-turn", type: "turn.started", text: "你好" });
   });
 
+  it("replaces a live event with its durable replay version", () => {
+    const merged = mergeTimelineEvents(
+      [{ eventId: "same", type: "tool.started", callId: "call-1", name: "inspect_document" }] as never,
+      [{ eventId: "same", type: "tool.started", callId: "call-1", name: "inspect_document", sequence: 10 }] as never,
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ eventId: "same", sequence: 10 });
+  });
+
   it("does not merge equal prompts from different turns", () => {
     const merged = mergeTimelineEvents(
       [{ eventId: "turn-1", type: "turn.started", text: "请检查", clientMessageId: "message-1" }] as never,

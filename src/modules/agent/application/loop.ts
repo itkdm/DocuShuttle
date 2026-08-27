@@ -184,6 +184,54 @@ export class AgentLoopRunner {
     finally { clearInterval(timer); }
   }
 
+  private async throwForTransportInterruption(runId: string, signal?: AbortSignal): Promise<never> {
+    if (!signal?.aborted) throw new Error("Tool execution failed");
+    const latest = await this.store.load(runId);
+    if (latest?.status === "cancelled") throw new Error("RUN_CANCELLED");
+    await this.store.releaseLeaseForRecovery?.(runId);
+    throw new Error(TRANSPORT_INTERRUPTED);
+  }
+
+  private findUnresolvedToolCall(checkpoint: AgentLoopCheckpoint) {
+    const completed = new Set(checkpoint.messages.filter((message) => message.role === "tool" && message.toolCallId).map((message) => message.toolCallId));
+    return checkpoint.messages
+      .filter((message) => message.role === "assistant" && message.toolCalls)
+      .flatMap((message) => message.toolCalls ?? [])
+      .find((call) => !completed.has(call.id));
+  }
+
+  private async recoverUnfinishedTool(runId: string, checkpoint: AgentLoopCheckpoint, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void): Promise<void> {
+    const call = this.findUnresolvedToolCall(checkpoint);
+    if (!call) return;
+    if (signal?.aborted) await this.throwForTransportInterruption(runId, signal);
+    const tool = this.tools.find((candidate) => candidate.name === call.name);
+    if (!tool) throw new Error(`Unknown agent tool: ${call.name}`);
+    const input = tool.inputSchema.parse(call.input);
+    const idempotencyKey = `${runId}:${call.id}`;
+    const existingReceipt = await this.store.loadEffectReceipt?.(runId, idempotencyKey);
+    let output: unknown;
+    let failed: string | undefined;
+    if (existingReceipt) output = existingReceipt.output;
+    else {
+      try {
+        output = await this.withLeaseHeartbeat(runId, () => tool.execute(input, { runId, callId: call.id, idempotencyKey, attempt: checkpoint.toolCallCount, signal }));
+        if (signal?.aborted) await this.throwForTransportInterruption(runId, signal);
+        if (this.store.saveEffectReceipt) await this.store.saveEffectReceipt(runId, { idempotencyKey, callId: call.id, toolName: call.name, output, completedAt: new Date().toISOString() });
+      } catch (error) {
+        if (signal?.aborted) await this.throwForTransportInterruption(runId, signal);
+        failed = error instanceof Error ? error.message : "Tool execution failed";
+      }
+    }
+    checkpoint.messages.push({ role: "tool", content: failed ? JSON.stringify({ error: failed }) : serializeToolOutput(output), toolCallId: call.id, toolName: call.name });
+    const event = failed
+      ? createAgentEvent(runId, { type: "tool.failed", callId: call.id, name: call.name, error: failed })
+      : createAgentEvent(runId, { type: "tool.completed", callId: call.id, name: call.name, output: summarizeTraceValue(output) });
+    checkpoint.status = "running";
+    await this.store.save(runId, checkpoint);
+    try { await this.store.appendEvents?.(runId, [event]); } catch { this.onEngineeringEvent?.({ event: "agent.event.persist_failed", metadata: { runId, eventId: event.eventId, eventType: event.type } }); }
+    onEvent?.(event);
+  }
+
   async run(runId: string, userText: string, signal?: AbortSignal): Promise<AgentLoopResult> {
     return this.runWithPermission(runId, userText, "default", signal);
   }
@@ -199,6 +247,14 @@ export class AgentLoopRunner {
         return { checkpoint: latest ?? current, events: [] };
       }
     }
+    const latest = await this.store.load(runId);
+    if (latest?.pendingResolution?.type === "approval") {
+      return this.resume(runId, latest.pendingResolution.decision, latest.pendingResolution.interactionId, latest.pendingResolution.callId, signal, onEvent);
+    }
+    if (latest?.pendingResolution?.type === "user_input") {
+      return this.runWithPermission(runId, latest.pendingResolution.text, latest.permissionMode ?? "default", signal, onEvent, latest.pendingResolution.messageId, latest.pendingResolution.interactionId);
+    }
+    if (latest) await this.recoverUnfinishedTool(runId, latest, signal, onEvent);
     return this.runWithPermission(runId, "", current.permissionMode ?? "default", signal, onEvent);
   }
 
@@ -465,6 +521,12 @@ export class AgentLoopRunner {
           await saveCheckpoint();
           onEvent?.(toolCompletedEvent);
         } catch (error) {
+          if (signal?.aborted) {
+            const latest = await this.store.load(runId);
+            if (latest?.status === "cancelled") return { checkpoint: latest, events };
+            await this.store.releaseLeaseForRecovery?.(runId);
+            throw new Error(TRANSPORT_INTERRUPTED);
+          }
           const message = error instanceof Error ? error.message : "Tool execution failed";
           checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: message }), toolCallId: call.id, toolName: call.name });
           const toolFailedEvent = emit({ type: "tool.failed", callId: call.id, name: call.name, error: message, durationMs: Date.now() - toolStartedAt }, false);
@@ -576,6 +638,12 @@ export class AgentLoopRunner {
         await saveCheckpoint();
         onEvent?.(completedEvent);
       } catch (error) {
+        if (signal?.aborted) {
+          const latest = await this.store.load(runId);
+          if (latest?.status === "cancelled") return { checkpoint: latest, events };
+          await this.store.releaseLeaseForRecovery?.(runId);
+          throw new Error(TRANSPORT_INTERRUPTED);
+        }
         const message = error instanceof Error ? error.message : "Tool execution failed";
         checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: resolved.decision, error: message }), toolCallId: resolved.callId, toolName: resolved.toolName });
         const failedEvent = emit({ type: "tool.failed", callId: resolved.callId, name: resolved.toolName, error: message, durationMs: Date.now() - toolStartedAt }, false);

@@ -15,6 +15,7 @@ class MemoryStore {
   failFromSave?: number;
   async load() { return structuredClone(this.value); }
   async save(_runId: string, checkpoint: AgentLoopCheckpoint) { this.saves += 1; if (this.failFromSave !== undefined && this.saves >= this.failFromSave) throw new Error("simulated checkpoint failure"); this.value = structuredClone(checkpoint); }
+  seed(checkpoint: AgentLoopCheckpoint) { this.value = structuredClone(checkpoint); }
   async heartbeat() { this.heartbeats += 1; return true; }
   async releaseLeaseForRecovery() {}
   async loadEffectReceipt(_runId: string, idempotencyKey: string) { return this.receipts.get(idempotencyKey); }
@@ -83,6 +84,88 @@ describe("AgentLoopRunner", () => {
     expect(released).toBe(1);
     expect(store.durableEvents.some((event) => event.type === "turn.cancelled")).toBe(false);
     expect((await store.load())?.status).toBe("running");
+  });
+
+  it("does not turn a tool transport abort into tool.failed", async () => {
+    const store = new MemoryStore();
+    let released = 0;
+    store.releaseLeaseForRecovery = async () => { released += 1; };
+    const controller = new AbortController();
+    let toolStarted!: () => void;
+    const started = new Promise<void>((resolve) => { toolStarted = resolve; });
+    const tool: AgentTool = { name: "inspect", description: "Inspect", inputSchema: z.object({}), async execute(_input, context) {
+      toolStarted();
+      await new Promise<void>((resolve) => context.signal?.addEventListener("abort", () => resolve(), { once: true }));
+      throw new Error("socket closed");
+    } };
+    const model: AgentModelPort = { decide: async () => ({ kind: "tool_calls", calls: [{ id: "tool-detach", name: "inspect", input: {} }] }) };
+    const promise = new AgentLoopRunner(model, store, [tool]).runWithPermission("run-tool-transport", "检查", "full", controller.signal);
+    await started;
+    controller.abort();
+    await expect(promise).rejects.toThrow(TRANSPORT_INTERRUPTED);
+    expect(released).toBe(1);
+    expect(store.durableEvents.some((event) => event.type === "tool.failed")).toBe(false);
+  });
+
+  it("does not turn an approved tool transport abort into tool.failed", async () => {
+    const store = new MemoryStore();
+    store.releaseLeaseForRecovery = async () => {};
+    let executions = 0;
+    let executeStarted!: () => void;
+    const started = new Promise<void>((resolve) => { executeStarted = resolve; });
+    const tool: AgentTool = { name: "apply_change", description: "Apply", inputSchema: z.object({ nodeId: z.string() }), requiresApproval: true, async execute(_input, context) {
+      executions += 1;
+      executeStarted();
+      await new Promise<void>((resolve) => context.signal?.addEventListener("abort", () => resolve(), { once: true }));
+      throw new Error("socket closed");
+    } };
+    const paused = await new AgentLoopRunner({ decide: async () => ({ kind: "tool_calls", calls: [{ id: "approved-detach", name: "apply_change", input: { nodeId: "p-1" } }] }) }, store, [tool]).run("run-approved-transport", "修改");
+    const pending = paused.checkpoint.pendingInteraction;
+    await store.resolvePendingApproval("run-approved-transport", pending!.interactionId, "approved-detach", "approved");
+    const controller = new AbortController();
+    const promise = new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "完成" }) }, store, [tool]).resume("run-approved-transport", "approved", pending!.interactionId, "approved-detach", controller.signal);
+    await started;
+    controller.abort();
+    await expect(promise).rejects.toThrow(TRANSPORT_INTERRUPTED);
+    expect(executions).toBe(1);
+    expect(store.durableEvents.some((event) => event.type === "tool.failed")).toBe(false);
+  });
+
+  it("recovers an unfinished tool boundary with the original call id", async () => {
+    const store = new MemoryStore();
+    let executions = 0;
+    let receivedKey = "";
+    const tool: AgentTool = { name: "apply_change", description: "Apply", inputSchema: z.object({ nodeId: z.string() }), async execute(_input, context) { executions += 1; receivedKey = context.idempotencyKey; return { ok: true }; } };
+    const checkpoint: AgentLoopCheckpoint = { messages: [{ role: "assistant", content: "", toolCalls: [{ id: "original-call", name: "apply_change", input: { nodeId: "p-1" } }] }], iterations: 1, toolCallCount: 1, status: "running", permissionMode: "full" };
+    store.seed(checkpoint);
+    const recovered = await new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "已完成。" }) }, store, [tool]).recover("run-inflight");
+    expect(executions).toBe(1);
+    expect(receivedKey).toBe("run-inflight:original-call");
+    expect(recovered.checkpoint.messages.filter((message) => message.role === "tool" && message.toolCallId === "original-call")).toHaveLength(1);
+  });
+
+  it("materializes an existing receipt without executing an unfinished tool", async () => {
+    const store = new MemoryStore();
+    let executions = 0;
+    const tool: AgentTool = { name: "apply_change", description: "Apply", inputSchema: z.object({ nodeId: z.string() }), async execute() { executions += 1; return { wrong: true }; } };
+    store.seed({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "receipt-call", name: "apply_change", input: { nodeId: "p-1" } }] }], iterations: 1, toolCallCount: 1, status: "running", permissionMode: "full" });
+    await store.saveEffectReceipt("run-receipt", { idempotencyKey: "run-receipt:receipt-call", callId: "receipt-call", toolName: "apply_change", output: { ok: true }, completedAt: new Date().toISOString() });
+    const recovered = await new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "已完成。" }) }, store, [tool]).recover("run-receipt");
+    expect(executions).toBe(0);
+    expect(recovered.checkpoint.messages.filter((message) => message.role === "tool" && message.toolCallId === "receipt-call")).toHaveLength(1);
+  });
+
+  it("recovers an approved pending resolution without asking for approval again", async () => {
+    const store = new MemoryStore();
+    let executions = 0;
+    const tool: AgentTool = { name: "apply_change", description: "Apply", inputSchema: z.object({ nodeId: z.string() }), requiresApproval: true, async execute() { executions += 1; return { ok: true }; } };
+    const paused = await new AgentLoopRunner({ decide: async () => ({ kind: "tool_calls", calls: [{ id: "recover-approval", name: "apply_change", input: { nodeId: "p-1" } }] }) }, store, [tool]).run("run-recover-approval", "修改");
+    const pending = paused.checkpoint.pendingInteraction!;
+    await store.resolvePendingApproval("run-recover-approval", pending.interactionId, pending.type === "approval" ? pending.callId : "", "approved");
+    const recovered = await new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "已完成。" }) }, store, [tool]).recover("run-recover-approval");
+    expect(executions).toBe(1);
+    expect(recovered.checkpoint.pendingInteraction).toBeUndefined();
+    expect(recovered.checkpoint.pendingResolution).toBeUndefined();
   });
 
   it("does not duplicate the checkpoint save after a tool result", async () => {

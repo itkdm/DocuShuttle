@@ -69,7 +69,13 @@ export function mergeTimelineEvents(previous: readonly AgentEvent[], incoming: r
   const seen = new Set(previous.map(stableIdentity));
   incoming.forEach((event) => {
     const key = stableIdentity(event);
-    if (seen.has(key)) return;
+    const existingIndex = result.findIndex((item) => stableIdentity(item) === key);
+    if (existingIndex >= 0) {
+      const existing = result[existingIndex] as AgentEvent & { sequence?: number };
+      const candidate = event as AgentEvent & { sequence?: number };
+      if (existing.sequence === undefined && candidate.sequence !== undefined) result[existingIndex] = event;
+      return;
+    }
     // Reconcile optimistic and durable user turns only through the client
     // message identity. Text is content, not identity: the same prompt may
     // legitimately appear in more than one turn.

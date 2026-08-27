@@ -73,7 +73,7 @@ const eventDetail = (event: BrowserAgentLoopResult["events"][number]) => {
     const validation = "validationValid" in value && value.validationValid === false ? " · 校验未通过" : "";
     return `${value.summary}${validation}${duration}`;
   }
-  if (event.type === "model.completed" && typeof event.durationMs === "number") return `耗时 ${(event.durationMs / 1000).toFixed(event.durationMs < 1000 ? 1 : 0)} 秒`;
+  if ((event.type === "model.completed" || event.type === "tool.failed") && typeof event.durationMs === "number") return `${event.error ?? ""}${event.error ? " · " : ""}耗时 ${(event.durationMs / 1000).toFixed(event.durationMs < 1000 ? 1 : 0)} 秒`;
   return event.text ?? event.error ?? event.name ?? "";
 };
 

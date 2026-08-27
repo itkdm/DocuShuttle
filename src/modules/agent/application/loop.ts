@@ -68,7 +68,7 @@ export type AgentLoopEvent = { timestamp?: string } & (
   | { type: "assistant.message"; text: string }
   | { type: "tool.started"; callId: string; name: string; input: unknown }
   | { type: "tool.completed"; callId: string; name: string; output: unknown }
-  | { type: "tool.failed"; callId: string; name: string; error: string }
+  | { type: "tool.failed"; callId: string; name: string; error: string; durationMs?: number }
   | { type: "approval.required"; callId: string; name: string; input: unknown }
   | { type: "completed"; text: string }
   | { type: "turn.failed"; error: string });
@@ -244,7 +244,7 @@ export class AgentLoopRunner {
         } catch (error) {
           const message = error instanceof Error ? error.message : "Tool execution failed";
           checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: message }), toolCallId: call.id, toolName: call.name });
-          emit({ type: "tool.failed", callId: call.id, name: call.name, error: message });
+          emit({ type: "tool.failed", callId: call.id, name: call.name, error: message, durationMs: Date.now() - toolStartedAt });
         }
       }
       await this.store.save(runId, checkpoint);
@@ -288,7 +288,7 @@ export class AgentLoopRunner {
       } catch (error) {
         const message = error instanceof Error ? error.message : "Tool execution failed";
         checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval, error: message }), toolCallId: pending.callId, toolName: pending.name });
-        emit({ type: "tool.failed", callId: pending.callId, name: pending.name, error: message });
+        emit({ type: "tool.failed", callId: pending.callId, name: pending.name, error: message, durationMs: Date.now() - toolStartedAt });
       }
     } else {
       checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: "rejected", reason: "The user rejected this action." }), toolCallId: pending.callId, toolName: pending.name });

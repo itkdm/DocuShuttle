@@ -6,6 +6,7 @@ export type NodeCapabilityContext = {
   crossRun?: boolean;
   contentControl?: boolean;
   field?: boolean;
+  revision?: boolean;
   containsNestedTable?: boolean;
   sharedMedia?: boolean;
 };

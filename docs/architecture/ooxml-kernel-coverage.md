@@ -118,6 +118,8 @@ Feature Adapter Registry 提供统一生命周期钩子：recognition、semantic
 
 Field（`w:fldSimple` / `w:fldChar`）段落同样只读可理解，写入能力标记为 `FIELD_MUTATION_UNSUPPORTED`；字段 instruction 与缓存结果未来必须拆成独立 Operation，当前不会把显示结果当普通文本覆盖。
 
+Track Changes（`w:ins` / `w:del` / `w:moveFrom` / `w:moveTo`）中的段落会标记为 `REVISION_MUTATION_UNSUPPORTED`；当前只读并保留，未来由 accept/reject 或 native tracked mutation adapter 负责。
+
 ## 4. 真实文档上的缺口（有证据）
 
 对工作区实验报告的粗测：

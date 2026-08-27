@@ -3,7 +3,7 @@ import { capabilitiesFor, featureAdapterRegistry } from "../capability-registry"
 
 describe("OOXML capability registry", () => {
   it("exposes a provider-neutral feature adapter registry", () => {
-    expect(featureAdapterRegistry.list()).toEqual(["textbox", "content-control", "field", "cross-run-text", "nested-table-container", "shared-media"]);
+    expect(featureAdapterRegistry.list()).toEqual(["textbox", "content-control", "field", "tracked-revision", "cross-run-text", "nested-table-container", "shared-media"]);
     expect(featureAdapterRegistry.matching({ kind: "paragraph", textBox: true }).map(({ featureId }) => featureId)).toEqual(["textbox"]);
   });
   it("marks text boxes and nested containers guarded while keeping reads supported", () => {
@@ -29,5 +29,9 @@ describe("OOXML capability registry", () => {
 
   it("guards fields because instruction and cached result are distinct", () => {
     expect(capabilitiesFor("paragraph", { field: true })).toContainEqual(expect.objectContaining({ operation: "replace-text", state: "guarded", reasonCode: "FIELD_MUTATION_UNSUPPORTED" }));
+  });
+
+  it("guards tracked revisions until accept/reject semantics exist", () => {
+    expect(capabilitiesFor("paragraph", { revision: true })).toContainEqual(expect.objectContaining({ reasonCode: "REVISION_MUTATION_UNSUPPORTED" }));
   });
 });

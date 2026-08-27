@@ -5,6 +5,7 @@ export type NodeCapabilityContext = {
   textBox?: boolean;
   crossRun?: boolean;
   contentControl?: boolean;
+  field?: boolean;
   containsNestedTable?: boolean;
   sharedMedia?: boolean;
 };

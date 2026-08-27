@@ -132,6 +132,7 @@ async function indexParagraphs(
   cells: readonly IndexedCell[],
   textBoxes: readonly XmlRange[],
   contentControls: readonly XmlRange[],
+  fields: readonly XmlRange[],
 ): Promise<IndexedParagraph[]> {
   const paragraphs = findElementRanges(xml, "w:p");
   return Promise.all(
@@ -150,6 +151,7 @@ async function indexParagraphs(
       const capabilities: readonly NodeCapability[] | undefined = textBoxPath
         ? capabilitiesFor("paragraph", { textBox: true })
         : isContainedBy(range, contentControls) ? capabilitiesFor("paragraph", { contentControl: true })
+        : isContainedBy(range, fields) ? capabilitiesFor("paragraph", { field: true })
         : textNodes(range.xml).length > 1 ? capabilitiesFor("paragraph", { crossRun: true }) : undefined;
       const address: ParagraphAddress = {
         kind: "paragraph",
@@ -291,7 +293,7 @@ export async function indexDocument(loaded: LoadedPackage): Promise<DocumentInde
     const indexedCells = await indexCells(entry, xml, loaded.manifest.revision);
     cells.push(...indexedCells);
     paragraphs.push(
-      ...(await indexParagraphs(entry, xml, loaded.manifest.revision, indexedCells, findElementRanges(xml, "w:txbxContent"), findElementRanges(xml, "w:sdt"))),
+      ...(await indexParagraphs(entry, xml, loaded.manifest.revision, indexedCells, findElementRanges(xml, "w:txbxContent"), findElementRanges(xml, "w:sdt"), [...findElementRanges(xml, "w:fldSimple"), ...findElementRanges(xml, "w:fldChar")])),
     );
     images.push(...(await indexImages(loaded, entry, xml)));
     diagnostics.push(...unsupportedConstructDiagnostics(entry, xml));

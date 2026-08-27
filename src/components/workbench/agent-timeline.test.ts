@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTimeline } from "./agent-timeline";
+import { buildTimeline, mergeTimelineEvents } from "./agent-timeline";
 
 describe("Agent execution timeline", () => {
+  it("keeps the original turn when resumed events arrive", () => {
+    const first = [{ eventId: "u1", type: "turn.started", text: "改名字" }] as never;
+    const resumed = [
+      { eventId: "u1", type: "turn.started", text: "改名字" },
+      { eventId: "t1", type: "tool.started", callId: "call-1", name: "apply_text_change" },
+    ] as never;
+    const merged = mergeTimelineEvents(first, resumed);
+    expect(merged).toHaveLength(2);
+    expect(buildTimeline(merged).map((item) => item.kind)).toEqual(["user", "tool"]);
+  });
+
   it("keeps reasoning and tool results in order while merging one tool call", () => {
     const items = buildTimeline([
       { type: "turn.started", eventId: "u1", text: "请检查文档" },

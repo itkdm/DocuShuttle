@@ -4,6 +4,7 @@ import { Check, ChevronDown, Cloud, Download, FilePlus2, History, Menu, PanelLef
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { AgentPanel } from "./agent-panel";
+import { mergeTimelineEvents } from "./agent-timeline";
 import { DocumentCanvas } from "./document-canvas";
 import { OutlinePanel } from "./outline-panel";
 import { PaperDuckMark } from "./paperduck-mark";
@@ -164,7 +165,7 @@ export function Workbench() {
             const resumedLoop = await loadBrowserAgentLoop(workspace.latestRunId);
             if (abort.signal.aborted) return;
             setLoopResult(resumedLoop);
-            setLiveEvents(resumedLoop.events);
+            setLiveEvents((items) => mergeTimelineEvents(items, resumedLoop.events));
             setConversation(conversationFromLoop(resumedLoop.checkpoint.messages));
           } catch {
             setLoopResult(undefined);
@@ -257,7 +258,7 @@ export function Workbench() {
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
       });
       setLoopResult(result);
-      setLiveEvents(result.events);
+      setLiveEvents((items) => mergeTimelineEvents(items, result.events));
       const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
       if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
       if (result.checkpoint.status === "failed") throw new Error(result.checkpoint.finalText ?? "Agent Loop 未完成");
@@ -304,7 +305,7 @@ export function Workbench() {
     try {
       const result = await resumeBrowserAgentLoop(run.id, choice);
       setLoopResult(result);
-      setLiveEvents(result.events);
+      setLiveEvents((items) => mergeTimelineEvents(items, result.events));
       const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
       if (replies.length) setConversation((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text }))]);
       if (result.checkpoint.status === "completed") {

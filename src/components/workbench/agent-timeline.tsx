@@ -41,6 +41,16 @@ const eventError = (event: AgentEvent) => typeof event.error === "string" ? even
 const eventId = (event: AgentEvent, fallback: string) => typeof event.eventId === "string" ? event.eventId : fallback;
 const eventCallId = (event: AgentEvent) => typeof event.callId === "string" ? event.callId : undefined;
 
+export function mergeTimelineEvents(previous: readonly AgentEvent[], incoming: readonly AgentEvent[]): AgentEvent[] {
+  const result = [...previous];
+  const seen = new Set(previous.map((event, index) => eventId(event, `${event.type}:${index}:${event.callId ?? ""}:${event.text ?? ""}`)));
+  incoming.forEach((event, index) => {
+    const key = eventId(event, `${event.type}:${index}:${event.callId ?? ""}:${event.text ?? ""}`);
+    if (!seen.has(key)) { seen.add(key); result.push(event); }
+  });
+  return result;
+}
+
 export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
   const items: TimelineItem[] = [];
   const toolIndex = new Map<string, number>();

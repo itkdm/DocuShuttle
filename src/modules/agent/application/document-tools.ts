@@ -73,10 +73,13 @@ export function createDocumentTools(
   // every successful commit; it never crosses requests or document versions.
   let cachedInspection: { bytes: Uint8Array; inspection: DocumentInspection; revision: string } | undefined;
   const inspectCurrent = async (): Promise<{ bytes: Uint8Array; inspection: DocumentInspection }> => {
+    // A loop owns this registry for the duration of one model/tool turn. Once
+    // a revision has been inspected, reuse the immutable bytes directly rather
+    // than downloading the same working version again for every read tool.
+    // Successful commits invalidate the cache below; optimistic commit
+    // locking still rejects a concurrent writer with a revision conflict.
+    if (cachedInspection) return { bytes: cachedInspection.bytes, inspection: cachedInspection.inspection };
     const current = await working.load();
-    if (cachedInspection?.revision === current.revision) {
-      return { bytes: cachedInspection.bytes, inspection: cachedInspection.inspection };
-    }
     const inspection = await documents.inspect(current.bytes);
     if (inspection.manifest.revision !== current.revision) {
       throw new Error("WORKING_DOCUMENT_REVISION_MISMATCH");

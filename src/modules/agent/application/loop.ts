@@ -83,9 +83,24 @@ export type AgentLoopResult = {
   events: AgentLoopEvent[];
 };
 
+const compactForModel = (value: unknown, depth = 0): unknown => {
+  if (depth > 5) return "[内容已省略]";
+  if (typeof value === "string") return value.length > 4_000 ? `${value.slice(0, 4_000)}…` : value;
+  if (Array.isArray(value)) return value.slice(0, 40).map((item) => compactForModel(item, depth + 1));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 60).map(([key, entry]) => [key, compactForModel(entry, depth + 1)]));
+  }
+  return value;
+};
+
 const serializeToolOutput = (value: unknown) => {
-  const encoded = JSON.stringify(value);
+  const encoded = JSON.stringify(compactForModel(value));
   return encoded === undefined ? "null" : encoded;
+};
+
+const compactPersistedToolContent = (content: string) => {
+  try { return serializeToolOutput(JSON.parse(content)); }
+  catch { return content.length > 4_000 ? `${content.slice(0, 4_000)}…` : content; }
 };
 
 const summarizeTraceValue = (value: unknown): unknown => {
@@ -129,6 +144,13 @@ export class AgentLoopRunner {
       status: "running",
       permissionMode,
     };
+    // Older checkpoints may contain an unbounded region listing or tool
+    // payload. Compact those messages before sending them back to a provider;
+    // this keeps continuation requests reliable without changing the durable
+    // execution trace shown to the user.
+    checkpoint.messages = checkpoint.messages.map((message) => message.role === "tool"
+      ? { ...message, content: compactPersistedToolContent(message.content) }
+      : message);
     // Permission is selected per user turn. A resumed approval keeps the mode
     // persisted in its checkpoint, while a new turn may intentionally switch
     // between the default guardrail profile and full autonomy.

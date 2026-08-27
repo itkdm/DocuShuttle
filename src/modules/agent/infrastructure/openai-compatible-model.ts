@@ -88,20 +88,37 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
       abortSignal: input.signal,
     } as Parameters<typeof streamText>[0];
     if (onTextDelta) {
-      const response = streamText(request);
-      let streamedText = "";
-      for await (const delta of response.textStream) {
-        streamedText += delta;
-        onTextDelta(delta);
+      let lastError: unknown;
+      // Some OpenAI-compatible gateways occasionally close a streamed turn
+      // before emitting either text or tool calls. Retry the model-only
+      // request once; no tool has executed yet, so this cannot duplicate a
+      // document side effect and avoids surfacing a transient provider glitch
+      // as AGENT_LOOP_FAILED.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        let streamedText = "";
+        try {
+          const response = streamText(request);
+          for await (const delta of response.textStream) {
+            streamedText += delta;
+            onTextDelta(delta);
+          }
+          const toolCalls = await response.toolCalls;
+          if (toolCalls.length > 0) {
+            return {
+              kind: "tool_calls",
+              calls: toolCalls.map((call) => ({ id: call.toolCallId, name: call.toolName, input: call.input })),
+            };
+          }
+          return { kind: "message", text: streamedText || "我暂时没有足够信息继续，请补充一下目标。" };
+        } catch (error) {
+          lastError = error;
+          if (attempt === 0 && streamedText.length === 0 && !input.signal?.aborted) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 150));
+            continue;
+          }
+        }
       }
-      const toolCalls = await response.toolCalls;
-      if (toolCalls.length > 0) {
-        return {
-          kind: "tool_calls",
-          calls: toolCalls.map((call) => ({ id: call.toolCallId, name: call.toolName, input: call.input })),
-        };
-      }
-      return { kind: "message", text: streamedText || "I need more information to continue." };
+      throw lastError instanceof Error ? lastError : new Error("模型没有返回可用结果");
     }
     const response = await generateText(request);
     if (response.toolCalls.length > 0) {

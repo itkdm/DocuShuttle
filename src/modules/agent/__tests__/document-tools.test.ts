@@ -49,6 +49,24 @@ describe("document mutation planning tool", () => {
     expect(result.nodes[0]).not.toHaveProperty("locator");
   });
 
+  it("reuses one loaded revision across read-only tools in a model turn", async () => {
+    const source = await createDocx();
+    const documents = new OoxmlPreservationKernel();
+    const revision = (await documents.inspect(source)).manifest.revision;
+    let loads = 0;
+    const tools = createDocumentTools(documents, {
+      async load() { loads += 1; return { bytes: source, revision }; },
+      async commit() { return { revision }; },
+    });
+    const inspect = tools.find((tool) => tool.name === "inspect_document");
+    const list = tools.find((tool) => tool.name === "list_document_regions");
+    expect(inspect && list).toBeTruthy();
+    if (!inspect || !list) return;
+    await inspect.execute({}, { runId: "run", callId: "a", idempotencyKey: "a", attempt: 1 });
+    await list.execute({ kind: "paragraph", offset: 0, limit: 5 }, { runId: "run", callId: "b", idempotencyKey: "b", attempt: 2 });
+    expect(loads).toBe(1);
+  });
+
   it("exposes node capabilities without exposing its locator", async () => {
     const source = await createDocx();
     const documents = new OoxmlPreservationKernel();

@@ -18,6 +18,7 @@ declare
   v_run public.agent_runs%rowtype;
   v_checkpoint jsonb;
   v_pending jsonb;
+  v_resolution jsonb;
   v_next_checkpoint jsonb;
 begin
   if p_interaction_type not in ('approval', 'user_input') then
@@ -59,13 +60,28 @@ begin
     raise exception 'INTERACTION_MISMATCH' using errcode = '40001';
   end if;
 
+  if p_interaction_type = 'approval' then
+    -- Tool identity and validated input belong to the pending interaction,
+    -- never to the untrusted browser resume payload.
+    v_resolution := jsonb_build_object(
+      'interactionId', p_interaction_id,
+      'type', 'approval',
+      'callId', v_pending->>'callId',
+      'toolName', v_pending->>'toolName',
+      'input', v_pending->'input',
+      'decision', p_resolution->>'decision'
+    );
+  else
+    v_resolution := p_resolution;
+  end if;
+
   v_next_checkpoint := jsonb_set(v_checkpoint, '{pendingInteraction}', 'null'::jsonb, true);
-  v_next_checkpoint := jsonb_set(v_next_checkpoint, '{pendingResolution}', p_resolution, true);
+  v_next_checkpoint := jsonb_set(v_next_checkpoint, '{pendingResolution}', v_resolution, true);
   v_next_checkpoint := jsonb_set(v_next_checkpoint, '{status}', '"running"'::jsonb, true);
 
   update public.agent_runs
   set state = jsonb_set(state, '{loopCheckpoint}', v_next_checkpoint, true)
-              || jsonb_build_object('pendingInteraction', null, 'pendingResolution', p_resolution, 'status', 'running'),
+              || jsonb_build_object('pendingInteraction', null, 'pendingResolution', v_resolution, 'status', 'running'),
       resume_cursor = v_next_checkpoint,
       status = 'running',
       lock_version = lock_version + 1,

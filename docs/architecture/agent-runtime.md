@@ -85,7 +85,8 @@ user-input interaction 对应；`running`、终态和取消状态不得残留 ru
 `final_review` 不属于 Tool Loop interrupt，本轮仍由产品层保留。
 
 交互解决采用短生命周期的 `pendingResolution` durable inbox：approval 保存
-`interactionId/callId/toolName/input/decision`，user input 保存
+`interactionId/callId/toolName/input/decision`，其中 `toolName/input` 由数据库从原始
+pending interaction canonicalize，浏览器只提交 `decision`；user input 保存
 `interactionId/messageId/text`。数据库事务会同时清除 `pendingInteraction`、写入
 `pendingResolution`、同步 `loopCheckpoint.status` 与 `resume_cursor` 为 `running`；Runner
 只有在用户事实已落盘并完成后续 checkpoint 保存后才清除 resolution。进程重启或网络重试

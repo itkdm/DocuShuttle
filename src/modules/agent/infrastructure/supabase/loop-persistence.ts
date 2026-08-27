@@ -42,6 +42,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       status,
       loopCheckpoint: checkpoint,
       pendingInteraction: checkpoint.pendingInteraction ?? null,
+      pendingResolution: checkpoint.pendingResolution ?? null,
       failure: checkpoint.status === "failed" ? { code: "AGENT_LOOP_FAILED", message: checkpoint.finalText ?? "Agent execution failed", retryable: true } : undefined,
     };
     const updated = await this.client
@@ -119,7 +120,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     const checkpoint = state.loopCheckpoint as AgentLoopCheckpoint | undefined;
     if (!checkpoint) {
       const updated = await this.client.from("agent_runs")
-        .update({ state: { ...state, status: "cancelled" }, status: "cancelled", resume_cursor: {}, lock_version: current.data.lock_version + 1, updated_at: new Date().toISOString(), lease_expires_at: null })
+        .update({ state: { ...state, status: "cancelled", pendingInteraction: null, pendingResolution: null }, status: "cancelled", resume_cursor: {}, lock_version: current.data.lock_version + 1, updated_at: new Date().toISOString(), lease_expires_at: null })
         .eq("id", runId).eq("lock_version", current.data.lock_version).select("id").maybeSingle();
       if (updated.error || !updated.data) throw new ConcurrentRunUpdateError(runId);
       return;
@@ -127,7 +128,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     if (checkpoint.status === "cancelled") return;
     const event = createAgentEvent(runId, { type: "turn.cancelled", text: "本轮操作已取消。" });
     const nextCheckpoint: AgentLoopCheckpoint = { ...checkpoint, status: "cancelled", pendingInteraction: undefined, finalText: event.text, trace: [...(checkpoint.trace ?? []), event].slice(-200) };
-    const nextState = { ...state, status: "cancelled", pendingInteraction: null, loopCheckpoint: nextCheckpoint, version: current.data.lock_version + 1 };
+    const nextState = { ...state, status: "cancelled", pendingInteraction: null, pendingResolution: null, loopCheckpoint: nextCheckpoint, version: current.data.lock_version + 1 };
     const updated = await this.client.from("agent_runs")
       .update({ state: nextState, status: "cancelled", resume_cursor: nextCheckpoint, lock_version: current.data.lock_version + 1, updated_at: new Date().toISOString() })
       .eq("id", runId).eq("lock_version", current.data.lock_version).select("id").maybeSingle();

@@ -224,6 +224,12 @@ export class AgentLoopRunner {
       checkpoint.status = "running";
       await this.store.appendUserMessage?.(runId, message);
     }
+    if (turnText.trim() && existingUserResolution) {
+      // A request can die after the resolution RPC but before the conversation
+      // row is materialized. Replaying this idempotent write repairs that
+      // durable projection before the inbox item is consumed.
+      await this.store.appendUserMessage?.(runId, { id: existingUserResolution.messageId, text: existingUserResolution.text });
+    }
     // Permission is selected per user turn. A resumed approval keeps the mode
     // persisted in its checkpoint, while a new turn may intentionally switch
     // between the default guardrail profile and full autonomy.

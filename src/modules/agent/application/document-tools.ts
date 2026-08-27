@@ -29,6 +29,7 @@ const textChangeSchema = z.object({
   expectedRevision: z.string().trim().min(1).max(300),
   expectedText: z.string().min(1).max(20_000),
   replacement: z.string().min(1).max(20_000),
+  formatPolicy: z.enum(["inherit-start"]).optional(),
 });
 const textChangesSchema = z.object({
   expectedRevision: z.string().trim().min(1).max(300),
@@ -36,6 +37,7 @@ const textChangesSchema = z.object({
     nodeId: nodeIdSchema,
     expectedText: z.string().min(1).max(20_000),
     replacement: z.string().min(1).max(20_000),
+    formatPolicy: z.enum(["inherit-start"]).optional(),
   })).min(2).max(30),
 });
 
@@ -129,7 +131,7 @@ export function createDocumentTools(
       const cell = current.inspection.tableCells.find(({ address }) => address.nodeId === input.nodeId);
       if (!paragraph && !cell) throw new Error("DOCUMENT_REGION_NOT_FOUND");
       const operation = paragraph
-        ? { kind: "replace-text" as const, address: paragraph.address as ParagraphAddress, expectedText: input.expectedText, replacement: input.replacement }
+        ? { kind: "replace-text" as const, address: paragraph.address as ParagraphAddress, expectedText: input.expectedText, replacement: input.replacement, ...(input.formatPolicy ? { formatPolicy: input.formatPolicy } : {}) }
         : { kind: "set-cell-text" as const, address: cell!.address as TableCellAddress, expectedText: input.expectedText, text: input.replacement };
       const mutation = await documents.mutate(current.bytes, { expectedRevision: input.expectedRevision, operations: [operation] });
       const validated = await documents.validate(mutation.bytes);
@@ -155,7 +157,7 @@ export function createDocumentTools(
         const cell = current.inspection.tableCells.find(({ address }) => address.nodeId === change.nodeId);
         if (!paragraph && !cell) throw new Error("DOCUMENT_REGION_NOT_FOUND");
         return paragraph
-          ? { kind: "replace-text" as const, address: paragraph.address as ParagraphAddress, expectedText: change.expectedText, replacement: change.replacement }
+          ? { kind: "replace-text" as const, address: paragraph.address as ParagraphAddress, expectedText: change.expectedText, replacement: change.replacement, ...(change.formatPolicy ? { formatPolicy: change.formatPolicy } : {}) }
           : { kind: "set-cell-text" as const, address: cell!.address as TableCellAddress, expectedText: change.expectedText, text: change.replacement };
       });
       const mutation = await documents.mutate(current.bytes, { expectedRevision: input.expectedRevision, operations });

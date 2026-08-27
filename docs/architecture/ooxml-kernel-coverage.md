@@ -196,7 +196,7 @@ Track Changes（`w:ins` / `w:del` / `w:moveFrom` / `w:moveTo`）中的段落会�
 
 - 索引内层表单元格并赋予稳定 `node_id`。
 - `set-cell-text` 对内层格生效；外层格若包含内表会 fail closed，不会清空内层内容。
-- 已有 fixture 回归覆盖内层写入与外层容器拒绝；真实实验1.2 的 Word/WPS round-trip 仍是下一验收门槛。
+- 已有 fixture 回归覆盖内层写入与外层容器拒绝；真实 DOCX 语料已执行 OPEN/NO-OP/TARGETED MUTATION/REOPEN 回归，当前语料通过，Word/WPS 人工重开仍属于发布前验收门槛。
 
 ### P3 文本框内文本（识别与防护已完成，写入待 Feature Adapter）
 

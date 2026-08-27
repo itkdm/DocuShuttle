@@ -1,4 +1,4 @@
-import { Check, ChevronDown, PanelRightClose, Send, Shield, Sparkles, StopCircle, Unlock } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, LoaderCircle, PanelRightClose, Send, Shield, Sparkles, StopCircle, Unlock } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import type { AgentStage, ProposalState } from "./types";
@@ -82,6 +82,20 @@ const eventTime = (event: BrowserAgentLoopResult["events"][number]) => {
   return Number.isNaN(time.valueOf()) ? "" : time.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 };
 
+const eventState = (event: BrowserAgentLoopResult["events"][number]) => {
+  if (event.type === "tool.failed" || event.type === "turn.failed") return "error";
+  if (event.type === "approval.required") return "waiting";
+  if (event.type === "tool.started" || event.type === "model.started" || event.type === "model.delta") return "running";
+  return "done";
+};
+
+function EventIcon({ state }: { state: ReturnType<typeof eventState> }) {
+  if (state === "error") return <AlertCircle size={15} />;
+  if (state === "waiting") return <Shield size={15} />;
+  if (state === "running") return <LoaderCircle size={15} className="event-spinner" />;
+  return <Check size={15} />;
+}
+
 interface CustomSelectOption { value: string; label: string; }
 
 function CustomSelect({ value, options, onChange, disabled, icon }: { value: string; options: CustomSelectOption[]; onChange: (value: string) => void; disabled?: boolean; icon?: React.ReactNode }) {
@@ -144,8 +158,8 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
           {imageCandidates.length > 0 && <div className="scope-card image-candidate-card"><span className="scope-kicker">图片候选</span><strong>选择要应用的候选</strong><p>候选不会自动写回；选择后仍会按当前权限策略执行。</p>{imageCandidates.map((candidate) => <button key={candidate.id} onClick={() => onApplyImage(candidate)} disabled={imageBusy}><Image src={candidate.downloadUrl} alt="图片候选" width={240} height={140} unoptimized /><span>应用此候选</span></button>)}</div>}
           {stage !== "idle" && stage !== "awaiting" && <div className="progress-card"><div className="progress-top"><strong>{stage === "complete" ? "已完成" : liveEvents.at(-1) ? eventSummary(liveEvents.at(-1)!) : "正在准备"}</strong><span>{stage === "complete" ? "完成" : "进行中"}</span></div><small>{stage === "complete" ? "结果已保存为新的文档版本" : "执行过程会实时显示在活动页"}</small>{stage !== "complete" && <button className="cancel-run" onClick={onCancel}><StopCircle size={13} /> 取消</button>}</div>}
         </>}
-        {tab === "plan" && <div className="plan-list"><div className="plan-summary"><strong>{loopResult?.checkpoint.pendingApproval ? "待你确认的操作" : "本轮执行"}</strong><small>{loopResult ? `本轮 ${loopResult.checkpoint.iterations} 步 · ${loopResult.checkpoint.status === "completed" ? "已完成" : loopResult.checkpoint.status === "failed" ? "未完成" : "进行中"}` : "发送目标后，我会列出实际执行步骤"}</small></div>{(liveEvents.length ? liveEvents : loopResult?.events ?? []).filter((event) => event.type !== "model.delta").map((event, index) => <div className="plan-row completed" key={`${event.type}-${index}`}><span className="plan-status"><Check size={13} /></span><div><strong>{eventSummary(event)}</strong><small>{eventDetail(event)}</small></div></div>)}</div>}
-        {tab === "activity" && <div className="activity-list">{(liveEvents.length ? liveEvents : loopResult?.events ?? []).filter((event) => event.type !== "model.delta").map((event, index) => <div className={`activity-item ${event.type === "tool.failed" || event.type === "turn.failed" ? "error" : ""}`} key={`${event.type}-${index}`}><Check size={15} /><div><strong>{eventSummary(event)} <em>{eventTime(event)}</em></strong><small>{eventDetail(event)}</small></div></div>)}{!liveEvents.length && !loopResult?.events.length && <div className="plan-empty">本轮的工具调用和结果会显示在这里。</div>}</div>}
+        {tab === "plan" && <div className="plan-list"><div className="plan-summary"><strong>{loopResult?.checkpoint.pendingApproval ? "待你确认的操作" : "本轮执行"}</strong><small>{loopResult ? `本轮 ${loopResult.checkpoint.iterations} 步 · ${loopResult.checkpoint.status === "completed" ? "已完成" : loopResult.checkpoint.status === "failed" ? "未完成" : "进行中"}` : "发送目标后，我会列出实际执行步骤"}</small></div>{(liveEvents.length ? liveEvents : loopResult?.events ?? []).filter((event) => event.type !== "model.delta").map((event, index) => { const state = eventState(event); return <div className={`plan-row ${state}`} key={`${event.type}-${index}`}><span className="plan-status"><EventIcon state={state} /></span><div><strong>{eventSummary(event)}</strong><small>{eventDetail(event)}</small></div></div>; })}</div>}
+        {tab === "activity" && <div className="activity-list">{(liveEvents.length ? liveEvents : loopResult?.events ?? []).filter((event) => event.type !== "model.delta").map((event, index) => { const state = eventState(event); return <div className={`activity-item ${state}`} key={`${event.type}-${index}`}><EventIcon state={state} /><div><strong>{eventSummary(event)} <em>{eventTime(event)}</em></strong><small>{eventDetail(event)}</small></div></div>; })}{!liveEvents.length && !loopResult?.events.length && <div className="plan-empty">本轮的工具调用和结果会显示在这里。</div>}</div>}
       </div>
       <div className="agent-composer">
         <textarea id="agent-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && stage !== "analyzing" && workspaceReady) { event.preventDefault(); submit(); } }} placeholder={workspaceReady ? "例如：把实验结论改得更专业，只改一个单元格…" : "请先打开一份 DOCX"} rows={2} disabled={!workspaceReady} />

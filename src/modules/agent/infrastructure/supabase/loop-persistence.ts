@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import type { AgentLoopCheckpoint, AgentLoopStore } from "../../application/loop";
+import { AGENT_LEASE_MANAGED_STATUSES, type AgentLoopCheckpoint, type AgentLoopStore } from "../../application/loop";
 import { ConcurrentRunUpdateError } from "../../domain/errors";
 
 type RunRow = { state: Record<string, unknown>; lock_version: number };
@@ -33,7 +33,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     const state = { ...row.state, version: nextVersion, status, loopCheckpoint: checkpoint };
     const updated = await this.client
       .from("agent_runs")
-      .update({ state, status, resume_cursor: checkpoint, lock_version: nextVersion, updated_at: new Date().toISOString(), lease_expires_at: ["analyzing", "applying", "validating"].includes(status) ? new Date(Date.now() + 120_000).toISOString() : null })
+      .update({ state, status, resume_cursor: checkpoint, lock_version: nextVersion, updated_at: new Date().toISOString(), lease_expires_at: AGENT_LEASE_MANAGED_STATUSES.includes(status as typeof AGENT_LEASE_MANAGED_STATUSES[number]) ? new Date(Date.now() + 120_000).toISOString() : null })
       .eq("id", runId)
       .eq("lock_version", row.lock_version)
       // The legacy cancel command owns the terminal cancelled state. Never
@@ -42,6 +42,17 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       .select("id")
       .maybeSingle();
     if (updated.error || !updated.data) throw new ConcurrentRunUpdateError(runId);
+  }
+
+  async heartbeat(runId: string): Promise<boolean> {
+    const result = await this.client.from("agent_runs")
+      .update({ lease_expires_at: new Date(Date.now() + 120_000).toISOString() })
+      .eq("id", runId)
+      .in("status", [...AGENT_LEASE_MANAGED_STATUSES])
+      .select("id")
+      .maybeSingle();
+    if (result.error) return false;
+    return Boolean(result.data);
   }
 
   async markCancelled(runId: string): Promise<void> {

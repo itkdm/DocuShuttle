@@ -6,8 +6,10 @@ import { AgentLoopRunner, type AgentLoopCheckpoint, type AgentModelPort, type Ag
 class MemoryStore {
   private value?: AgentLoopCheckpoint;
   saves = 0;
+  heartbeats = 0;
   async load() { return this.value; }
   async save(_runId: string, checkpoint: AgentLoopCheckpoint) { this.saves += 1; this.value = structuredClone(checkpoint); }
+  async heartbeat() { this.heartbeats += 1; return true; }
 }
 
 const inspectTool: AgentTool = {
@@ -154,6 +156,18 @@ describe("AgentLoopRunner", () => {
     }, store, []).run("run-model-boundary", "检查");
     expect(result.checkpoint.status).toBe("completed");
     expect((await store.load())?.trace?.some((event) => event.type === "model.started")).toBe(true);
+  });
+
+  it("heartbeats during a long provider call instead of relying on checkpoint saves", async () => {
+    const store = new MemoryStore();
+    const result = await new AgentLoopRunner({
+      decide: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return { kind: "message", text: "已完成。" };
+      },
+    }, store, [], 12, 32, 1_000, undefined, 5).run("run-heartbeat", "检查");
+    expect(result.checkpoint.status).toBe("completed");
+    expect(store.heartbeats).toBeGreaterThanOrEqual(3);
   });
 
   it("persists the tool boundary before executing a side effect", async () => {

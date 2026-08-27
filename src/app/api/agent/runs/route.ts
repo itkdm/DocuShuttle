@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { requireSupabaseUser } from "@/infrastructure/supabase/server";
 import { SupabaseAgentRunStore } from "@/modules/agent/infrastructure/supabase/runtime-persistence";
+import { AGENT_LEASE_MANAGED_STATUSES } from "@/modules/agent/application/loop";
 import { agentErrorResponse } from "../http";
 
 const schema = z.object({ taskId: z.uuid(), goal: z.string().trim().min(1).max(8_000) });
@@ -56,12 +57,10 @@ export async function POST(request: Request) {
       .maybeSingle();
     if (latest.error) throw new Error(`Unable to inspect active agent run: ${latest.error.message}`);
     const checkpoint = (latest.data?.state as { loopCheckpoint?: { pendingApproval?: unknown; pendingUserQuestion?: unknown } } | null)?.loopCheckpoint;
-    const activeStatus = [
-      "queued", "analyzing", "awaiting_scope_confirmation", "generating", "applying", "validating", "awaiting_review",
-    ].includes(latest.data?.status as string);
+    const activeStatus = [...AGENT_LEASE_MANAGED_STATUSES, "awaiting_scope_confirmation", "awaiting_review"].includes(latest.data?.status as string);
     // HITL waits are intentionally lease-less: a user may take hours to
     // answer. Only an invocation phase can become stale and be reclaimed.
-    const leaseManagedStatus = ["queued", "analyzing", "generating", "applying", "validating"].includes(latest.data?.status as string);
+    const leaseManagedStatus = AGENT_LEASE_MANAGED_STATUSES.includes(latest.data?.status as typeof AGENT_LEASE_MANAGED_STATUSES[number]);
     const leaseExpired = leaseManagedStatus && latest.data?.lease_expires_at && new Date(latest.data.lease_expires_at as string).getTime() <= Date.now();
     if (leaseExpired && latest.data?.id) {
       const reclaimed = await client.rpc("reclaim_stale_agent_run", { p_run_id: latest.data.id });

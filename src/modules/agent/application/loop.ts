@@ -64,9 +64,13 @@ export type AgentLoopCheckpoint = {
 export type AgentLoopStore = {
   load(runId: string): Promise<AgentLoopCheckpoint | undefined>;
   save(runId: string, checkpoint: AgentLoopCheckpoint): Promise<void>;
+  /** Refresh the server-side lease while a provider/tool call is in flight. */
+  heartbeat?(runId: string): Promise<boolean>;
   claimPendingApproval?(runId: string, callId: string): Promise<AgentLoopCheckpoint | undefined>;
   markCancelled?(runId: string): Promise<void>;
 };
+
+export const AGENT_LEASE_MANAGED_STATUSES = ["queued", "analyzing", "generating", "applying", "validating"] as const;
 
 export type AgentLoopEvent = { timestamp?: string; eventId?: string } & (
   | { type: "turn.started"; text: string }
@@ -137,7 +141,17 @@ export class AgentLoopRunner {
     private readonly maxToolCalls = 48,
     private readonly modelTimeoutMs = 30_000,
     private readonly contextCompactionPolicy: AgentContextCompactionPolicy = DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY,
+    private readonly heartbeatIntervalMs = 30_000,
   ) {}
+
+  private async withLeaseHeartbeat<T>(runId: string, operation: () => Promise<T>): Promise<T> {
+    if (!this.store.heartbeat) return operation();
+    const beat = () => this.store.heartbeat!(runId).catch(() => false);
+    await beat();
+    const timer = setInterval(() => { void beat(); }, this.heartbeatIntervalMs);
+    try { return await operation(); }
+    finally { clearInterval(timer); }
+  }
 
   async run(runId: string, userText: string, signal?: AbortSignal): Promise<AgentLoopResult> {
     return this.runWithPermission(runId, userText, "default", signal);
@@ -226,7 +240,7 @@ export class AgentLoopRunner {
       const timeout = setTimeout(() => modelController.abort(new Error("模型响应超时")), this.modelTimeoutMs);
       signal?.addEventListener("abort", abortModel, { once: true });
       try {
-        decision = await this.model.decide({ messages: context.messages, tools: this.tools, signal: modelController.signal, onTextDelta: (text) => emit({ type: "model.delta", text, channel: "commentary" }) });
+        decision = await this.withLeaseHeartbeat(runId, () => this.model.decide({ messages: context.messages, tools: this.tools, signal: modelController.signal, onTextDelta: (text) => emit({ type: "model.delta", text, channel: "commentary" }) }));
       } catch (error) {
         // Provider/network failures must become a durable checkpoint instead of
         // leaving the run in `running` forever (or only returning a generic 500).
@@ -318,7 +332,7 @@ export class AgentLoopRunner {
         onEvent?.(toolStartedEvent);
         const toolStartedAt = Date.now();
         try {
-          const output = await tool.execute(input, { runId, callId: call.id, idempotencyKey: `${runId}:${call.id}`, attempt: checkpoint.toolCallCount, signal });
+          const output = await this.withLeaseHeartbeat(runId, () => tool.execute(input, { runId, callId: call.id, idempotencyKey: `${runId}:${call.id}`, attempt: checkpoint.toolCallCount, signal }));
           checkpoint.messages.push({ role: "tool", content: serializeToolOutput(output), toolCallId: call.id, toolName: call.name });
           const toolCompletedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: { ...((output && typeof output === "object") ? output : { value: output }), durationMs: Date.now() - toolStartedAt } }, false);
           await this.store.save(runId, checkpoint);
@@ -379,7 +393,7 @@ export class AgentLoopRunner {
       onEvent?.(startedEvent);
       const toolStartedAt = Date.now();
       try {
-        const output = await tool.execute(input, { runId, callId: pending.callId, idempotencyKey: `${runId}:${pending.callId}`, attempt: checkpoint.toolCallCount, signal });
+        const output = await this.withLeaseHeartbeat(runId, () => tool.execute(input, { runId, callId: pending.callId, idempotencyKey: `${runId}:${pending.callId}`, attempt: checkpoint.toolCallCount, signal }));
         checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval, output }), toolCallId: pending.callId, toolName: pending.name });
         const completedEvent = emit({ type: "tool.completed", callId: pending.callId, name: pending.name, output: summarizeTraceValue({ ...((output && typeof output === "object") ? output : { value: output }), durationMs: Date.now() - toolStartedAt }) }, false);
         await this.store.save(runId, checkpoint);

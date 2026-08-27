@@ -78,6 +78,9 @@ export class SupabaseAgentRunStore implements AgentRunStore {
       lock_version: run.version,
       state: loopCheckpoint ? { ...run, conversationId: conversation.data.id, loopCheckpoint } : { ...run, conversationId: conversation.data.id },
     });
+    if (created.error?.code === "23505" && created.error.message.includes("agent_runs_one_active_per_task_idx")) {
+      throw new Error("CONCURRENT_TURN");
+    }
     fail("Unable to create agent run", created.error);
     return run;
   }

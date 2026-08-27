@@ -32,6 +32,12 @@ run，但新 run 会从该 conversation 的上一条模型 transcript 继续，�
 trace 原样当作模型上下文；模型上下文仍由 checkpoint messages 和上述 compaction policy
 独立维护。
 
+数据库对每个 task 强制最多一个非终态 run（`queued`、执行中或等待 HITL）。创建新
+run 前 API 会先检查当前 conversation 的 pending interaction；即使两个浏览器请求
+同时通过了检查，`agent_runs_one_active_per_task_idx` 也会以唯一约束拒绝第二个插入，
+返回 `TURN_NOT_ALLOWED`，不会产生分叉或覆盖 checkpoint。终态保存后该约束自动释放，
+下一轮才能从同一 conversation 创建新的 run。
+
 ## 文档工具
 
 当前 Loop 已接入 `inspect_document`、`list_document_regions`、`read_document_region`、`inspect_node_capabilities`、`plan_text_change`、`apply_text_change`、`list_source_documents`、`read_source_document`、`list_document_versions`、`restore_document_version` 和 `export_document`。其中来源资料保持 template/example/auxiliary 语义隔离；`inspect_node_capabilities` 只返回语义节点能力，`plan_text_change` 是不写入的语义化 dry-run，`apply_text_change` 与 `restore_document_version` 是需要确认的副作用工具，导出只记录 immutable version 并返回短期下载地址。写工具即使在完全批准模式也会先执行 dry-run，避免跳过目标、能力和重叠检查。

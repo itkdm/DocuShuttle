@@ -27,6 +27,25 @@ describe("agent context compaction", () => {
     expect(result.messages.some((message) => message.content.includes("实验重点"))).toBe(true);
   });
 
+  it("removes orphan tool results as well as unmatched tool calls", () => {
+    const result = compactAgentMessages([
+      { role: "tool", content: JSON.stringify({ stale: true }), toolCallId: "missing-call", toolName: "inspect_document" },
+      { role: "user", content: "继续检查文档" },
+      { role: "assistant", content: "", toolCalls: [
+        { id: "paired-call", name: "inspect_document", input: {} },
+        { id: "unreturned-call", name: "read_document_region", input: {} },
+      ] },
+      { role: "tool", content: JSON.stringify({ revision: "rev-2" }), toolCallId: "paired-call", toolName: "inspect_document" },
+      { role: "tool", content: JSON.stringify({ stale: true }), toolCallId: "another-orphan", toolName: "read_document_region" },
+    ], { ...policy, maxCharacters: 2_000, maxMessages: 20, keepRecentUnits: 20 });
+
+    const calls = result.messages.flatMap((message) => message.toolCalls ?? []).map((call) => call.id);
+    const results = result.messages.filter((message) => message.role === "tool").map((message) => message.toolCallId);
+    expect(calls).toEqual(["paired-call"]);
+    expect(results).toEqual(["paired-call"]);
+    expect(results.every((id) => calls.includes(id!))).toBe(true);
+  });
+
   it("does not compact a short conversation", () => {
     const messages: AgentLoopMessage[] = [{ role: "user", content: "你好" }, { role: "assistant", content: "你好，我可以帮你处理 Word 文档。" }];
     const result = compactAgentMessages(messages, policy);

@@ -176,9 +176,38 @@ const enforceHardBudget = (messages: readonly AgentLoopMessage[], policy: AgentC
  * required by OpenAI-compatible APIs and the message-state model used by
  * LangGraph/LangChain and pi-style agent loops.
  */
+/**
+ * Remove tool results which cannot be attached to the immediately preceding
+ * assistant tool-call batch.  A provider rejects a transcript containing a
+ * tool result without its call (and this can be produced by an interrupted
+ * legacy run), so preserving the orphan is less useful than dropping it
+ * before compaction.  Results that belong to a partially completed batch are
+ * retained; the normalizer below will trim the unmatched calls.
+ */
+const normalizeToolPairs = (messages: readonly AgentLoopMessage[]): AgentLoopMessage[] => {
+  const normalized: AgentLoopMessage[] = [];
+  let pendingCallIds = new Set<string>();
+  for (const message of messages) {
+    if (message.role === "assistant" && message.toolCalls) {
+      pendingCallIds = new Set(message.toolCalls.map((call) => call.id));
+      normalized.push(message);
+      continue;
+    }
+    if (message.role === "tool") {
+      if (!message.toolCallId || !pendingCallIds.has(message.toolCallId)) continue;
+      pendingCallIds.delete(message.toolCallId);
+      normalized.push(message);
+      continue;
+    }
+    pendingCallIds = new Set<string>();
+    normalized.push(message);
+  }
+  return normalized;
+};
+
 const buildUnits = (messages: readonly AgentLoopMessage[]): MessageUnit[] => {
   const units: MessageUnit[] = [];
-  for (const message of messages) {
+  for (const message of normalizeToolPairs(messages)) {
     const previous = units.at(-1);
     if (message.role === "tool" && previous?.[0]?.role === "assistant" && previous.some((item) => item.toolCalls?.some((call) => call.id === message.toolCallId))) {
       previous.push(message);
@@ -224,12 +253,17 @@ export const compactAgentMessages = (
   policy: AgentContextCompactionPolicy = DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY,
 ): AgentContextCompactionResult => {
   const originalCharacters = messages.reduce((sum, message) => sum + messageCharacters(message), 0);
-  const withinBudget = messages.length <= policy.maxMessages && originalCharacters <= policy.maxCharacters;
+  // Validate protocol pairing even when no size compaction is necessary. A
+  // malformed legacy checkpoint must not reach the provider merely because it
+  // happens to be short enough to skip the compaction branch.
+  const normalizedMessages = buildUnits(messages).flat();
+  const normalizedCharacters = normalizedMessages.reduce((sum, message) => sum + messageCharacters(message), 0);
+  const withinBudget = normalizedMessages.length <= policy.maxMessages && normalizedCharacters <= policy.maxCharacters;
   if (withinBudget) {
-    return { messages: [...messages], compacted: false, originalMessageCount: messages.length, originalCharacters, retainedMessageCount: messages.length };
+    return { messages: normalizedMessages, compacted: false, originalMessageCount: messages.length, originalCharacters, retainedMessageCount: normalizedMessages.length };
   }
 
-  const units = buildUnits(messages);
+  const units = buildUnits(normalizedMessages);
   const systemUnits = units.filter((unit) => unit.some((message) => message.role === "system"));
   const recentCandidates = units.slice(-Math.max(1, policy.keepRecentUnits));
   const recentUnits: MessageUnit[] = [];

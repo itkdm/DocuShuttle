@@ -15,7 +15,10 @@ export async function GET(request: Request) {
       .from("agent_runs")
       .select("id, state, status, created_at, updated_at")
       .eq("task_id", taskId)
-      .order("created_at", { ascending: true })
+      // Fetch the most recent runs first so the bounded history window is
+      // useful for long-lived tasks. Restore chronological order in the
+      // response; the UI can concatenate runs directly into one timeline.
+      .order("created_at", { ascending: false })
       .limit(20);
     if (result.error) throw new Error(`Unable to load task agent runs: ${result.error.message}`);
     const runs = (result.data ?? []).map((row) => {
@@ -30,7 +33,7 @@ export async function GET(request: Request) {
         events: checkpoint?.trace ?? [],
       };
     });
-    return NextResponse.json({ runs });
+    return NextResponse.json({ runs: runs.reverse() });
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST" }, { status: 400 });
     return agentErrorResponse(error);
@@ -53,19 +56,27 @@ export async function POST(request: Request) {
       .maybeSingle();
     if (latest.error) throw new Error(`Unable to inspect active agent run: ${latest.error.message}`);
     const checkpoint = (latest.data?.state as { loopCheckpoint?: { pendingApproval?: unknown; pendingUserQuestion?: unknown } } | null)?.loopCheckpoint;
-    if (checkpoint?.pendingApproval || checkpoint?.pendingUserQuestion || ["analyzing", "awaiting_scope_confirmation"].includes(latest.data?.status as string)) {
+    if (checkpoint?.pendingApproval || checkpoint?.pendingUserQuestion || [
+      "queued", "analyzing", "awaiting_scope_confirmation", "generating", "applying", "validating", "awaiting_review",
+    ].includes(latest.data?.status as string)) {
       return NextResponse.json({ code: "TURN_NOT_ALLOWED", runId: latest.data?.id }, { status: 409 });
     }
-    const updated = await client.from("tasks").update({ goal: input.goal, updated_at: new Date().toISOString() })
-      .eq("id", input.taskId).eq("owner_user_id", user.id).select("id").single();
-    if (updated.error || !updated.data) return NextResponse.json({ code: "TASK_NOT_FOUND" }, { status: 404 });
     const run = await new SupabaseAgentRunStore(client).createForTask({
       taskId: input.taskId,
       ownerUserId: user.id,
       now: new Date().toISOString(),
     });
+    // Allocate the uniquely-guarded turn before changing task metadata. A
+    // concurrent request that loses the active-run constraint must not
+    // overwrite the conversation goal as a side effect of its failed turn.
+    const updated = await client.from("tasks").update({ goal: input.goal, updated_at: new Date().toISOString() })
+      .eq("id", input.taskId).eq("owner_user_id", user.id).select("id").single();
+    if (updated.error || !updated.data) return NextResponse.json({ code: "TASK_NOT_FOUND" }, { status: 404 });
     return NextResponse.json({ run }, { status: 201 });
   } catch (error) {
+    if (error instanceof Error && error.message === "CONCURRENT_TURN") {
+      return NextResponse.json({ code: "TURN_NOT_ALLOWED", message: "当前对话已有一轮请求正在处理，请稍后继续。" }, { status: 409 });
+    }
     return agentErrorResponse(error);
   }
 }

@@ -31,6 +31,34 @@ describe("AgentLoopRunner", () => {
     expect(result.events.every((event) => typeof event.eventId === "string")).toBe(true);
   });
 
+  it("compacts a long model transcript without breaking tool evidence", async () => {
+    const seenContexts: AgentLoopCheckpoint["messages"][] = [];
+    let turn = 0;
+    const model: AgentModelPort = {
+      decide: async ({ messages }) => {
+        seenContexts.push(structuredClone(messages) as AgentLoopCheckpoint["messages"]);
+        turn += 1;
+        if (turn <= 4) return { kind: "tool_calls", calls: [{ id: `inspect-${turn}`, name: "inspect_document", input: { query: `part-${turn}` } }] };
+        return { kind: "message", text: "已根据文档事实完成判断。" };
+      },
+    };
+    const result = await new AgentLoopRunner(model, new MemoryStore(), [inspectTool], 12, 12, 30_000, {
+      maxCharacters: 600,
+      maxMessages: 8,
+      keepRecentUnits: 2,
+      maxUserSummaryCharacters: 120,
+    }).run("run-compaction", "请连续检查多个区域并汇总结果");
+    expect(result.checkpoint.status).toBe("completed");
+    expect(seenContexts.some((messages) => messages.some((message) => message.content.includes("此前对话摘要")))).toBe(true);
+    for (const messages of seenContexts) {
+      for (const message of messages.filter((item) => item.role === "assistant" && item.toolCalls)) {
+        for (const call of message.toolCalls ?? []) {
+          expect(messages.some((item) => item.role === "tool" && item.toolCallId === call.id)).toBe(true);
+        }
+      }
+    }
+  });
+
   it("pauses before an approval-required tool and resumes from its checkpoint", async () => {
     const store = new MemoryStore();
     const applyTool: AgentTool = {

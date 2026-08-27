@@ -249,7 +249,6 @@ export function Workbench() {
     setNotice(`纸上鸭正在分析：“${prompt.slice(0, 24)}${prompt.length > 24 ? "…" : ""}”`);
     setAwaitingFinalReview(false);
     setProposalSummary(undefined);
-    setLiveEvents([]);
     const abortController = new AbortController();
     agentAbortRef.current = abortController;
     try {

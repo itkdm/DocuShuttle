@@ -256,7 +256,7 @@ export class AgentLoopRunner {
     return { checkpoint, events };
   }
 
-  async resume(runId: string, approval: "approved" | "rejected", signal?: AbortSignal): Promise<AgentLoopResult> {
+  async resume(runId: string, approval: "approved" | "rejected", signal?: AbortSignal, onEvent?: (event: AgentLoopEvent) => void): Promise<AgentLoopResult> {
     const current = await this.store.load(runId);
     const checkpoint = current?.pendingApproval && this.store.claimPendingApproval
       ? await this.store.claimPendingApproval(runId, current.pendingApproval.callId)
@@ -273,6 +273,7 @@ export class AgentLoopRunner {
       const traceEvent = { ...event, eventId: event.eventId ?? crypto.randomUUID(), timestamp: event.timestamp ?? new Date().toISOString() } as AgentLoopEvent;
       events.push(traceEvent);
       checkpoint.trace = [...(checkpoint.trace ?? []), traceEvent].slice(-200);
+      onEvent?.(traceEvent);
     };
     emit({ type: "tool.started", callId: pending.callId, name: pending.name, input: summarizeTraceValue(input) });
     // Persist the approval claim and the operation start before side effects.

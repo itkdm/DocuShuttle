@@ -19,6 +19,38 @@ const post = (body?: unknown): RequestInit => ({
   body: body === undefined ? undefined : JSON.stringify(body),
 });
 
+async function consumeAgentStream(
+  response: Response,
+  onEvent: (event: BrowserAgentLoopResult["events"][number]) => void,
+) {
+  if (!response.ok || !response.body) {
+    const body = await response.json().catch(() => ({})) as { code?: string; message?: string };
+    throw new Error(body.message ?? body.code ?? `HTTP_${response.status}`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: BrowserAgentLoopResult | undefined;
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    buffer += decoder.decode(next.value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      const event = /^event: (.+)$/m.exec(frame)?.[1];
+      const raw = /^data: (.+)$/m.exec(frame)?.[1];
+      if (!event || !raw) continue;
+      const data = JSON.parse(raw) as BrowserAgentLoopResult | BrowserAgentLoopResult["events"][number] | { code?: string };
+      if (event === "event") onEvent(data as BrowserAgentLoopResult["events"][number]);
+      if (event === "result") finalResult = data as BrowserAgentLoopResult;
+      if (event === "error") throw new Error((data as { code?: string }).code ?? "AGENT_LOOP_FAILED");
+    }
+  }
+  if (!finalResult) throw new Error("AGENT_STREAM_INCOMPLETE");
+  return finalResult;
+}
+
 export const createBrowserAgentRun = async (taskId: string, goal: string) =>
   (await json<AgentResponse>("/api/agent/runs", post({ taskId, goal }))).run;
 
@@ -51,33 +83,10 @@ export async function runBrowserAgentLoopStream(
   onEvent: (event: BrowserAgentLoopResult["events"][number]) => void,
   signal?: AbortSignal,
 ) {
-  const response = await fetch(`/api/agent/runs/${runId}/loop`, { ...post({ message, permissionMode }), method: "PUT", signal });
-  if (!response.ok || !response.body) {
-    const body = await response.json().catch(() => ({})) as { code?: string };
-    throw new Error(body.code ?? `HTTP_${response.status}`);
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let finalResult: BrowserAgentLoopResult | undefined;
-  while (true) {
-    const next = await reader.read();
-    if (next.done) break;
-    buffer += decoder.decode(next.value, { stream: true });
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      const event = /^event: (.+)$/m.exec(frame)?.[1];
-      const raw = /^data: (.+)$/m.exec(frame)?.[1];
-      if (!event || !raw) continue;
-      const data = JSON.parse(raw) as BrowserAgentLoopResult | BrowserAgentLoopResult["events"][number] | { code?: string };
-      if (event === "event") onEvent(data as BrowserAgentLoopResult["events"][number]);
-      if (event === "result") finalResult = data as BrowserAgentLoopResult;
-      if (event === "error") throw new Error((data as { code?: string }).code ?? "AGENT_LOOP_FAILED");
-    }
-  }
-  if (!finalResult) throw new Error("AGENT_STREAM_INCOMPLETE");
-  return finalResult;
+  return consumeAgentStream(
+    await fetch(`/api/agent/runs/${runId}/loop`, { ...post({ message, permissionMode }), method: "PUT", signal }),
+    onEvent,
+  );
 }
 
 export const loadBrowserAgentLoop = async (runId: string) =>
@@ -85,6 +94,16 @@ export const loadBrowserAgentLoop = async (runId: string) =>
 
 export const resumeBrowserAgentLoop = async (runId: string, approval: "approved" | "rejected") =>
   json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop/resume`, post({ approval }));
+
+export const resumeBrowserAgentLoopStream = async (
+  runId: string,
+  approval: "approved" | "rejected",
+  onEvent: (event: BrowserAgentLoopResult["events"][number]) => void,
+  signal?: AbortSignal,
+) => consumeAgentStream(
+  await fetch(`/api/agent/runs/${runId}/loop/resume`, { ...post({ approval }), method: "PUT", signal }),
+  onEvent,
+);
 
 export const decideBrowserAgentRun = async (runId: string, choice: "approved" | "rejected") =>
   (await json<AgentResponse>(`/api/agent/runs/${runId}/decision`, post({

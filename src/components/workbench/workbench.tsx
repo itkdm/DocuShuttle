@@ -12,7 +12,7 @@ import { TaskList } from "./task-list";
 import { formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
-import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoopStream, resumeBrowserAgentLoop, type BrowserAgentLoopResult, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { advanceBrowserAgentRun, applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, decideBrowserAgentRun, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserDocumentVersions, loadCurrentTaskDocument, restoreBrowserDocumentVersion, reviewBrowserAgentRun, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserAgentLoopResult, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
 import { listBrowserTasks, loadBrowserTaskWorkspace } from "@/modules/tasks/browser-tasks";
 import type { TaskSummary } from "@/modules/tasks/domain";
 import { taskIdFromPathname, taskUrl } from "@/modules/tasks/task-url";
@@ -307,8 +307,13 @@ export function Workbench() {
   const decideLoop = async (choice: "approved" | "rejected") => {
     if (!run) return;
     setNotice(choice === "approved" ? "正在执行批准的操作…" : "已拒绝，正在继续后续处理…");
+    const abortController = new AbortController();
+    agentAbortRef.current = abortController;
     try {
-      const result = await resumeBrowserAgentLoop(run.id, choice);
+      const result = await resumeBrowserAgentLoopStream(run.id, choice, (event) => {
+        setLiveEvents((items) => mergeTimelineEvents(items, [event]));
+        if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
+      }, abortController.signal);
       setLoopResult(result);
       setLiveEvents((items) => mergeTimelineEvents(items, result.events));
       const replies = result.events.filter((event) => event.type === "assistant.message" && event.text).map((event) => event.text!);
@@ -335,10 +340,13 @@ export function Workbench() {
         setNotice(finalText);
       }
     } catch (error) {
+      if (abortController.signal.aborted) return;
       const message = error instanceof Error ? error.message : "Agent 恢复失败";
       setConversation((items) => [...items, { role: "agent", text: `这次执行没有完成：${message}` }]);
       setStage("idle");
       setNotice(message);
+    } finally {
+      if (agentAbortRef.current === abortController) agentAbortRef.current = undefined;
     }
   };
 

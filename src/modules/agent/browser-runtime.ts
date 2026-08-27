@@ -65,8 +65,8 @@ async function consumeAgentStream(
   return finalResult;
 }
 
-export const createBrowserAgentRun = async (taskId: string, goal: string) =>
-  (await json<AgentResponse>("/api/agent/runs", post({ taskId, goal }))).run;
+export const createBrowserAgentRun = async (taskId: string, goal: string, clientMessageId?: string) =>
+  (await json<AgentResponse>("/api/agent/runs", post({ taskId, goal, ...(clientMessageId ? { clientMessageId } : {}) }))).run;
 
 export const loadBrowserAgentRun = async (runId: string) =>
   (await json<AgentResponse>(`/api/agent/runs/${runId}`)).run;
@@ -92,6 +92,7 @@ export type BrowserConversationMessage = {
   run_id?: string | null;
   created_at: string;
   message_key: string;
+  delivery_status?: "pending" | "sent" | "failed";
 };
 
 export const loadBrowserConversationMessages = async (taskId: string, before?: string) =>

@@ -159,7 +159,7 @@ export function Workbench() {
             setConversation(durable.messages.flatMap((message) => {
               const text = message.parts.find((part) => part.type === "text")?.text;
               if (!text || (message.role !== "user" && message.role !== "assistant")) return [];
-              return [{ role: message.role === "user" ? "user" as const : "agent" as const, text }];
+              return [{ id: message.id, role: message.role === "user" ? "user" as const : "agent" as const, text, status: message.delivery_status ?? "sent" }];
             }));
           }
         } catch {
@@ -249,7 +249,7 @@ export function Workbench() {
       const older = page.messages.flatMap((message) => {
         const text = message.parts.find((part) => part.type === "text")?.text;
         if (!text || (message.role !== "user" && message.role !== "assistant")) return [];
-        return [{ role: message.role === "user" ? "user" as const : "agent" as const, text }];
+        return [{ id: message.id, role: message.role === "user" ? "user" as const : "agent" as const, text, status: message.delivery_status ?? "sent" }];
       });
       setConversation((items) => [...older, ...items]);
       setConversationCursor(page.nextCursor);
@@ -314,7 +314,7 @@ export function Workbench() {
       setNotice("请先打开一份 DOCX，建立文档工作区");
       return;
     }
-    const localMessageId = `msg:${crypto.randomUUID()}`;
+    const localMessageId = crypto.randomUUID();
     setConversation((items) => [...items, { id: localMessageId, role: "user", text: prompt, status: "pending" }]);
     setStage("analyzing");
     setNotice(`纸上鸭正在处理你的请求：“${prompt.slice(0, 24)}${prompt.length > 24 ? "…" : ""}”`);
@@ -344,7 +344,7 @@ export function Workbench() {
         timestamp: new Date().toISOString(),
         text: prompt,
       }]));
-      const activeRun = startsFreshRun ? await createBrowserAgentRun(taskId, prompt) : run;
+      const activeRun = startsFreshRun ? await createBrowserAgentRun(taskId, prompt, localMessageId) : run;
       activeRunForRecovery = activeRun;
       setRun(activeRun);
       const result = await runBrowserAgentLoopStream(activeRun.id, prompt, permissionMode, (event) => {

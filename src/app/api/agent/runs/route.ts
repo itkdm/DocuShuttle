@@ -6,7 +6,7 @@ import { SupabaseAgentRunStore } from "@/modules/agent/infrastructure/supabase/r
 import { AGENT_LEASE_MANAGED_STATUSES } from "@/modules/agent/application/loop";
 import { agentErrorResponse } from "../http";
 
-const schema = z.object({ taskId: z.uuid(), goal: z.string().trim().min(1).max(8_000) });
+const schema = z.object({ taskId: z.uuid(), goal: z.string().trim().min(1).max(8_000), clientMessageId: z.uuid().optional() });
 
 export async function GET(request: Request) {
   try {
@@ -16,13 +16,21 @@ export async function GET(request: Request) {
       .from("agent_runs")
       .select("id, state, status, created_at, updated_at")
       .eq("task_id", taskId)
-      // Fetch the most recent runs first so the bounded history window is
-      // useful for long-lived tasks. Restore chronological order in the
-      // response; the UI can concatenate runs directly into one timeline.
-      .order("created_at", { ascending: false })
-      .limit(20);
+      .order("created_at", { ascending: true });
     if (result.error) throw new Error(`Unable to load task agent runs: ${result.error.message}`);
-    const runs = (result.data ?? []).map((row) => {
+    const rows = result.data ?? [];
+    const eventResult = rows.length
+      ? await client.from("agent_run_events").select("run_id, sequence, event").in("run_id", rows.map((row) => row.id)).order("sequence", { ascending: true })
+      : { data: [], error: null };
+    if (eventResult.error) throw new Error(`Unable to load task agent events: ${eventResult.error.message}`);
+    const eventsByRun = new Map<string, unknown[]>();
+    for (const row of eventResult.data ?? []) {
+      const event = row.event && typeof row.event === "object" ? { ...(row.event as Record<string, unknown>), sequence: row.sequence } : undefined;
+      if (!event) continue;
+      const list = eventsByRun.get(row.run_id as string) ?? [];
+      list.push(event); eventsByRun.set(row.run_id as string, list);
+    }
+    const runs = rows.map((row) => {
       const state = (row.state ?? {}) as { loopCheckpoint?: { trace?: unknown[]; status?: string } };
       const checkpoint = state.loopCheckpoint;
       return {
@@ -31,10 +39,10 @@ export async function GET(request: Request) {
         createdAt: row.created_at as string,
         updatedAt: row.updated_at as string,
         checkpoint: checkpoint ? { status: checkpoint.status } : undefined,
-        events: checkpoint?.trace ?? [],
+        events: eventsByRun.get(row.id as string) ?? checkpoint?.trace ?? [],
       };
     });
-    return NextResponse.json({ runs: runs.reverse() });
+    return NextResponse.json({ runs });
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST" }, { status: 400 });
     return agentErrorResponse(error);
@@ -73,6 +81,7 @@ export async function POST(request: Request) {
       ownerUserId: user.id,
       now: new Date().toISOString(),
       goal: input.goal,
+      clientMessageId: input.clientMessageId,
     });
     return NextResponse.json({ run }, { status: 201 });
   } catch (error) {

@@ -95,6 +95,8 @@ const summarizeTraceValue = (value: unknown): unknown => {
   }
   if (record.counts && typeof record.counts === "object") return { summary: "已读取文档概览", revision: record.revision, counts: record.counts, durationMs };
   if (Array.isArray(record.nodes)) return { summary: `已定位 ${record.nodes.length} 个文档节点`, revision: record.revision, durationMs };
+  if (Array.isArray(record.operations) && typeof record.riskLevel === "string") return { summary: `已生成 ${record.operations.length} 项修改预演`, riskLevel: record.riskLevel, durationMs };
+  if (Array.isArray(record.capabilities) && typeof record.nodeId === "string") return { summary: "已检查节点可用操作", nodeId: record.nodeId, durationMs };
   if (Array.isArray(record.documents)) return { summary: `已读取 ${record.documents.length} 份关联资料`, durationMs };
   return { summary: "工具已返回结果", durationMs };
 };

@@ -54,8 +54,14 @@ function parseRelationshipPart(
   const ids = new Set<string>();
   for (const match of xml.matchAll(/<(?:\w+:)?Relationship\b[^>]*\/?\s*>/g)) {
     const value = attributes(match[0]);
-    if (!value.Id || !value.Target || !value.Type) continue;
-    if (ids.has(value.Id)) continue;
+    if (!value.Id || !value.Target || !value.Type) {
+      diagnostics.push({ severity: "error", code: "RELATIONSHIP_INVALID", message: "Relationship is missing Id, Target or Type.", entry: relsPath });
+      continue;
+    }
+    if (ids.has(value.Id)) {
+      diagnostics.push({ severity: "error", code: "RELATIONSHIP_ID_DUPLICATE", message: `Relationship Id ${value.Id} is duplicated in one relationship part.`, entry: relsPath, details: { relationshipId: value.Id } });
+      continue;
+    }
     ids.add(value.Id);
     const targetMode = value.TargetMode?.toLowerCase() === "external" ? "External" : "Internal";
     const resolvedPart = targetMode === "Internal" ? resolveRelationshipTarget(relsPath, value.Target) : undefined;

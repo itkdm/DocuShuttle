@@ -294,6 +294,10 @@ export async function loadPackage(bytes: Uint8Array): Promise<LoadedPackage> {
     texts,
     contentTypeFor: (path) => contentTypeFor(path, contentTypes),
   });
+  for (const diagnostic of graph.diagnostics) {
+    const duplicate = diagnostics.some((existing) => existing.code === diagnostic.code && existing.entry === diagnostic.entry && existing.details?.relationshipId === diagnostic.details?.relationshipId && existing.details?.target === diagnostic.details?.target);
+    if (!duplicate) diagnostics.push(diagnostic);
+  }
 
   return {
     originalBytes: Uint8Array.from(bytes),

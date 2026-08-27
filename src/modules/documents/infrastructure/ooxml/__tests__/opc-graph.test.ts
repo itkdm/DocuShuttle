@@ -30,4 +30,11 @@ describe("OPC package graph", () => {
     expect(graph.parts.has("word/media/nope.png")).toBe(false);
     expect(graph.diagnostics.some((diagnostic) => diagnostic.code === "RELATIONSHIP_TARGET_MISSING")).toBe(true);
   });
+
+  it("reports malformed and duplicate relationship records", async () => {
+    const rels = '<Relationships><Relationship Id="r1" Type="officeDocument" Target="word/document.xml"/><Relationship Id="r1" Type="image" Target="word/media/a.png"/><Relationship Id="bad" Target="word/document.xml"/></Relationships>';
+    const entries = new Map([["_rels/.rels", bytes(rels)], ["word/document.xml", bytes("<document/>")], ["word/media/a.png", new Uint8Array([1])] ]);
+    const graph = await buildOpcPackageGraph({ entries, texts: new Map([["_rels/.rels", rels]]), contentTypeFor: () => undefined });
+    expect(graph.diagnostics.map(({ code }) => code)).toEqual(["RELATIONSHIP_ID_DUPLICATE", "RELATIONSHIP_INVALID"]);
+  });
 });

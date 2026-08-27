@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildTimeline, isTimelineActive, mergeTimelineEvents, sanitizeForDisplay } from "./agent-timeline";
+import { projectAgentThread } from "./agent-thread-projection";
 
 describe("Agent execution timeline", () => {
   it("keeps the original turn when resumed events arrive", () => {
@@ -14,13 +15,31 @@ describe("Agent execution timeline", () => {
     expect(buildTimeline(merged).map((item) => item.kind)).toEqual(["user", "tool"]);
   });
 
-  it("replaces an optimistic user turn with the durable stream event", () => {
+  it("replaces an optimistic user turn with the durable stream event by client identity", () => {
     const merged = mergeTimelineEvents(
-      [{ eventId: "local:client-turn", type: "turn.started", text: "你好" }] as never,
-      [{ eventId: "server-turn", type: "turn.started", text: "你好" }] as never,
+      [{ eventId: "local:client-turn", type: "turn.started", text: "你好", clientMessageId: "message-1" }] as never,
+      [{ eventId: "server-turn", type: "turn.started", text: "你好", clientMessageId: "message-1" }] as never,
     );
     expect(merged).toHaveLength(1);
     expect(merged[0]).toMatchObject({ eventId: "server-turn", type: "turn.started", text: "你好" });
+  });
+
+  it("does not merge equal prompts from different turns", () => {
+    const merged = mergeTimelineEvents(
+      [{ eventId: "turn-1", type: "turn.started", text: "请检查", clientMessageId: "message-1" }] as never,
+      [{ eventId: "turn-2", type: "turn.started", text: "请检查", clientMessageId: "message-2" }] as never,
+    );
+    expect(merged).toHaveLength(2);
+  });
+
+  it("projects durable message identity and run identity without flattening them", () => {
+    const projection = projectAgentThread({
+      messages: [{ id: "message-1", role: "user", parts: [{ type: "text", text: "请检查" }], run_id: "run-1", created_at: "2026-01-01", message_key: "message-1" }],
+      historicalEvents: [],
+      activeEvents: [{ eventId: "event-1", type: "turn.started", text: "请检查", clientMessageId: "message-1", runId: "run-1" }],
+    });
+    expect(projection.messages[0]).toMatchObject({ id: "message-1", runId: "run-1" });
+    expect(projection.events[0]).toMatchObject({ clientMessageId: "message-1", runId: "run-1" });
   });
 
   it("orders replayed events by sequence within a run without mixing runs", () => {

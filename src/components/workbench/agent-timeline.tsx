@@ -66,29 +66,33 @@ const eventChannel = (event: AgentEvent) => {
 
 export function mergeTimelineEvents(previous: readonly AgentEvent[], incoming: readonly AgentEvent[]): AgentEvent[] {
   const result = [...previous];
-  const identity = (event: AgentEvent) => {
+  const stableIdentity = (event: AgentEvent) => {
+    if (typeof event.eventId === "string") return `event:${event.eventId}`;
     const sequence = (event as { sequence?: unknown }).sequence;
     const runId = (event as { runId?: unknown }).runId;
     if (typeof sequence === "number") return `sequence:${String(runId ?? "")}:${sequence}`;
-    const payload = [String(runId ?? ""), event.type, event.callId ?? "", event.name ?? "", event.timestamp ?? "", event.text ?? "", event.error ?? ""];
-    return `fallback:${payload.join("|")}`;
+    return undefined;
   };
-  const seen = new Set(previous.map((event) => eventId(event, identity(event))));
+  const seen = new Set(previous.map(stableIdentity).filter((key): key is string => Boolean(key)));
   incoming.forEach((event) => {
-    const key = eventId(event, identity(event));
-    if (seen.has(key)) return;
-    // The composer adds a local turn.started event before the network request
-    // returns. Replace that optimistic item with the durable SSE event instead
-    // of rendering the user's message twice.
+    const key = stableIdentity(event);
+    if (key && seen.has(key)) return;
+    // Reconcile optimistic and durable user turns only through the client
+    // message identity. Text is content, not identity: the same prompt may
+    // legitimately appear in more than one turn.
     if (event.type === "turn.started" && eventText(event)) {
-      const optimisticIndex = result.findIndex((item) => item.type === "turn.started" && typeof item.eventId === "string" && item.eventId.startsWith("local:") && eventText(item) === eventText(event));
+      const clientMessageId = (event as AgentEvent & { clientMessageId?: unknown }).clientMessageId;
+      const optimisticIndex = typeof clientMessageId === "string"
+        ? result.findIndex((item) => item.type === "turn.started" && (item as AgentEvent & { clientMessageId?: unknown }).clientMessageId === clientMessageId)
+        : -1;
       if (optimisticIndex >= 0) {
         result[optimisticIndex] = event;
-        seen.add(key);
+        if (key) seen.add(key);
         return;
       }
     }
-    seen.add(key); result.push(event);
+    if (key) seen.add(key);
+    result.push(event);
   });
   return result.map((event, index) => ({ event, index })).sort((a, b) => {
     const as = (a.event as { sequence?: unknown }).sequence;

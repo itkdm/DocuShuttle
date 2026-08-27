@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentPanel } from "./agent-panel";
 import { mergeTimelineEvents } from "./agent-timeline";
+import { projectAgentThread, projectLegacyConversation } from "./agent-thread-projection";
 import { DocumentCanvas } from "./document-canvas";
 import { OutlinePanel } from "./outline-panel";
 import { PaperDuckMark } from "./paperduck-mark";
@@ -27,9 +28,7 @@ const initialVersions: VersionItem[] = [
   { id: "pending", label: "等待导入文档", time: "当前", actor: "纸上鸭", versionNumber: 0, current: true },
 ];
 function conversationFromLoop(messages: BrowserAgentLoopResult["checkpoint"]["messages"]) {
-  return messages
-    .filter((message) => (message.role === "user" || message.role === "assistant") && message.content.trim())
-    .map((message) => ({ role: message.role === "user" ? "user" as const : "agent" as const, text: message.content }));
+  return projectLegacyConversation(messages);
 }
 
 export function Workbench() {
@@ -201,11 +200,12 @@ export function Workbench() {
         if (durable) {
           durableConversationLoaded = durable.messages.length > 0;
           setConversationCursor(durable.nextCursor);
-          setConversation(durable.messages.flatMap((message) => {
-            const text = message.parts.find((part) => part.type === "text")?.text;
-            if (!text || (message.role !== "user" && message.role !== "assistant")) return [];
-            return [{ id: message.id, role: message.role === "user" ? "user" as const : "agent" as const, text, status: message.delivery_status ?? "sent" }];
-          }));
+          setConversation(projectAgentThread({ messages: durable.messages, historicalEvents: [], activeEvents: [] }).messages.map((message) => ({
+            id: message.id,
+            role: message.role,
+            text: message.text,
+            status: message.status,
+          })));
         }
         if (documentResult.status === "fulfilled" && documentResult.value) {
           const document = documentResult.value;
@@ -382,6 +382,7 @@ export function Workbench() {
         eventId: `local:${crypto.randomUUID()}`,
         timestamp: new Date().toISOString(),
         text: prompt,
+        clientMessageId: localMessageId,
       }]));
       const activeRun = startsFreshRun ? await createBrowserAgentRun(taskId, prompt, localMessageId) : run;
       activeRunForRecovery = activeRun;

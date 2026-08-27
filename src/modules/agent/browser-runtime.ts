@@ -151,7 +151,7 @@ export type BrowserAgentLoopResult = {
     messages: ReadonlyArray<{ role: "system" | "user" | "assistant" | "tool"; content: string }>;
     permissionMode?: AgentPermissionMode;
   };
-  events: ReadonlyArray<{ type: string; text?: string; name?: string; error?: string; eventId?: string; sequence?: number; timestamp?: string; [key: string]: unknown }>;
+  events: ReadonlyArray<{ type: string; text?: string; name?: string; error?: string; eventId?: string; sequence?: number; timestamp?: string; runId?: string; clientMessageId?: string; [key: string]: unknown }>;
 };
 
 export const runBrowserAgentLoop = async (runId: string, message: string, permissionMode: AgentPermissionMode = "default") =>

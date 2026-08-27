@@ -104,7 +104,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
   try {
     const input = schema.parse(await request.json());
     await persistAskUserAnswer(runId, input.message, input.clientMessageId);
-    const result = await (await createRunner(runId)).runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode);
+    const result = await (await createRunner(runId)).runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, undefined, undefined, input.clientMessageId);
     const response = NextResponse.json(result);
     logger.info("http.request.completed", { method: "POST", route: "/api/agent/runs/:runId/loop", status: response.status, durationMs: performance.now() - started, runId });
     return response;
@@ -142,7 +142,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
           controller.enqueue(payload);
         };
         try {
-          const result = await runner.runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, request.signal, (event) => send("event", event));
+          const result = await runner.runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, request.signal, (event) => send("event", event), input.clientMessageId);
           send("result", result);
         } catch (error) {
           streamFailed = true;

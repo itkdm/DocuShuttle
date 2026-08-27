@@ -73,7 +73,7 @@ export type AgentLoopStore = {
 export const AGENT_LEASE_MANAGED_STATUSES = ["queued", "analyzing", "generating", "applying", "validating"] as const;
 
 export type AgentLoopEvent = { timestamp?: string; eventId?: string } & (
-  | { type: "turn.started"; text: string }
+  | { type: "turn.started"; text: string; clientMessageId?: string }
   | { type: "model.started"; text: string }
   | { type: "model.completed"; durationMs: number }
   /** Public streamed text from the provider. This is commentary while the
@@ -173,7 +173,7 @@ export class AgentLoopRunner {
     return this.runWithPermission(runId, userText, "default", signal);
   }
 
-  async runWithPermission(runId: string, userText: string, permissionMode: AgentPermissionMode, signal?: AbortSignal, onEvent?: (event: AgentLoopEvent) => void): Promise<AgentLoopResult> {
+  async runWithPermission(runId: string, userText: string, permissionMode: AgentPermissionMode, signal?: AbortSignal, onEvent?: (event: AgentLoopEvent) => void, clientMessageId?: string): Promise<AgentLoopResult> {
     const current = await this.store.load(runId);
     const checkpoint: AgentLoopCheckpoint = current ?? {
       messages: [],
@@ -234,7 +234,7 @@ export class AgentLoopRunner {
       if (notify) onEvent?.(traceEvent);
       return traceEvent;
     };
-    if (userText.trim()) emit({ type: "turn.started", text: userText });
+    if (userText.trim()) emit({ type: "turn.started", text: userText, ...(clientMessageId ? { clientMessageId } : {}) });
 
     while (checkpoint.iterations < this.maxIterations) {
       checkpoint.iterations += 1;

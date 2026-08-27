@@ -14,6 +14,10 @@ class MemoryStore {
   async heartbeat() { this.heartbeats += 1; return true; }
   async loadEffectReceipt(_runId: string, idempotencyKey: string) { return this.receipts.get(idempotencyKey); }
   async saveEffectReceipt(_runId: string, receipt: AgentEffectReceipt) { this.receipts.set(receipt.idempotencyKey, receipt); return receipt; }
+  async markCancelled() {
+    if (!this.value) return;
+    this.value = { ...this.value, status: "cancelled", pendingInteraction: undefined, pendingResolution: undefined };
+  }
   async resolvePendingApproval(_runId: string, interactionId: string, callId: string, decision: "approved" | "rejected") {
     const checkpoint = this.value;
     if (checkpoint?.pendingInteraction?.type !== "approval" || checkpoint.pendingInteraction.interactionId !== interactionId || checkpoint.pendingInteraction.callId !== callId) return undefined;
@@ -410,6 +414,25 @@ describe("AgentLoopRunner", () => {
     );
     expect(recovered.checkpoint.messages.filter((message) => message.role === "assistant" && message.toolCalls?.some((call) => call.id === "crash-after-result"))).toHaveLength(1);
     expect(recovered.checkpoint.messages.filter((message) => message.role === "tool" && message.toolCallId === "crash-after-result")).toHaveLength(1);
+  });
+
+  it("does not execute a resolved approval after cancellation", async () => {
+    const store = new MemoryStore();
+    let executions = 0;
+    const tool: AgentTool = { name: "apply_change", description: "Apply", inputSchema: z.object({ nodeId: z.string() }), requiresApproval: true, async execute() { executions += 1; return { ok: true }; } };
+    const paused = await new AgentLoopRunner({ decide: async () => ({ kind: "tool_calls", calls: [{ id: "cancel-after-resolution", name: "apply_change", input: { nodeId: "p-1" } }] }) }, store, [tool]).run("run-cancel-resolution", "修改");
+    const pending = paused.checkpoint.pendingInteraction;
+    await store.resolvePendingApproval("run-cancel-resolution", pending!.interactionId, pending?.type === "approval" ? pending.callId : "", "approved");
+    await store.markCancelled();
+
+    const cancelled = await store.load();
+    expect(cancelled?.status).toBe("cancelled");
+    expect(cancelled?.pendingInteraction).toBeUndefined();
+    expect(cancelled?.pendingResolution).toBeUndefined();
+    await expect(new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "不应执行" }) }, store, [tool]).resume(
+      "run-cancel-resolution", "approved", pending!.interactionId, pending?.type === "approval" ? pending.callId : ""
+    )).rejects.toThrow("RUN_CANCELLED");
+    expect(executions).toBe(0);
   });
 
   it("replays a durable user-input resolution after the original request is gone", async () => {

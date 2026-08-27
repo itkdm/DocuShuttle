@@ -44,4 +44,38 @@ describe("SupabaseAgentLoopStore interaction resolution contract", () => {
       p_resolution: { interactionId: "interaction-2", type: "user_input", messageId: "message-2", text: "第三章" },
     }));
   });
+
+  it("clears both checkpoint and projection resolution fields when cancelling", async () => {
+    const current = {
+      state: {
+        loopCheckpoint: {
+          messages: [], iterations: 1, toolCallCount: 1, status: "running",
+          pendingResolution: { interactionId: "interaction-3", type: "approval", callId: "call-3", toolName: "apply_change", input: {}, decision: "approved" },
+        },
+      },
+      lock_version: 4,
+    };
+    const selectQuery = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn() };
+    selectQuery.select.mockReturnValue(selectQuery);
+    selectQuery.eq.mockReturnValue(selectQuery);
+    selectQuery.maybeSingle.mockResolvedValue({ data: current, error: null });
+    const updateQuery = { update: vi.fn(), eq: vi.fn(), select: vi.fn(), maybeSingle: vi.fn() };
+    updateQuery.update.mockReturnValue(updateQuery);
+    updateQuery.eq.mockReturnValue(updateQuery);
+    updateQuery.select.mockReturnValue(updateQuery);
+    updateQuery.maybeSingle.mockResolvedValue({ data: { id: "run-3" }, error: null });
+    const from = vi.fn().mockReturnValueOnce(selectQuery).mockReturnValueOnce(updateQuery);
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: null });
+    const store = new SupabaseAgentLoopStore({ from, rpc } as unknown as SupabaseClient);
+
+    await store.markCancelled("run-3");
+    const update = updateQuery.update.mock.calls[0][0];
+    expect(update.state.pendingInteraction).toBeNull();
+    expect(update.state.pendingResolution).toBeNull();
+    expect(update.state.loopCheckpoint.pendingInteraction).toBeUndefined();
+    expect(update.state.loopCheckpoint.pendingResolution).toBeUndefined();
+    expect(update.resume_cursor.pendingInteraction).toBeUndefined();
+    expect(update.resume_cursor.pendingResolution).toBeUndefined();
+    expect(update.status).toBe("cancelled");
+  });
 });

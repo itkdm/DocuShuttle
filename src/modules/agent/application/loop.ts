@@ -449,6 +449,7 @@ export class AgentLoopRunner {
 
   async resume(runId: string, approval: "approved" | "rejected", interactionId: string, callId: string, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void): Promise<AgentLoopResult> {
     const current = await this.store.load(runId);
+    if (current?.status === "cancelled") throw new Error("RUN_CANCELLED");
     const pending = current?.pendingInteraction?.type === "approval" ? current.pendingInteraction : undefined;
     const existingResolution = current?.pendingResolution?.type === "approval" ? current.pendingResolution : undefined;
     if (!pending && !existingResolution) throw new Error("No pending agent approval");

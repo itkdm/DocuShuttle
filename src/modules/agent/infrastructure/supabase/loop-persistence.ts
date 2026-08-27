@@ -127,7 +127,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     }
     if (checkpoint.status === "cancelled") return;
     const event = createAgentEvent(runId, { type: "turn.cancelled", text: "本轮操作已取消。" });
-    const nextCheckpoint: AgentLoopCheckpoint = { ...checkpoint, status: "cancelled", pendingInteraction: undefined, finalText: event.text, trace: [...(checkpoint.trace ?? []), event].slice(-200) };
+    const nextCheckpoint: AgentLoopCheckpoint = { ...checkpoint, status: "cancelled", pendingInteraction: undefined, pendingResolution: undefined, finalText: event.text, trace: [...(checkpoint.trace ?? []), event].slice(-200) };
     const nextState = { ...state, status: "cancelled", pendingInteraction: null, pendingResolution: null, loopCheckpoint: nextCheckpoint, version: current.data.lock_version + 1 };
     const updated = await this.client.from("agent_runs")
       .update({ state: nextState, status: "cancelled", resume_cursor: nextCheckpoint, lock_version: current.data.lock_version + 1, updated_at: new Date().toISOString() })

@@ -402,6 +402,13 @@ export function Workbench() {
           }
         } catch { /* preserve the original error below */ }
       }
+      const failureMessage = error instanceof Error ? error.message : "这次分析没有完成，请重试。";
+      setLiveEvents((items) => mergeTimelineEvents(items, [{
+        type: "turn.failed",
+        eventId: `local:failed:${crypto.randomUUID()}`,
+        timestamp: new Date().toISOString(),
+        error: failureMessage,
+      }]));
       setConversation((items) => [...items, { role: "agent", text: error instanceof Error ? `这次分析没有完成：${error.message}` : "这次分析没有完成，请重试。" }]);
       setStage("idle");
       setNotice(error instanceof Error ? error.message : "Agent 分析失败");

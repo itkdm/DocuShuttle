@@ -14,7 +14,11 @@ import { SupabaseSourceDocumentContext } from "@/modules/agent/infrastructure/su
 import { OoxmlPreservationKernel } from "@/modules/documents";
 
 const schema = z.object({ approval: z.enum(["approved", "rejected"]) });
-const eventPayload = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+const eventPayload = (event: string, data: unknown) => {
+  const id = event === "event" && data && typeof data === "object" && typeof (data as { eventId?: unknown }).eventId === "string"
+    ? `id: ${(data as { eventId: string }).eventId}\n` : "";
+  return `${id}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+};
 
 async function createRunner(runId: string) {
   const { client } = await requireSupabaseUser();

@@ -90,7 +90,9 @@ export function isTimelineActive(events: readonly AgentEvent[], items: readonly 
   if (events.some((event) => event.type === "completed" || event.type === "turn.failed" || event.type === "turn.cancelled")) return false;
   if (items.some((item) => item.kind === "tool" && item.state === "running")) return true;
   const last = events.at(-1)?.type;
-  return last === "model.started" || last === "model.delta";
+  // A local turn.started is rendered before the request reaches the server.
+  // Keep the run affordance visible during that short create/stream gap too.
+  return last === "turn.started" || last === "model.started" || last === "model.delta" || last === "tool.started";
 }
 
 export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {

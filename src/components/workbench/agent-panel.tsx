@@ -36,21 +36,6 @@ interface AgentPanelProps {
   conversationLoading?: boolean;
 }
 
-const eventSummary = (event: AgentEvent) => {
-  if (event.type === "turn.started") return "已接收你的请求";
-  if (event.type === "model.started") return "正在处理请求";
-  if (event.type === "model.completed") return "已完成本次判断";
-  if (event.type === "model.delta") return "正在生成回复";
-  if (event.type === "tool.started") return `正在调用 ${event.name ?? "工具"}`;
-  if (event.type === "tool.completed") return `已完成 ${event.name ?? "工具"}`;
-  if (event.type === "tool.failed") return `${event.name ?? "工具"} 未完成：${event.error ?? "请重试"}`;
-  if (event.type === "approval.required") return `等待你批准 ${event.name ?? "文档操作"}`;
-  if (event.type === "assistant.message") return "已生成回复";
-  if (event.type === "turn.failed") return "本轮未完成";
-  if (event.type === "turn.cancelled") return "本轮已取消";
-  return "本轮已完成";
-};
-
 interface CustomSelectOption { value: string; label: string; }
 
 function CustomSelect({ value, options, onChange, disabled, icon }: { value: string; options: CustomSelectOption[]; onChange: (value: string) => void; disabled?: boolean; icon?: React.ReactNode }) {
@@ -157,7 +142,6 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
           {pendingInteraction?.type === "approval" && !timelineEvents.some((event) => event.type === "approval.required" && event.interactionId === pendingInteraction.interactionId) && <div className="scope-card"><span className="scope-kicker">需要你的确认</span><strong>准备执行：{pendingInteraction.toolName}</strong><p>Agent 已生成明确的修改参数。批准后会写入文档并生成新版本。</p><div className="scope-actions"><button className="primary-small" onClick={() => void handleLoopApproval("approved")} disabled={deciding}>{deciding ? "执行中…" : <><Check size={14} /> 批准并执行</>}</button><button onClick={() => void handleLoopApproval("rejected")} disabled={deciding}>{deciding ? "处理中…" : "拒绝"}</button></div></div>}
           {imageNodes.length > 0 && <div className="scope-card image-tool-card"><button type="button" className="image-tool-toggle" onClick={() => setImageToolOpen((open) => !open)} aria-expanded={imageToolOpen}><span><span className="scope-kicker">图片工具</span><strong>生成图片候选</strong></span><ChevronDown size={16} className={imageToolOpen ? "rotate" : ""} /></button>{imageToolOpen && <div className="image-tool-body"><p>选择图片节点并生成候选；候选不会自动写回文档。</p><label>目标图片<select value={imageTargetNodeId} onChange={(event) => onImageTargetNodeIdChange(event.target.value)} disabled={imageBusy}><option value="">请选择图片节点</option>{imageNodes.map((node, index) => <option key={node.nodeId} value={node.nodeId}>图片 {index + 1} · {node.nodeId.slice(0, 12)}</option>)}</select></label><label>图片描述<textarea value={imagePrompt} onChange={(event) => onImagePromptChange(event.target.value)} placeholder="例如：简洁的三模块系统结构图" rows={2} disabled={imageBusy} /></label><button type="button" className="primary-small" onClick={() => void onGenerateImages()} disabled={imageBusy || !imageTargetNodeId.trim() || !imagePrompt.trim()}>{imageBusy ? "生成中…" : "生成图片候选"}</button></div>}</div>}
           {imageCandidates.length > 0 && <div className="scope-card image-candidate-card"><span className="scope-kicker">图片候选</span><strong>选择要应用的候选</strong><p>候选不会自动写回；选择后仍会按当前权限策略执行。</p>{imageCandidates.map((candidate) => <button key={candidate.id} onClick={() => onApplyImage(candidate)} disabled={imageBusy}><Image src={candidate.downloadUrl} alt="图片候选" width={240} height={140} unoptimized /><span>应用此候选</span></button>)}</div>}
-          {runtimeView.isRunning && !timelineEvents.length && <div className="progress-card"><div className="progress-top"><strong>{currentTimeline.at(-1) ? eventSummary(currentTimeline.at(-1)!) : "正在准备"}</strong><span>进行中</span></div><small>执行过程会实时显示在上方对话时间线</small><button className="cancel-run" onClick={onCancel}><StopCircle size={13} /> 取消</button></div>}
         {showScrollToBottom && <button type="button" className="scroll-to-bottom" onClick={() => { const element = contentRef.current; if (!element) return; stickToBottomRef.current = true; setShowScrollToBottom(false); scrollToBottom(element, "smooth"); }} aria-label="回到底部">↓ 回到底部</button>}
       </div>
       <div className="agent-composer">

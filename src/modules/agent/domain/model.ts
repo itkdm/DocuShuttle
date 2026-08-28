@@ -4,7 +4,6 @@ export type AgentRunStatus =
   | "running"
   | "awaiting_approval"
   | "awaiting_user"
-  | "awaiting_review"
   | "completed"
   | "failed"
   | "cancelled";
@@ -16,9 +15,6 @@ export type AgentRuntimePendingInteraction =
 export type AgentInteractionResolution =
   | { readonly interactionId: string; readonly type: "approval"; readonly callId: string; readonly toolName: string; readonly input: unknown; readonly decision: "approved" | "rejected" }
   | { readonly interactionId: string; readonly type: "user_input"; readonly messageId: string; readonly text: string };
-
-export type AgentPendingInteraction = AgentRuntimePendingInteraction
-  | { readonly type: "final_review"; readonly revision: string };
 
 export type AgentRunFailure = {
   readonly code: string;
@@ -34,7 +30,7 @@ export interface AgentRun {
   readonly documentId?: string;
   readonly baseRevision?: string;
   readonly status: AgentRunStatus;
-  readonly pendingInteraction?: AgentPendingInteraction;
+  readonly pendingInteraction?: AgentRuntimePendingInteraction;
   readonly failure?: AgentRunFailure;
   readonly lockVersion: number;
   readonly leaseExpiresAt?: string;

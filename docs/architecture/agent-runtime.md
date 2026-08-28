@@ -98,7 +98,8 @@ Receipt，重试优先重放 Receipt。服务端异常日志不得记录模型�
 
 `status = awaiting_approval` 只与 approval interaction 对应，`status = awaiting_user` 只与
 user-input interaction 对应；`running`、终态和取消状态不得残留 runtime interaction。
-`final_review` 不属于 Tool Loop interrupt，本轮仍由产品层保留。
+Agent Runtime 的 HITL 只有 `approval` 与 `user_input`；版本历史与 Restore
+承担写入后的安全回退，不在 Agent Run 中引入二次审核状态。
 
 交互解决采用短生命周期的 `pendingResolution` durable inbox：approval 保存
 `interactionId/callId/toolName/input/decision`，其中 `toolName/input` 由数据库从原始
@@ -118,7 +119,7 @@ revision CAS、OOXML validation、immutable version、Effect Receipt、idempoten
 ## 运行状态与恢复契约
 
 `agent_runs.status` 只表达运行生命周期：`queued`、`running`、`awaiting_approval`、
-`awaiting_user`、`awaiting_review`、`completed`、`failed`、`cancelled`。模型驱动的
+`awaiting_user`、`completed`、`failed`、`cancelled`。模型驱动的
 执行顺序只存在于 `AgentLoopRunner`；没有独立 TurnId，`runId` 是界面可见的一次宏观
 用户回合，`conversationId` 负责跨回合上下文归属。
 

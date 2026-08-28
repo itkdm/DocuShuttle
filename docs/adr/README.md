@@ -7,3 +7,4 @@
 - [ADR-0005：模型驱动 Agent Loop](0005-agent-loop.md)
 - [ADR-0006：OOXML 内核地基迁移](0006-kernel-foundation-migration.md)
 - [ADR-0007：Agent 运行期允许预写提示词但禁止发送](0007-agent-composer-input-during-run.md)
+- [ADR-0008：Agent Runtime 不包含 Final Review](0008-remove-agent-final-review.md)

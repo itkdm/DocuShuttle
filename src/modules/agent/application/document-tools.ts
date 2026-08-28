@@ -134,7 +134,7 @@ export function createDocumentTools(
 
   const listRegions: AgentTool<typeof regionListSchema> = {
     name: "list_document_regions",
-    description: "List one bounded page (maximum 80) of stable document nodes and short text previews. Use offset to inspect another page; do not request the entire document unless necessary.",
+    description: "List one bounded page (maximum 80) of stable document nodes and short text previews. limit MUST be an integer from 1 to 80. Use offset for pagination; never request limit greater than 80 or the entire document unless necessary.",
     inputSchema: regionListSchema,
     async execute(input) {
       const { inspection } = await inspectCurrent();

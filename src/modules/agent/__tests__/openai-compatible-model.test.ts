@@ -5,6 +5,12 @@ import { logger } from "@/infrastructure/observability";
 import { OpenAICompatibleAgentModel } from "../infrastructure/openai-compatible-model";
 import { createProviderFetchObserver } from "../infrastructure/provider-fetch-observer";
 
+const openAiStream = (parts: readonly Record<string, unknown>[]) => {
+  const encoder = new TextEncoder();
+  const body = parts.map((part) => `data: ${JSON.stringify(part)}\n\n`).join("" ) + "data: [DONE]\n\n";
+  return new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(encoder.encode(body)); controller.close(); } }), { status: 200, headers: { "content-type": "text/event-stream" } });
+};
+
 describe("OpenAI-compatible Agent model adapter", () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -74,6 +80,63 @@ describe("OpenAI-compatible Agent model adapter", () => {
     const model = new OpenAICompatibleAgentModel({ apiKey: "test", baseUrl: "https://gateway.test/v1", model: "deepseek-v4-flash", provider: "deepseek", reasoningMode: "disabled" });
     await model.decide({ messages: [{ role: "user", content: "你好" }], tools: [] });
     expect(request?.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("sends the configured output budget and reports stream activity without leaking reasoning as text", async () => {
+    let request: Record<string, unknown> | undefined;
+    let activityCount = 0;
+    let publicText = "";
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      request = JSON.parse(String(init?.body));
+      return openAiStream([
+        { choices: [{ index: 0, delta: { role: "assistant", reasoning_content: "正在思考" }, finish_reason: null }] },
+        { choices: [{ index: 0, delta: { content: "完成" }, finish_reason: null }] },
+        { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+      ]);
+    }));
+    const model = new OpenAICompatibleAgentModel({ apiKey: "test", baseUrl: "https://gateway.test/v1", model: "deepseek-v4-flash", provider: "deepseek", reasoningMode: "enabled", maxOutputTokens: 4096 });
+    const result = await model.decide({ messages: [{ role: "user", content: "检查" }], tools: [], onTextDelta: (text) => { publicText += text; }, onStreamActivity: () => { activityCount += 1; } });
+    expect(result).toMatchObject({ kind: "message", text: "完成", reasoning: "正在思考" });
+    expect(publicText).toBe("完成");
+    expect(activityCount).toBeGreaterThanOrEqual(3);
+    expect(request?.max_tokens).toBe(4096);
+  });
+
+  it("keeps reasoning-only activity alive without emitting public text", async () => {
+    let publicText = "";
+    let activityCount = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => openAiStream([
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning_content: "只在私有思考" }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+    ])));
+    const model = new OpenAICompatibleAgentModel({ apiKey: "test", baseUrl: "https://gateway.test/v1", model: "deepseek-v4-flash", provider: "deepseek", reasoningMode: "enabled" });
+    const result = await model.decide({ messages: [{ role: "user", content: "检查" }], tools: [], onTextDelta: (text) => { publicText += text; }, onStreamActivity: () => { activityCount += 1; } });
+    expect(result).toMatchObject({ kind: "message", text: "我暂时没有足够信息继续，请补充一下目标。", reasoning: "只在私有思考" });
+    expect(publicText).toBe("");
+    expect(activityCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it("treats a length finish as an output budget failure even after partial text", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => openAiStream([
+      { choices: [{ index: 0, delta: { content: "部分结果" }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: "length" }] },
+    ])));
+    const model = new OpenAICompatibleAgentModel({ apiKey: "test", baseUrl: "https://gateway.test/v1", model: "test-model", maxOutputTokens: 256 });
+    await expect(model.decide({ messages: [{ role: "user", content: "检查" }], tools: [], onTextDelta: () => undefined })).rejects.toThrow("MODEL_OUTPUT_BUDGET_EXCEEDED");
+  });
+
+  it("uses tool input stream parts as liveness without exposing them as public text", async () => {
+    let activityCount = 0;
+    let publicText = "";
+    vi.stubGlobal("fetch", vi.fn(async () => openAiStream([
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call-1", type: "function", function: { name: "inspect_document", arguments: "{}" } }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+    ])));
+    const model = new OpenAICompatibleAgentModel({ apiKey: "test", baseUrl: "https://gateway.test/v1", model: "test-model" });
+    const result = await model.decide({ messages: [{ role: "user", content: "检查" }], tools: [{ name: "inspect_document", description: "Inspect", inputSchema: z.object({}), async execute() { return {}; } }], onTextDelta: (text) => { publicText += text; }, onStreamActivity: () => { activityCount += 1; } });
+    expect(result).toMatchObject({ kind: "tool_calls", calls: [{ id: "call-1", name: "inspect_document" }] });
+    expect(publicText).toBe("");
+    expect(activityCount).toBeGreaterThanOrEqual(2);
   });
 
   it("supports ordinary conversation without selecting a document tool", async () => {

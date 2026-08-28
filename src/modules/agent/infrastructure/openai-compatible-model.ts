@@ -1,9 +1,9 @@
 import { generateText, streamText, tool } from "ai";
 import { z } from "zod";
 
-import type { AgentModelDecision, AgentModelPort, AgentLoopMessage, AgentTool } from "../application/loop";
+import { AgentModelOutputBudgetExceededError, AgentModelTimeoutError, type AgentModelDecision, type AgentModelPort, type AgentLoopMessage, type AgentTool } from "../application/loop";
 import { createTimer, logger } from "@/infrastructure/observability";
-import { assertReasoningModeSupported, createAgentLanguageModel, readAgentModelEnvironmentConfig, type AgentModelProvider, type AgentReasoningMode } from "./model-provider";
+import { assertReasoningModeSupported, createAgentLanguageModel, DEFAULT_AGENT_MAX_OUTPUT_TOKENS, readAgentModelEnvironmentConfig, type AgentModelProvider, type AgentReasoningMode } from "./model-provider";
 
 export type OpenAICompatibleModelOptions = {
   apiKey: string;
@@ -12,6 +12,7 @@ export type OpenAICompatibleModelOptions = {
   system?: string;
   provider?: AgentModelProvider;
   reasoningMode?: AgentReasoningMode;
+  maxOutputTokens?: number;
 };
 
 const parseToolResult = (content: string) => {
@@ -35,7 +36,8 @@ export const PAPERDUCK_AGENT_SYSTEM = `你是纸上鸭（PaperDuck），一个�
 6. 工具失败、revision 冲突或能力不支持时，要如实说明，优先重新读取当前文档或向用户询问必要信息，不要静默重试破坏性操作。plan_text_change 返回 guarded/unsupported 或校验错误时，必须停止写入并解释原因。
 7. 可以在同一步调用多个互不冲突的读取工具；文档写入必须按 revision 顺序执行。若有多个确定的文本修改，优先使用批量写入工具，避免部分完成。
 8. 保留原文事实、语言和格式意图；不确定时提出一个具体问题。回复使用用户的语言，简洁说明下一步和已确认的事实。
-9. Fresh Run 规则：每次新 Run 的最后一条 User Message 是本轮唯一权威指令；历史中的失败、未完成、被拒绝或等待中的旧工作流仅作背景。除非最新消息明确表达继续、重试或继续刚才的操作，否则不得自动重启旧的写入、工具或审批流程；same-Run 的 ask_user/approval 回答仍按当前 Run 恢复。`;
+9. 工具参数必须严格符合各 Tool 的 schema；分页工具不得突破声明上限；收到 TOOL_INPUT_VALIDATION_FAILED 后，先根据 issues 修正参数，再决定是否重试。
+10. Fresh Run 规则：每次新 Run 的最后一条 User Message 是本轮唯一权威指令；历史中的失败、未完成、被拒绝或等待中的旧工作流仅作背景。除非最新消息明确表达继续、重试或继续刚才的操作，否则不得自动重启旧的写入、工具或审批流程；same-Run 的 ask_user/approval 回答仍按当前 Run 恢复。`;
 
 /**
  * Model-only adapter. It deliberately does not execute tools; PaperDuck's
@@ -47,7 +49,7 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
   private readonly provider: Awaited<ReturnType<typeof createAgentLanguageModel>>;
 
   constructor(private readonly options: OpenAICompatibleModelOptions) {
-    const config = { provider: options.provider ?? "openai-compatible", reasoningMode: options.reasoningMode ?? "disabled", apiKey: options.apiKey, baseUrl: options.baseUrl, model: options.model };
+    const config = { provider: options.provider ?? "openai-compatible", reasoningMode: options.reasoningMode ?? "disabled", apiKey: options.apiKey, baseUrl: options.baseUrl, model: options.model, maxOutputTokens: options.maxOutputTokens ?? DEFAULT_AGENT_MAX_OUTPUT_TOKENS };
     assertReasoningModeSupported(config);
     this.provider = createAgentLanguageModel(config);
   }
@@ -57,10 +59,12 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
     tools: readonly AgentTool[];
     signal?: AbortSignal;
     onTextDelta?: (text: string) => void;
+    onStreamActivity?: () => void;
   }): Promise<AgentModelDecision> {
     const inputCharacterCount = input.messages.reduce((total, message) => total + message.content.length, 0);
     const provider = this.options.provider ?? "openai-compatible";
     const reasoningMode = this.options.reasoningMode ?? "disabled";
+    const maxOutputTokens = this.options.maxOutputTokens ?? DEFAULT_AGENT_MAX_OUTPUT_TOKENS;
     const timer = createTimer("agent.model", { provider, model: this.options.model, reasoningMode, inputMessageCount: input.messages.length, inputCharacterCount, toolCount: input.tools.length });
     logger.info("agent.model.started", timer.metadata);
     let firstTokenMs: number | undefined;
@@ -68,9 +72,9 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
       if (firstTokenMs === undefined) { firstTokenMs = timer.elapsed(); timer.mark("first_token"); logger.info("agent.model.first_token", { ...timer.metadata, firstTokenMs }); }
       input.onTextDelta?.(text);
     } : undefined;
-    const complete = (decision: AgentModelDecision, usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }) => {
+    const complete = (decision: AgentModelDecision, usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }, metadata: Record<string, unknown> = {}) => {
       const reasoning = decision.reasoning;
-      logger.info("agent.model.completed", { ...timer.metadata, durationMs: timer.elapsed(), firstTokenMs, outcome: "success", ...(usage ?? {}), toolCallNames: decision.kind === "tool_calls" ? decision.calls.map((call) => call.name) : [], reasoningPresent: Boolean(reasoning), reasoningCharacters: reasoning?.length ?? 0 });
+      logger.info("agent.model.completed", { ...timer.metadata, durationMs: timer.elapsed(), firstTokenMs, outcome: "success", ...(usage ?? {}), ...metadata, finishReason: metadata.finishReason, maxOutputTokens, toolCallNames: decision.kind === "tool_calls" ? decision.calls.map((call) => call.name) : [], reasoningPresent: Boolean(reasoning), reasoningCharacters: reasoning?.length ?? 0 });
       return decision;
     };
     // ask_user is a control-plane tool: the model may explicitly suspend the
@@ -115,11 +119,22 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
         inputSchema: candidate.inputSchema,
       })])),
       stopWhen: () => true,
+      maxOutputTokens,
       abortSignal: input.signal,
       ...(provider === "deepseek" ? { providerOptions: { deepseek: { thinking: { type: reasoningMode } } } } : {}),
     } as Parameters<typeof streamText>[0];
     if (onTextDelta) {
       let lastError: unknown;
+      let firstActivityMs: number | undefined;
+      let publicTextCharacters = 0;
+      let reasoningCharacters = 0;
+      let toolInputCharacters = 0;
+      let streamPartCount = 0;
+      const markActivity = () => {
+        if (firstActivityMs === undefined) { firstActivityMs = timer.elapsed(); }
+        input.onStreamActivity?.();
+      };
+      const metrics = () => ({ firstActivityMs, publicTextCharacters, reasoningCharacters, toolInputCharacters, streamPartCount, maxOutputTokens });
       // Some OpenAI-compatible gateways occasionally close a streamed turn
       // before emitting either text or tool calls. Retry the model-only
       // request once; no tool has executed yet, so this cannot duplicate a
@@ -129,26 +144,41 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
         let streamedText = "";
         try {
           const response = streamText(request);
-          for await (const delta of response.textStream) {
-            streamedText += delta;
-            onTextDelta(delta);
+          for await (const part of response.fullStream) {
+            streamPartCount += 1;
+            markActivity();
+            if (part.type === "text-delta") {
+              streamedText += part.text;
+              publicTextCharacters += part.text.length;
+              onTextDelta(part.text);
+            } else if (part.type === "reasoning-delta") {
+              reasoningCharacters += part.text.length;
+            } else if (part.type === "tool-input-delta") {
+              toolInputCharacters += part.delta.length;
+            }
+          }
+          const finishReason = await response.finishReason;
+          if (finishReason === "length") {
+            logger.warn("agent.model.output_budget_exceeded", { ...timer.metadata, ...metrics(), finishReason });
+            throw new AgentModelOutputBudgetExceededError();
           }
           const toolCalls = await response.toolCalls;
           const reasoning = (await response.reasoningText) || undefined;
           const usage = await response.usage;
+          logger.info("agent.model.stream_metrics", { ...timer.metadata, ...metrics(), finishReason });
           if (toolCalls.length > 0) {
             const ask = toolCalls.find((call) => call.toolName === "ask_user");
             if (ask && typeof ask.input === "object" && ask.input !== null && "text" in ask.input) {
-              return complete({ kind: "ask_user", text: String((ask.input as { text: unknown }).text), reasoning }, usage);
+              return complete({ kind: "ask_user", text: String((ask.input as { text: unknown }).text), reasoning }, usage, { finishReason, ...metrics() });
             }
             return complete({
               kind: "tool_calls",
               calls: toolCalls.map((call) => ({ id: call.toolCallId, name: call.toolName, input: call.input })),
               text: streamedText || undefined,
               reasoning,
-            }, usage);
+            }, usage, { finishReason, ...metrics() });
           }
-          return complete({ kind: "message", text: streamedText || "我暂时没有足够信息继续，请补充一下目标。", reasoning }, usage);
+          return complete({ kind: "message", text: streamedText || "我暂时没有足够信息继续，请补充一下目标。", reasoning }, usage, { finishReason, ...metrics() });
         } catch (error) {
           lastError = error;
           if (attempt === 0 && streamedText.length === 0 && !input.signal?.aborted) {
@@ -159,26 +189,32 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
         }
       }
       const error = lastError instanceof Error ? lastError : new Error("模型没有返回可用结果");
-      logger.error("agent.model.failed", { ...timer.metadata, durationMs: timer.elapsed(), firstTokenMs, error });
+      const timeoutKind = input.signal?.reason instanceof AgentModelTimeoutError ? input.signal.reason.timeoutKind : undefined;
+      logger.error("agent.model.failed", { ...timer.metadata, durationMs: timer.elapsed(), firstTokenMs, timeoutKind, ...metrics(), error });
       throw error;
     }
     const response = await generateText(request);
+    const finishReason = response.finishReason;
+    if (finishReason === "length") {
+      logger.warn("agent.model.output_budget_exceeded", { ...timer.metadata, finishReason, maxOutputTokens, publicTextCharacters: response.text.length, reasoningCharacters: response.reasoningText?.length ?? 0, streamPartCount: 0 });
+      throw new AgentModelOutputBudgetExceededError();
+    }
     const usage = response.usage;
     const reasoning = response.reasoningText || undefined;
     if (response.toolCalls.length > 0) {
       const ask = response.toolCalls.find((call) => call.toolName === "ask_user");
       if (ask && typeof ask.input === "object" && ask.input !== null && "text" in ask.input) {
-        return complete({ kind: "ask_user", text: String((ask.input as { text: unknown }).text), reasoning }, usage);
+        return complete({ kind: "ask_user", text: String((ask.input as { text: unknown }).text), reasoning }, usage, { finishReason, maxOutputTokens, publicTextCharacters: response.text.length, reasoningCharacters: response.reasoningText?.length ?? 0, streamPartCount: 0 });
       }
       return complete({
         kind: "tool_calls",
         calls: response.toolCalls.map((call) => ({ id: call.toolCallId, name: call.toolName, input: call.input })),
         text: response.text || undefined,
         reasoning,
-      }, usage);
+      }, usage, { finishReason, maxOutputTokens, publicTextCharacters: response.text.length, reasoningCharacters: response.reasoningText?.length ?? 0, streamPartCount: 0 });
     }
     const text = response.text || "I need more information to continue.";
-    return complete({ kind: "message", text, reasoning }, usage);
+    return complete({ kind: "message", text, reasoning }, usage, { finishReason, maxOutputTokens, publicTextCharacters: response.text.length, reasoningCharacters: response.reasoningText?.length ?? 0, streamPartCount: 0 });
   }
 }
 

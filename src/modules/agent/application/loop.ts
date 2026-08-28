@@ -45,6 +45,8 @@ export interface AgentModelPort {
     signal?: AbortSignal;
     /** Public response tokens only; never use this channel for private reasoning. */
     onTextDelta?: (text: string) => void;
+    /** Server-internal provider liveness; never becomes an AgentEvent. */
+    onStreamActivity?: () => void;
   }): Promise<AgentModelDecision>;
 }
 
@@ -116,6 +118,48 @@ export type AgentEngineeringEvent = {
 };
 
 export const TRANSPORT_INTERRUPTED = "TRANSPORT_INTERRUPTED";
+export type AgentModelTimeoutKind = "MODEL_IDLE_TIMEOUT" | "MODEL_MAX_DURATION_EXCEEDED";
+
+export class AgentModelTimeoutError extends Error {
+  constructor(public readonly timeoutKind: AgentModelTimeoutKind) {
+    super(timeoutKind);
+    this.name = timeoutKind;
+  }
+}
+
+export class AgentModelOutputBudgetExceededError extends Error {
+  constructor() {
+    super("MODEL_OUTPUT_BUDGET_EXCEEDED");
+    this.name = "MODEL_OUTPUT_BUDGET_EXCEEDED";
+  }
+}
+
+export type ToolInputValidationIssue = {
+  path: string;
+  code: string;
+  message: string;
+  maximum?: number;
+  minimum?: number;
+};
+
+export type ToolInputValidationError = {
+  error: "TOOL_INPUT_VALIDATION_FAILED";
+  issues: ToolInputValidationIssue[];
+};
+
+export const formatToolInputValidationError = (error: unknown): ToolInputValidationError | undefined => {
+  if (!(error instanceof z.ZodError)) return undefined;
+  return {
+    error: "TOOL_INPUT_VALIDATION_FAILED",
+    issues: error.issues.slice(0, 8).map((issue) => ({
+      path: issue.path.length ? issue.path.join(".") : "input",
+      code: issue.code,
+      message: issue.message,
+      ...(("maximum" in issue && typeof issue.maximum === "number") ? { maximum: issue.maximum } : {}),
+      ...(("minimum" in issue && typeof issue.minimum === "number") ? { minimum: issue.minimum } : {}),
+    })),
+  };
+};
 
 const compactForModel = (value: unknown, depth = 0): unknown => {
   if (depth > 5) return "[内容已省略]";
@@ -162,11 +206,12 @@ export class AgentLoopRunner {
     private readonly tools: readonly AgentTool[],
     private readonly maxIterations = 24,
     private readonly maxToolCalls = 48,
-    private readonly modelTimeoutMs = 30_000,
+    private readonly modelIdleTimeoutMs = 30_000,
     private readonly contextCompactionPolicy: AgentContextCompactionPolicy = DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY,
     private readonly heartbeatIntervalMs = 30_000,
     private readonly onEngineeringEvent?: (event: AgentEngineeringEvent) => void,
     private readonly conversationContext?: AgentConversationContextPort,
+    private readonly modelMaxDurationMs = 120_000,
   ) {}
 
   private observe(runId: string, event: AgentEvent, permissionMode?: AgentPermissionMode) {
@@ -422,11 +467,22 @@ export class AgentLoopRunner {
       const modelStartedAt = Date.now();
       let decision: AgentModelDecision;
       const modelController = new AbortController();
+      let timeoutKind: AgentModelTimeoutKind | undefined;
+      let idleTimeout: ReturnType<typeof setTimeout> | undefined;
       const abortModel = () => modelController.abort(signal?.reason);
-      const timeout = setTimeout(() => modelController.abort(new Error("模型响应超时")), this.modelTimeoutMs);
+      const abortForTimeout = (kind: AgentModelTimeoutKind) => {
+        timeoutKind = kind;
+        modelController.abort(new AgentModelTimeoutError(kind));
+      };
+      const resetIdleTimeout = () => {
+        if (idleTimeout) clearTimeout(idleTimeout);
+        idleTimeout = setTimeout(() => abortForTimeout("MODEL_IDLE_TIMEOUT"), this.modelIdleTimeoutMs);
+      };
+      resetIdleTimeout();
+      const maxDurationTimeout = setTimeout(() => abortForTimeout("MODEL_MAX_DURATION_EXCEEDED"), this.modelMaxDurationMs);
       signal?.addEventListener("abort", abortModel, { once: true });
       try {
-        decision = await this.withLeaseHeartbeat(runId, () => this.model.decide({ messages: context.messages, tools: this.tools, signal: modelController.signal, onTextDelta: (text) => emit({ type: "model.delta", text, channel: "commentary" }) }), { skipInitialBeat: true });
+        decision = await this.withLeaseHeartbeat(runId, () => this.model.decide({ messages: context.messages, tools: this.tools, signal: modelController.signal, onTextDelta: (text) => emit({ type: "model.delta", text, channel: "commentary" }), onStreamActivity: resetIdleTimeout }), { skipInitialBeat: true });
       } catch (error) {
         if (signal?.aborted) {
           const cancelled = await this.store.load(runId);
@@ -437,14 +493,21 @@ export class AgentLoopRunner {
         // Provider/network failures must become a durable checkpoint instead of
         // leaving the run in `running` forever (or only returning a generic 500).
         // This also gives the UI a truthful, retryable terminal state.
-        const message = modelController.signal.aborted && !signal?.aborted
-          ? `模型响应超时（${Math.round(this.modelTimeoutMs / 1000)} 秒）`
-          : error instanceof Error ? error.message : "Model request failed";
+        const modelTimeout = timeoutKind ?? (error instanceof AgentModelTimeoutError ? error.timeoutKind : undefined);
+        const message = modelTimeout === "MODEL_IDLE_TIMEOUT"
+          ? `模型响应超时：连续 ${Math.round(this.modelIdleTimeoutMs / 1000)} 秒没有响应`
+          : modelTimeout === "MODEL_MAX_DURATION_EXCEEDED"
+            ? `模型响应超时：执行超过 ${Math.round(this.modelMaxDurationMs / 1000)} 分钟安全上限`
+            : error instanceof AgentModelOutputBudgetExceededError
+              ? "模型本次输出超过安全上限，请缩小任务范围后重试。"
+              : error instanceof Error ? error.message : "Model request failed";
         const safeMessage = /No output generated|stream for errors|fetch failed|ECONN|ETIMEDOUT/i.test(message)
           ? "模型暂时没有返回有效结果"
           : message.length > 240 ? `${message.slice(0, 240)}…` : message;
         checkpoint.status = "failed";
-        checkpoint.finalText = `这次请求暂时没有完成（模型服务异常）。${safeMessage}，请稍后重试。`;
+        checkpoint.finalText = error instanceof AgentModelOutputBudgetExceededError
+          ? safeMessage
+          : `这次请求暂时没有完成（模型服务异常）。${safeMessage}，请稍后重试。`;
         const failureMessage = emit({ type: "assistant.message", text: checkpoint.finalText }, false) as AssistantMessageEvent;
         const failureEvent = emit({ type: "turn.failed", error: checkpoint.finalText }, false);
         await this.store.saveWithAssistantMessage(runId, checkpoint, { messageKey: `assistant:${failureMessage.eventId}`, text: failureMessage.text });
@@ -452,7 +515,8 @@ export class AgentLoopRunner {
         onEvent?.(failureMessage); onEvent?.(failureEvent);
         return { checkpoint, events };
       } finally {
-        clearTimeout(timeout);
+        if (idleTimeout) clearTimeout(idleTimeout);
+        clearTimeout(maxDurationTimeout);
         signal?.removeEventListener("abort", abortModel);
       }
       emit({ type: "model.completed", durationMs: Date.now() - modelStartedAt });
@@ -512,9 +576,10 @@ export class AgentLoopRunner {
         try {
           input = tool.inputSchema.parse(call.input);
         } catch (error) {
-          const message = error instanceof Error ? error.message : "Tool input validation failed";
-          checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: message }), toolCallId: call.id, toolName: call.name });
-          emit({ type: "tool.failed", callId: call.id, name: call.name, error: message });
+          const validation = formatToolInputValidationError(error);
+          const message = validation ? JSON.stringify(validation) : error instanceof Error ? error.message : "Tool input validation failed";
+          checkpoint.messages.push({ role: "tool", content: message, toolCallId: call.id, toolName: call.name });
+          emit({ type: "tool.failed", callId: call.id, name: call.name, error: validation ? JSON.stringify(validation) : message });
           await saveCheckpoint();
           continue;
         }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { AgentLoopRunner, TRANSPORT_INTERRUPTED, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentModelPort, type AgentTool } from "../application/loop";
+import { AgentLoopRunner, AgentModelOutputBudgetExceededError, TRANSPORT_INTERRUPTED, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentModelPort, type AgentTool } from "../application/loop";
 import type { AgentEvent } from "../application/events";
 import type { AgentConversationContextPort } from "../application/ports";
 
@@ -771,6 +771,65 @@ describe("AgentLoopRunner", () => {
     expect(result.checkpoint.status).toBe("failed");
     expect(result.events.at(-2)).toMatchObject({ type: "assistant.message" });
     expect(result.events.at(-1)).toMatchObject({ type: "turn.failed" });
+  });
+
+  it("keeps invalid tool input out of execution and lets the model retry with structured issues", async () => {
+    let executions = 0;
+    let decisions = 0;
+    const tool: AgentTool = { name: "list_document_regions", description: "List", inputSchema: z.object({ limit: z.number().int().min(1).max(80) }), async execute() { executions += 1; return { ok: true }; } };
+    const model: AgentModelPort = { decide: async ({ messages }) => {
+      decisions += 1;
+      if (messages.some((message) => message.content.includes("TOOL_INPUT_VALIDATION_FAILED"))) return messages.some((message) => message.content.includes("{\"ok\":true}")) ? { kind: "message", text: "读取完成" } : { kind: "tool_calls", calls: [{ id: "valid-call", name: "list_document_regions", input: { limit: 80 } }] };
+      return { kind: "tool_calls", calls: [{ id: "invalid-call", name: "list_document_regions", input: { limit: 81 } }] };
+    } };
+    const result = await new AgentLoopRunner(model, new MemoryStore(), [tool]).run("run-validation", "读取文档");
+    const failed = result.events.find((event) => event.type === "tool.failed");
+    expect(failed).toMatchObject({ type: "tool.failed", callId: "invalid-call" });
+    expect(failed?.type === "tool.failed" ? JSON.parse(failed.error) : undefined).toMatchObject({ error: "TOOL_INPUT_VALIDATION_FAILED", issues: [{ path: "limit", maximum: 80 }] });
+    expect(result.events.filter((event) => event.type === "tool.started")).toHaveLength(1);
+    expect(result.events.filter((event) => event.type === "tool.completed")).toHaveLength(1);
+    expect(executions).toBe(1);
+    expect(decisions).toBe(3);
+  });
+
+  it("uses sliding idle timeout while an active model stream exceeds the idle window", async () => {
+    const model: AgentModelPort = { decide: async ({ onStreamActivity }) => {
+      for (let index = 0; index < 6; index += 1) {
+        onStreamActivity?.();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return { kind: "message", text: "完成" };
+    } };
+    const result = await new AgentLoopRunner(model, new MemoryStore(), [], 24, 48, 40, undefined, 30_000, undefined, undefined, 300).run("run-active-stream", "检查");
+    expect(result.checkpoint.status).toBe("completed");
+  });
+
+  it("classifies an idle model stall instead of leaving the run running", async () => {
+    const model: AgentModelPort = { decide: async ({ signal }) => new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason))) };
+    const result = await new AgentLoopRunner(model, new MemoryStore(), [], 24, 48, 30, undefined, 30_000, undefined, undefined, 300).run("run-idle-stall", "检查");
+    expect(result.checkpoint.status).toBe("failed");
+    expect(result.checkpoint.finalText).toContain("连续 0 秒没有响应");
+  });
+
+  it("enforces an absolute deadline even while model activity continues", async () => {
+    const model: AgentModelPort = { decide: async ({ onStreamActivity, signal }) => new Promise((_resolve, reject) => {
+      const timer = setInterval(() => onStreamActivity?.(), 10);
+      signal?.addEventListener("abort", () => { clearInterval(timer); reject(signal.reason); });
+    }) };
+    const result = await new AgentLoopRunner(model, new MemoryStore(), [], 24, 48, 40, undefined, 30_000, undefined, undefined, 70).run("run-max-duration", "检查");
+    expect(result.checkpoint.status).toBe("failed");
+    expect(result.checkpoint.finalText).toContain("超过 0 分钟安全上限");
+  });
+
+  it("turns an output budget failure into a truthful terminal turn failure", async () => {
+    let executions = 0;
+    const tool: AgentTool = { name: "apply_change", description: "Apply", inputSchema: z.object({}), async execute() { executions += 1; return {}; } };
+    const model: AgentModelPort = { decide: async () => { throw new AgentModelOutputBudgetExceededError(); } };
+    const result = await new AgentLoopRunner(model, new MemoryStore(), [tool]).run("run-output-budget", "检查");
+    expect(result.checkpoint.status).toBe("failed");
+    expect(result.checkpoint.finalText).toBe("模型本次输出超过安全上限，请缩小任务范围后重试。");
+    expect(result.events.some((event) => event.type === "turn.completed")).toBe(false);
+    expect(executions).toBe(0);
   });
 
   it("feeds a rejected approval back to the model for a different response", async () => {

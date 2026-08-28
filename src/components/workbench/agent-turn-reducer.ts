@@ -2,7 +2,7 @@ import type { AgentEvent } from "@/modules/agent/application/events";
 
 export type AgentActivity =
   | { type: "note"; id: string; text: string }
-  | { type: "tool"; id: string; callId: string; name: string; state: "running" | "completed" | "failed" | "approval"; input?: unknown; output?: unknown; error?: string; durationMs?: number };
+  | { type: "tool"; id: string; callId: string; name: string; state: "running" | "completed" | "failed" | "approval"; input?: unknown; output?: unknown; error?: string; errorDetails?: unknown; durationMs?: number };
 
 export type AgentTurnEventState = {
   readonly activities: readonly AgentActivity[];
@@ -13,6 +13,14 @@ export type AgentTurnEventState = {
 
 const callIdOf = (event: AgentEvent) => String((event as { callId?: unknown }).callId ?? "unknown");
 const toolNameOf = (event: AgentEvent) => "name" in event ? event.name : "document_operation";
+const parseToolErrorDetails = (error: string) => {
+  try {
+    const parsed = JSON.parse(error) as { error?: unknown; issues?: unknown };
+    return parsed.error === "TOOL_INPUT_VALIDATION_FAILED" && Array.isArray(parsed.issues) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 const toolIndexByCallId = (activities: readonly AgentActivity[], callId: string) => activities.findIndex((activity) => activity.type === "tool" && activity.callId === callId);
 
@@ -70,7 +78,8 @@ export function reduceAgentEvent(state: AgentTurnEventState, event: AgentEvent, 
       if (index >= 0) activities[index] = completed; else activities.push(completed);
     } else if (event.type === "tool.failed") {
       const target = current ?? { type: "tool" as const, id: `${runId}:tool:${callId}`, callId, name: event.name, state: "running" as const };
-      const failed = { ...target, name: event.name, state: "failed" as const, error: event.error, durationMs: typeof event.durationMs === "number" ? event.durationMs : undefined };
+      const errorDetails = parseToolErrorDetails(event.error);
+      const failed = { ...target, name: event.name, state: "failed" as const, error: errorDetails ? "参数不符合要求" : event.error, ...(errorDetails ? { errorDetails } : {}), durationMs: typeof event.durationMs === "number" ? event.durationMs : undefined };
       if (index >= 0) activities[index] = failed; else activities.push(failed);
     } else {
       const target = current ?? { type: "tool" as const, id: `${runId}:tool:${callId}`, callId, name: event.name, state: "running" as const };

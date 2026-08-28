@@ -6,6 +6,7 @@ import { createProviderFetchObserver } from "./provider-fetch-observer";
 
 export type AgentModelProvider = "deepseek" | "openai" | "openai-compatible";
 export type AgentReasoningMode = "disabled" | "enabled";
+export const DEFAULT_AGENT_MAX_OUTPUT_TOKENS = 16_384;
 
 export class AgentModelConfigurationError extends Error {
   constructor(message: string) {
@@ -20,6 +21,16 @@ export type AgentModelEnvironmentConfig = {
   apiKey: string;
   baseUrl: string;
   model: string;
+  maxOutputTokens?: number;
+};
+
+const parseMaxOutputTokens = (value: string | undefined) => {
+  if (value === undefined || value.trim() === "") return DEFAULT_AGENT_MAX_OUTPUT_TOKENS;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 131_072) {
+    throw new AgentModelConfigurationError("PAPERDUCK_MODEL_MAX_OUTPUT_TOKENS must be a positive integer no greater than 131072");
+  }
+  return parsed;
 };
 
 const parseProvider = (value: string | undefined): AgentModelProvider => {
@@ -43,7 +54,7 @@ export const readAgentModelEnvironmentConfig = (env: Partial<NodeJS.ProcessEnv> 
     : provider === "openai"
       ? { apiKey: env.OPENAI_API_KEY ?? "", baseUrl: env.OPENAI_BASE_URL ?? "https://api.openai.com/v1", model: env.OPENAI_MODEL ?? "gpt-4o-mini" }
       : { apiKey: env.PAPERDUCK_MODEL_API_KEY ?? env.DEEPSEEK_API_KEY ?? env.OPENAI_API_KEY ?? "", baseUrl: env.PAPERDUCK_MODEL_BASE_URL ?? env.DEEPSEEK_BASE_URL ?? env.OPENAI_BASE_URL ?? "", model: env.PAPERDUCK_MODEL ?? env.DEEPSEEK_MODEL ?? env.OPENAI_MODEL ?? "" };
-  return { provider, reasoningMode, ...defaults };
+  return { provider, reasoningMode, maxOutputTokens: parseMaxOutputTokens(env.PAPERDUCK_MODEL_MAX_OUTPUT_TOKENS), ...defaults };
 };
 
 export const createAgentLanguageModel = (config: AgentModelEnvironmentConfig) => {

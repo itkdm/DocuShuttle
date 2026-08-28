@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { AgentLoopRunner, type AgentPermissionMode } from "@/modules/agent/application/loop";
+import { projectAgentLoopCheckpointForClient, projectAgentLoopResultForClient } from "@/modules/agent/application/public-runtime";
 import { isDurableAgentEvent } from "@/modules/agent/application/events";
 import { createDocumentTools } from "@/modules/agent/application/document-tools";
 import { createDocumentVersionTools } from "@/modules/agent/application/document-version-tools";
@@ -65,7 +66,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ runI
       return event ? { ...event, sequence: row.sequence, runId } : undefined;
     }).filter((event) => Boolean(event) && isDurableAgentEvent(event));
     const nextSequence = returnedRows.at(-1)?.sequence ?? cursor;
-    const response = NextResponse.json({ checkpoint, events, nextSequence, hasMore });
+    const response = NextResponse.json({ checkpoint: projectAgentLoopCheckpointForClient(checkpoint), events, nextSequence, hasMore });
     logger.info("agent.replay.completed", { runId, afterSequence: cursor, limit, durableEventCount: rows.length, returnedEventCount: events.length, nextSequence, hasMore, durationMs: performance.now() - started });
     logger.info("http.request.completed", { method: "GET", route: "/api/agent/runs/:runId/loop", status: response.status, durationMs: performance.now() - started, runId, afterSequence: cursor, durableEventCount: rows.length, returnedEventCount: events.length });
     return response;
@@ -85,7 +86,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
   try {
     const input = schema.parse(await request.json());
     const result = await (await createRunner(runId)).runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, undefined, undefined, input.clientMessageId, input.interactionId);
-    const response = NextResponse.json(result);
+    const response = NextResponse.json(projectAgentLoopResultForClient(result));
     logger.info("http.request.completed", { method: "POST", route: "/api/agent/runs/:runId/loop", status: response.status, durationMs: performance.now() - started, runId });
     return response;
   } catch (error) {
@@ -128,7 +129,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
         };
         try {
           const result = await runner.runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, request.signal, (event) => send("event", event), input.clientMessageId, input.interactionId);
-          send("result", result);
+          send("result", projectAgentLoopResultForClient(result));
         } catch (error) {
           if (error instanceof Error && error.message === "TRANSPORT_INTERRUPTED") {
             logger.info("agent.transport.detached", { runId, eventCount, bytesSent });

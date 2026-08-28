@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { logger } from "@/infrastructure/observability";
 import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { AgentLoopRunner } from "@/modules/agent/application/loop";
+import { projectAgentLoopResultForClient } from "@/modules/agent/application/public-runtime";
 import { createDocumentTools } from "@/modules/agent/application/document-tools";
 import { createDocumentVersionTools } from "@/modules/agent/application/document-version-tools";
 import { createSourceContextTools } from "@/modules/agent/application/source-context-tools";
@@ -32,7 +33,7 @@ async function createRunner(runId: string) {
 
 async function execute(request: Request, runId: string, stream: boolean) {
   const runner = await createRunner(runId);
-  if (!stream) return NextResponse.json(await runner.recover(runId));
+  if (!stream) return NextResponse.json(projectAgentLoopResultForClient(await runner.recover(runId)));
   const encoder = new TextEncoder();
   const responseStream = new ReadableStream({
     async start(controller) {
@@ -43,7 +44,7 @@ async function execute(request: Request, runId: string, stream: boolean) {
       try {
         logger.info("agent.recovery.claimed", { runId });
         const result = await runner.recover(runId, request.signal, (event) => send("event", event));
-        send("result", result);
+        send("result", projectAgentLoopResultForClient(result));
         logger.info("agent.recovery.completed", { runId });
       } catch (error) {
         if (error instanceof Error && error.message === "RUN_STILL_ACTIVE") logger.info("agent.recovery.skipped", { runId, reason: error.message });

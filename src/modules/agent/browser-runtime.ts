@@ -1,8 +1,8 @@
 "use client";
 
 import type { AgentRun } from "./domain/model";
-import type { AgentRuntimePendingInteraction } from "./domain/model";
 import type { AgentPermissionMode } from "./application/loop";
+import type { PublicAgentLoopResult } from "./application/public-runtime";
 import { isAgentEvent, isDurableAgentEvent, type AgentEvent, type DurableAgentEvent } from "./application/events";
 import { SseParser } from "./browser/sse-parser";
 import { createInFlightRequestCache } from "@/lib/in-flight-request";
@@ -201,15 +201,7 @@ export const loadBrowserConversationMessages = (taskId: string, before?: string)
 
 export type BrowserAgentEvent = AgentEvent;
 
-export type BrowserAgentLoopResult = {
-  checkpoint: {
-    status: "running" | "awaiting_approval" | "awaiting_user" | "completed" | "failed" | "cancelled";
-    finalText?: string;
-    iterations: number;
-    pendingInteraction?: AgentRuntimePendingInteraction;
-    messages: ReadonlyArray<{ role: "system" | "user" | "assistant" | "tool"; content: string }>;
-    permissionMode?: AgentPermissionMode;
-  };
+export type BrowserAgentLoopResult = Omit<PublicAgentLoopResult, "events"> & {
   /** Server responses are normalized at the SSE boundary; JSON replay is
    * intentionally validated by the replay adapter before it reaches UI. */
   events: ReadonlyArray<AgentEvent>;

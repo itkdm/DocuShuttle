@@ -156,6 +156,7 @@ describe("AgentLoopRunner", () => {
     const result = await new AgentLoopRunner(model, store, [inspectTool]).run("run-reasoning", "检查");
     expect(result.checkpoint.messages.find((message) => message.toolCalls?.[0]?.id === "reasoning-tool")?.reasoning).toBe("先确认文档事实");
     expect(result.checkpoint.messages.at(-1)).toMatchObject({ role: "assistant", content: "已确认。", reasoning: "工具结果足够" });
+    expect((await store.load())?.messages.at(-1)?.reasoning).toBe("工具结果足够");
   });
 
   it("treats a transport abort as recoverable instead of cancelling the run", async () => {

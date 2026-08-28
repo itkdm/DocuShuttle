@@ -4,6 +4,7 @@ import { logger } from "@/infrastructure/observability";
 
 import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { AgentLoopRunner } from "@/modules/agent/application/loop";
+import { projectAgentLoopResultForClient } from "@/modules/agent/application/public-runtime";
 import { createDocumentTools } from "@/modules/agent/application/document-tools";
 import { createDocumentVersionTools } from "@/modules/agent/application/document-version-tools";
 import { createSourceContextTools } from "@/modules/agent/application/source-context-tools";
@@ -38,7 +39,7 @@ async function createRunner(runId: string) {
 async function runResume(request: Request, runId: string, stream: boolean) {
   const input = schema.parse(await request.json());
   const runner = await createRunner(runId);
-  if (!stream) return NextResponse.json(await runner.resume(runId, input.approval, input.interactionId, input.callId, request.signal));
+  if (!stream) return NextResponse.json(projectAgentLoopResultForClient(await runner.resume(runId, input.approval, input.interactionId, input.callId, request.signal)));
   const encoder = new TextEncoder();
   const responseStream = new ReadableStream({
     async start(controller) {
@@ -48,7 +49,7 @@ async function runResume(request: Request, runId: string, stream: boolean) {
       const send = (event: string, data: unknown) => { if (!open) return; try { controller.enqueue(encoder.encode(eventPayload(event, data))); } catch { open = false; } };
       try {
         const result = await runner.resume(runId, input.approval, input.interactionId, input.callId, request.signal, (event) => send("event", event));
-        send("result", result);
+        send("result", projectAgentLoopResultForClient(result));
       } catch (error) {
         if (open) send("error", { code: error instanceof Error ? error.message : "AGENT_LOOP_RESUME_FAILED" });
       } finally { close(); }

@@ -240,13 +240,7 @@ export function Workbench() {
           const resumedIsActive = ["queued", "running"].includes(resumed.status);
           setStage(resumed.status === "awaiting_approval" || resumed.status === "awaiting_user" || resumed.status === "awaiting_review" ? "awaiting" : resumed.status === "completed" ? "complete" : resumedIsActive ? "analyzing" : "idle");
           if (resumed.status === "running") {
-            void recoverBrowserAgentLoop(resumed.id, (event) => setActiveEvents((items) => mergeTimelineEvents(items, [event])), abort.signal)
-              .then((recovered) => {
-                if (abort.signal.aborted) return;
-                setLoopResult(recovered);
-                setRun((current) => current && current.id === resumed.id ? { ...current, status: recovered.checkpoint.status } : current);
-                setStage(recovered.checkpoint.pendingInteraction ? "awaiting" : recovered.checkpoint.status === "completed" ? "complete" : recovered.checkpoint.status === "running" ? "analyzing" : "idle");
-              }).catch(() => undefined);
+            void recoverAndReconcileRun(resumed.id, abort.signal, workspace.task.id, Boolean(workspace.workingDocumentId)).catch(() => undefined);
           }
         } else setStage("idle");
         // Completed-run history is intentionally loaded by the independent
@@ -263,6 +257,9 @@ export function Workbench() {
       }
     })();
     return () => abort.abort();
+  // Recovery helper intentionally closes over the current workbench state;
+  // this bootstrap effect is keyed by the task identity, not each render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeTaskId, resetWorkspace, setMessages, setActiveEvents, setLoopResult, setHistoricalEvents]);
 
   // Load completed runs independently from the document bootstrap. A large
@@ -311,6 +308,37 @@ export function Workbench() {
       actor: version.origin === "agent" ? "纸上鸭" : "你",
       current: version.id === history.currentVersionId,
     })));
+  }
+
+  async function recoverAndReconcileRun(runId: string, signal?: AbortSignal, reconcileTaskId = taskId, canReconcileDocument = workspaceReady) {
+    const recovered = await recoverBrowserAgentLoop(runId, (event) => setActiveEvents((items) => mergeTimelineEvents(items, [event])), signal);
+    setLoopResult(recovered);
+    setActiveEvents((items) => mergeTimelineEvents(items, recovered.events));
+    setRun((current) => current && current.id === runId ? { ...current, status: recovered.checkpoint.status } : current);
+    if (recovered.checkpoint.pendingInteraction) {
+      setStage("awaiting");
+      setNotice(recovered.checkpoint.pendingInteraction.type === "approval" ? "Agent 已完成读取并请求写入确认" : "Agent 正在等待你的回答");
+    } else if (recovered.checkpoint.status === "running") {
+      setStage("analyzing");
+      setNotice("连接中断，Agent 仍在服务端运行；已恢复执行记录");
+    } else if (recovered.checkpoint.status === "completed") {
+      setStage("complete");
+      if (canReconcileDocument && reconcileTaskId) {
+        const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
+        const nextDocument = await loadCurrentTaskDocument(reconcileTaskId, fileName);
+        setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } });
+        setCurrentRevision(nextDocument.version.revision);
+        await refreshVersions(reconcileTaskId);
+      }
+      setNotice("连接恢复，已加载本轮最新文档结果");
+    } else if (recovered.checkpoint.status === "failed") {
+      setStage("idle");
+      setNotice(recovered.checkpoint.finalText ?? "Agent 执行失败");
+    } else if (recovered.checkpoint.status === "cancelled") {
+      setStage("idle");
+      setNotice("任务已取消，最近有效版本未受影响");
+    }
+    return recovered;
   }
 
   const decide = async (decision: ProposalState) => {
@@ -399,17 +427,14 @@ export function Workbench() {
       const runToRecover = activeRunForRecovery ?? run;
       if (runToRecover) {
         try {
-          const recovered = await recoverBrowserAgentLoop(runToRecover.id, (event) => setActiveEvents((items) => mergeTimelineEvents(items, [event])));
-          setLoopResult(recovered);
-          setActiveEvents((items) => mergeTimelineEvents(items, recovered.events));
+          const recovered = await recoverAndReconcileRun(runToRecover.id);
           if (recovered.checkpoint.pendingInteraction) {
             setStage("awaiting");
             setNotice(recovered.checkpoint.pendingInteraction.type === "approval" ? "Agent 已完成读取并请求写入确认" : "Agent 正在等待你的回答");
             return;
           }
-          if (["running", "completed"].includes(recovered.checkpoint.status)) {
-            setStage(recovered.checkpoint.status === "completed" ? "idle" : "analyzing");
-            setNotice(recovered.checkpoint.status === "completed" ? "连接恢复，已收到本轮结果" : "连接中断，Agent 仍在服务端运行；已恢复执行记录");
+          if (["running", "completed", "failed", "cancelled"].includes(recovered.checkpoint.status)) {
+            setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, status: recovered.checkpoint.status === "failed" ? "failed" : "sent" } : item));
             return;
           }
         } catch { /* preserve the original error below */ }
@@ -464,10 +489,11 @@ export function Workbench() {
       }
     } catch (error) {
       if (abortController.signal.aborted) return;
-      const message = error instanceof Error ? error.message : "Agent 恢复失败";
-      setMessages((items) => [...items, { role: "agent", text: `这次执行没有完成：${message}`, runId: run.id }]);
-      setStage("idle");
-      setNotice(message);
+      try {
+        await recoverAndReconcileRun(run.id);
+      } catch {
+        setNotice(error instanceof Error ? error.message : "Agent 恢复失败");
+      }
     } finally {
       if (agentAbortRef.current === abortController) agentAbortRef.current = undefined;
     }

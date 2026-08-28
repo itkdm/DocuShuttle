@@ -17,35 +17,48 @@ const decodeCursor = (value: string) => {
   return parsed;
 };
 
+type ConversationHistoryPage = {
+  conversationId: string | null;
+  messages: Array<{
+    id: string;
+    role: string;
+    parts: unknown;
+    run_id: string | null;
+    created_at: string;
+    message_key: string;
+    delivery_status: string;
+  }>;
+};
+
 /** Keyset-paginated durable conversation history, oldest-to-newest per page. */
 export async function GET(request: Request) {
   const started = performance.now();
   try {
     const input = querySchema.parse(Object.fromEntries(new URL(request.url).searchParams));
     const { client } = await requireSupabaseIdentity();
-    const conversation = await client.from("conversations").select("id").eq("task_id", input.taskId).maybeSingle();
-    if (conversation.error) throw new Error(conversation.error.message);
-    if (!conversation.data) return NextResponse.json({ messages: [], nextCursor: null });
-    let query = client.from("messages")
-      .select("id, role, parts, run_id, created_at, message_key, delivery_status")
-      .eq("conversation_id", conversation.data.id)
-      .order("created_at", { ascending: false })
-      .order("id", { ascending: false })
-      .limit(input.limit + 1);
-    if (input.before) {
-      const cursor = decodeCursor(input.before);
-      query = query.or(`created_at.lt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`);
-    }
-    const result = await query;
+    const cursor = input.before ? decodeCursor(input.before) : undefined;
+    const rpcStarted = performance.now();
+    const result = await client.rpc("list_conversation_messages_page", {
+      p_task_id: input.taskId,
+      p_before_created_at: cursor?.createdAt ?? null,
+      p_before_id: cursor?.id ?? null,
+      p_limit: input.limit + 1,
+    });
     if (result.error) throw new Error(result.error.message);
-    const rows = result.data ?? [];
+    const payload = result.data as ConversationHistoryPage | null;
+    const conversationId = typeof payload?.conversationId === "string" ? payload.conversationId : null;
+    const rows = Array.isArray(payload?.messages) ? payload.messages : [];
+    logger.info("conversation.messages.rpc.completed", {
+      durationMs: performance.now() - rpcStarted,
+      messageCount: rows.length,
+    });
     const hasMore = rows.length > input.limit;
     const page = rows.slice(0, input.limit).reverse();
     const oldest = page[0];
     const response = NextResponse.json({
-      conversationId: conversation.data.id,
+      conversationId,
       messages: page,
-      nextCursor: hasMore && oldest ? encodeCursor(oldest.created_at as string, oldest.id as string) : null,
+      nextCursor: hasMore && oldest ? encodeCursor(oldest.created_at, oldest.id) : null,
     });
     logger.info("conversation.messages.list.completed", { durationMs: performance.now() - started, taskId: input.taskId, messageCount: page.length, hasMore });
     return response;

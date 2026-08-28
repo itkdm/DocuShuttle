@@ -144,3 +144,13 @@ SSE 是可断开的观察传输，不是 Run 生命周期本身。浏览器断�
 `running` checkpoint 做原子 recovery claim；活跃租约会被跳过，过期租约才由同一个
 Run 继续执行。刷新与流中断共用 replay → checkpoint reconcile → claim → continue 流程，
 不会创建新 Run 或重新提交原 prompt。
+
+### 跨 Run Conversation Context Boundary
+
+同 Run 的 approval/user-input resume、transport recovery 与 crash recovery 只读取当前 Run 的
+`AgentLoopCheckpoint`，不重新加载 Conversation。创建新 Run 时，Runner 通过独立的
+`AgentConversationContextPort` 从 canonical `messages` 读取最近最多 200 条 user/assistant
+语义消息，排除当前 `runId`，按时间正序经过 `compactAgentMessages` 后再追加当前 prompt。
+
+Tool call/result、EventStore 活动、effect receipt、approval/resolution、权限和预算计数不跨 Run
+进入模型上下文；当前文档事实仍以 Document Tools、working document 与 revision/version 为准。

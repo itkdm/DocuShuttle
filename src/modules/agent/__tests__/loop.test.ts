@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { AgentLoopRunner, TRANSPORT_INTERRUPTED, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentModelPort, type AgentTool } from "../application/loop";
 import type { AgentEvent } from "../application/events";
+import type { AgentConversationContextPort } from "../application/ports";
 
 class MemoryStore {
   private value?: AgentLoopCheckpoint;
@@ -54,6 +55,15 @@ class MemoryStore {
   }
 }
 
+class MemoryConversationContext implements AgentConversationContextPort {
+  calls = 0;
+  constructor(private readonly messages: AgentLoopCheckpoint["messages"], private readonly truncated = false) {}
+  async loadPriorMessages(runId: string) {
+    this.calls += 1;
+    return { conversationId: `conversation:${runId}`, messages: structuredClone(this.messages), loadedCount: this.messages.length, truncated: this.truncated, limit: 200 };
+  }
+}
+
 const inspectTool: AgentTool = {
   name: "inspect_document",
   description: "Inspect the current document.",
@@ -62,6 +72,66 @@ const inspectTool: AgentTool = {
 };
 
 describe("AgentLoopRunner", () => {
+  it("seeds a fresh run from prior semantic conversation messages without duplicating its current prompt", async () => {
+    const seen: string[][] = [];
+    const context = new MemoryConversationContext([
+      { role: "user", content: "上一轮用户目标" },
+      { role: "assistant", content: "上一轮助手回答" },
+    ]);
+    const model: AgentModelPort = { decide: async ({ messages }) => {
+      seen.push(messages.filter((message) => message.role === "user" || message.role === "assistant").map((message) => message.content));
+      return { kind: "message", text: "当前轮完成" };
+    } };
+    const result = await new AgentLoopRunner(model, new MemoryStore(), [], 24, 48, 30_000, undefined, 30_000, undefined, context).run("run-new", "当前用户目标");
+    expect(seen[0]).toEqual(["上一轮用户目标", "上一轮助手回答", "当前用户目标"]);
+    expect(seen[0]?.filter((text) => text === "当前用户目标")).toHaveLength(1);
+    expect(result.checkpoint.conversationId).toBe("conversation:run-new");
+    expect(context.calls).toBe(1);
+  });
+
+  it("does not reload conversation context during same-run approval recovery", async () => {
+    const store = new MemoryStore();
+    const context = new MemoryConversationContext([]);
+    const tool: AgentTool = { name: "apply", description: "Apply", inputSchema: z.object({}), requiresApproval: true, async execute() { return { ok: true }; } };
+    const first = await new AgentLoopRunner({ decide: async () => ({ kind: "tool_calls", calls: [{ id: "approval-context", name: "apply", input: {} }] }) }, store, [tool], 24, 48, 30_000, undefined, 30_000, undefined, context).run("run-approval-context", "修改");
+    const pending = first.checkpoint.pendingInteraction!;
+    await store.resolvePendingApproval("run-approval-context", pending.interactionId, pending.type === "approval" ? pending.callId : "", "approved");
+    await new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "完成" }) }, store, [tool], 24, 48, 30_000, undefined, 30_000, undefined, context).resume("run-approval-context", "approved", pending.interactionId, pending.type === "approval" ? pending.callId : "");
+    expect(context.calls).toBe(1);
+  });
+
+  it("does not reload conversation context during same-run transport recovery", async () => {
+    const store = new MemoryStore();
+    store.seed({ messages: [{ role: "user", content: "当前运行" }], iterations: 1, toolCallCount: 0, status: "running", permissionMode: "default" });
+    const context = new MemoryConversationContext([{ role: "user", content: "旧运行" }]);
+    await new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "恢复完成" }) }, store, [], 24, 48, 30_000, undefined, 30_000, undefined, context).recover("run-recovery-context");
+    expect(context.calls).toBe(0);
+  });
+
+  it("preserves the same-run ask_user budget and permission mode", async () => {
+    const store = new MemoryStore();
+    const interactionId = "00000000-0000-4000-8000-000000000001";
+    store.seed({
+      messages: [{ role: "assistant", content: "请补充信息" }], iterations: 7, toolCallCount: 3,
+      status: "awaiting_user", permissionMode: "full",
+      pendingInteraction: { interactionId, type: "user_input", question: "请补充信息" },
+    });
+    const result = await new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "已完成" }) }, store, [])
+      .runWithPermission("run-user-budget", "补充内容", "default", undefined, undefined, undefined, interactionId);
+    expect(result.checkpoint.permissionMode).toBe("full");
+    expect(result.checkpoint.iterations).toBe(8);
+    expect(result.checkpoint.toolCallCount).toBe(3);
+  });
+
+  it("records bounded history truncation as an engineering event", async () => {
+    const diagnostics: string[] = [];
+    const context = new MemoryConversationContext([{ role: "user", content: "旧消息" }], true);
+    await new AgentLoopRunner(
+      { decide: async () => ({ kind: "message", text: "完成" }) }, new MemoryStore(), [], 24, 48, 30_000,
+      undefined, 30_000, (event) => diagnostics.push(event.event), context,
+    ).run("run-truncated-context", "当前消息");
+    expect(diagnostics).toContain("agent.context.history_truncated");
+  });
   it("lets the model choose tools and then finish naturally", async () => {
     const decisions = [
       { kind: "tool_calls" as const, calls: [{ id: "call-1", name: "inspect_document", input: { query: "headings" } }] },
@@ -461,7 +531,7 @@ describe("AgentLoopRunner", () => {
     expect(second.checkpoint.status).toBe("completed");
     expect(second.checkpoint.messages.filter((message) => message.role === "user")).toHaveLength(2);
     expect(second.checkpoint.finalText).toBe("第二轮也完成。");
-    expect(second.checkpoint.iterations).toBe(1);
+    expect(second.checkpoint.iterations).toBe(2);
   });
 
   it("executes independent multi-tool reads in one model step", async () => {

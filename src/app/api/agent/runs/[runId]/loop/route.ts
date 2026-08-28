@@ -12,6 +12,7 @@ import { SupabaseAgentLoopStore } from "@/modules/agent/infrastructure/supabase/
 import { SupabaseWorkingDocumentAccess } from "@/modules/agent/infrastructure/supabase/working-document-access";
 import { SupabaseDocumentVersionAccess } from "@/modules/agent/infrastructure/supabase/document-version-access";
 import { SupabaseSourceDocumentContext } from "@/modules/agent/infrastructure/supabase/source-context";
+import { SupabaseAgentConversationContext } from "@/modules/agent/infrastructure/supabase/conversation-context";
 import { OoxmlPreservationKernel } from "@/modules/documents";
 import { logger, withLogContext } from "@/infrastructure/observability";
 
@@ -37,7 +38,7 @@ async function createRunner(runId: string) {
     ...createSourceContextTools(taskId, new SupabaseSourceDocumentContext(client), kernel),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
-  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), new SupabaseAgentLoopStore(client), tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata));
+  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), new SupabaseAgentLoopStore(client), tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client));
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ runId: string }> }) {

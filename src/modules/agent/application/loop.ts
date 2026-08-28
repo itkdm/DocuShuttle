@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { compactAgentMessages, DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY, type AgentContextCompactionPolicy } from "./context-compaction";
 import { createAgentEvent, shouldPersistAgentEvent, type AgentEvent, type AgentEventPayload } from "./events";
+import type { AgentConversationContextPort } from "./ports";
 import type { AgentInteractionResolution, AgentRuntimePendingInteraction } from "../domain/model";
 
 export type AgentLoopMessage = {
@@ -163,6 +164,7 @@ export class AgentLoopRunner {
     private readonly contextCompactionPolicy: AgentContextCompactionPolicy = DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY,
     private readonly heartbeatIntervalMs = 30_000,
     private readonly onEngineeringEvent?: (event: AgentEngineeringEvent) => void,
+    private readonly conversationContext?: AgentConversationContextPort,
   ) {}
 
   private observe(runId: string, event: AgentEvent, permissionMode?: AgentPermissionMode) {
@@ -264,6 +266,7 @@ export class AgentLoopRunner {
 
   async runWithPermission(runId: string, userText: string, permissionMode: AgentPermissionMode, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void, clientMessageId?: string, interactionId?: string): Promise<AgentLoopResult> {
     const current = await this.store.load(runId);
+    const isFreshRun = !current;
     let checkpoint: AgentLoopCheckpoint = current ?? {
       messages: [],
       iterations: 0,
@@ -271,6 +274,14 @@ export class AgentLoopRunner {
       status: "running",
       permissionMode,
     };
+    if (isFreshRun && this.conversationContext) {
+      const context = await this.conversationContext.loadPriorMessages(runId);
+      checkpoint.conversationId = context.conversationId;
+      checkpoint.messages = compactAgentMessages(context.messages, this.contextCompactionPolicy).messages;
+      if (context.truncated) {
+        this.onEngineeringEvent?.({ event: "agent.context.history_truncated", metadata: { runId, conversationId: context.conversationId, loadedCount: context.loadedCount, limit: context.limit } });
+      }
+    }
     let turnText = userText;
     const existingUserResolution = checkpoint.pendingResolution?.type === "user_input" ? checkpoint.pendingResolution : undefined;
     if (existingUserResolution) {
@@ -314,19 +325,13 @@ export class AgentLoopRunner {
       // durable projection before the inbox item is consumed.
       await this.store.appendUserMessage?.(runId, { id: existingUserResolution.messageId, text: existingUserResolution.text });
     }
-    // Permission is selected per user turn. A resumed approval keeps the mode
-    // persisted in its checkpoint, while a new turn may intentionally switch
-    // between the default guardrail profile and full autonomy.
-    if (turnText.trim()) {
-      // A response to ask_user resumes the existing run policy. Permission
-      // changes are only allowed when starting a fresh user turn.
-      if (!existingUserResolution && !checkpoint.pendingResolution?.type) checkpoint.permissionMode = permissionMode;
-      // Budgets are per turn. Earlier conversation remains context, but must
-      // never consume a later request's safety allowance.
+    if (isFreshRun) {
+      checkpoint.permissionMode = permissionMode;
       checkpoint.iterations = 0;
       checkpoint.toolCallCount = 0;
+    } else {
+      checkpoint.permissionMode ??= permissionMode;
     }
-    else checkpoint.permissionMode ??= permissionMode;
     if ((checkpoint.status === "completed" || checkpoint.status === "failed" || checkpoint.status === "cancelled") && !userText.trim()) {
       if (!checkpoint.finalText) return { checkpoint, events: [] };
       const terminalEvent = checkpoint.status === "completed"

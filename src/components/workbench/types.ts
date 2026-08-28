@@ -1,4 +1,3 @@
-export type AgentStage = "idle" | "analyzing" | "awaiting" | "complete";
 export interface VersionItem { id: string; label: string; time: string; actor: "你" | "纸上鸭"; versionNumber?: number; current?: boolean; }
 export interface UploadAsset { kind: "template" | "example"; name: string; size: string; }
 export interface LoadedDocument {

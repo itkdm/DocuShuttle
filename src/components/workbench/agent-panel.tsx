@@ -1,8 +1,8 @@
 import { Check, ChevronDown, PanelRightClose, Send, Shield, Sparkles, StopCircle, Unlock } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import type { AgentStage } from "./types";
-import type { BrowserAgentLoopResult, BrowserImageCandidate, BrowserImageNode } from "@/modules/agent/browser-runtime";
+import type { AgentRuntimeView } from "./runtime-view-state";
+import type { BrowserImageCandidate, BrowserImageNode } from "@/modules/agent/browser-runtime";
 import type { AgentEvent } from "@/modules/agent/application/events";
 import type { AgentRun } from "@/modules/agent";
 import type { AgentPermissionMode } from "@/modules/agent/application/loop";
@@ -11,7 +11,7 @@ import { AgentThread } from "./agent-thread";
 import { projectAgentThread } from "./agent-thread-projection";
 
 interface AgentPanelProps {
-  stage: AgentStage; onCollapse: () => void;
+  runtimeView: AgentRuntimeView; onCollapse: () => void;
   onRun: (prompt: string) => void | Promise<void>; onCancel: () => void | Promise<void>;
   workspaceReady: boolean;
   imageCandidates?: BrowserImageCandidate[];
@@ -23,7 +23,6 @@ interface AgentPanelProps {
   onApplyImage: (candidate: BrowserImageCandidate) => void | Promise<void>;
   imageBusy?: boolean;
   run?: AgentRun;
-  loopResult?: BrowserAgentLoopResult;
   activeEvents?: ReadonlyArray<AgentEvent>;
   historicalEvents?: ReadonlyArray<AgentEvent>;
   onLoopApproval?: (choice: "approved" | "rejected") => void | Promise<void>;
@@ -84,7 +83,7 @@ function CustomSelect({ value, options, onChange, disabled, icon }: { value: str
   );
 }
 
-export function AgentPanel({ stage, onCollapse, onRun, onCancel, workspaceReady, imageCandidates = [], onApplyImage, imageBusy, run, messages = [], loopResult, activeEvents = [], historicalEvents = [], onLoopApproval, permissionMode, onPermissionModeChange, imageNodes = [], imageTargetNodeId, imagePrompt, onImageTargetNodeIdChange, onImagePromptChange, onGenerateImages, onLoadEarlier, hasEarlierMessages = false, loadingEarlierMessages = false, loadingWorkspace = false }: AgentPanelProps) {
+export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspaceReady, imageCandidates = [], onApplyImage, imageBusy, run, messages = [], activeEvents = [], historicalEvents = [], onLoopApproval, permissionMode, onPermissionModeChange, imageNodes = [], imageTargetNodeId, imagePrompt, onImageTargetNodeIdChange, onImagePromptChange, onGenerateImages, onLoadEarlier, hasEarlierMessages = false, loadingEarlierMessages = false, loadingWorkspace = false }: AgentPanelProps) {
   const [prompt, setPrompt] = useState("");
   const [deciding, setDeciding] = useState(false);
   const [imageToolOpen, setImageToolOpen] = useState(false);
@@ -93,7 +92,7 @@ export function AgentPanel({ stage, onCollapse, onRun, onCancel, workspaceReady,
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const stickToBottomRef = useRef(true);
   const prependHeightRef = useRef<number | null>(null);
-  const currentTimeline = activeEvents.length ? activeEvents : loopResult?.events ?? [];
+  const currentTimeline = activeEvents;
   const timelineEvents = [...historicalEvents, ...currentTimeline];
   const turns = projectAgentThread({
     messages: messages.map((message, index) => ({ id: message.id ?? `local:${index}`, role: message.role === "agent" ? "assistant" as const : "user" as const, parts: [{ type: "text", text: message.text }], run_id: message.runId ?? null, created_at: message.createdAt ?? "", message_key: message.id ?? `local:${index}`, delivery_status: message.status })),
@@ -104,17 +103,17 @@ export function AgentPanel({ stage, onCollapse, onRun, onCancel, workspaceReady,
   const latestTimelineEvent = timelineEvents.at(-1);
   const latestTimelineEventId = latestTimelineEvent?.eventId;
   const latestTimelineText = latestTimelineEvent && "text" in latestTimelineEvent ? latestTimelineEvent.text : undefined;
-  const pendingInteraction = loopResult?.checkpoint.pendingInteraction;
+  const pendingInteraction = runtimeView.pendingInteraction;
   const awaitingUserQuestion = pendingInteraction?.type === "user_input";
   // Runtime Approval pauses the composer; an ask_user checkpoint is
   // specifically waiting for ordinary user text and must remain writable.
-  const inputBlocked = stage === "analyzing" || (stage === "awaiting" && !awaitingUserQuestion);
+  const inputBlocked = !runtimeView.canSend;
   useEffect(() => {
     const element = contentRef.current;
     if (!element || !stickToBottomRef.current) return;
     element.scrollTop = element.scrollHeight;
     setShowScrollToBottom(false);
-  }, [timelineEvents.length, latestTimelineEventId, latestTimelineText, stage]);
+  }, [timelineEvents.length, latestTimelineEventId, latestTimelineText, runtimeView.runtimeStatus]);
   useEffect(() => {
     const element = contentRef.current;
     const previousHeight = prependHeightRef.current;
@@ -144,7 +143,7 @@ export function AgentPanel({ stage, onCollapse, onRun, onCancel, workspaceReady,
   return (
     <aside className="agent-panel" aria-label="纸上鸭 Agent">
       <div className="agent-heading">
-        <div className="agent-title"><span className={`agent-orb ${stage}`}><Sparkles size={17} /></span><div><span className="eyebrow">Document Agent</span><h2>纸上鸭 Agent</h2></div></div>
+        <div className="agent-title"><span className={`agent-orb ${runtimeView.runtimeStatus}`}><Sparkles size={17} /></span><div><span className="eyebrow">Document Agent</span><h2>纸上鸭 Agent</h2></div></div>
         <button className="icon-button" onClick={onCollapse} aria-label="收起 Agent 面板"><PanelRightClose size={17} /></button>
       </div>
       <div className="agent-content" ref={contentRef} onScroll={handleContentScroll}>
@@ -153,7 +152,7 @@ export function AgentPanel({ stage, onCollapse, onRun, onCancel, workspaceReady,
           {pendingInteraction?.type === "approval" && !timelineEvents.some((event) => event.type === "approval.required" && event.interactionId === pendingInteraction.interactionId) && <div className="scope-card"><span className="scope-kicker">需要你的确认</span><strong>准备执行：{pendingInteraction.toolName}</strong><p>Agent 已生成明确的修改参数。批准后会写入文档并生成新版本。</p><div className="scope-actions"><button className="primary-small" onClick={() => void handleLoopApproval("approved")} disabled={deciding}>{deciding ? "执行中…" : <><Check size={14} /> 批准并执行</>}</button><button onClick={() => void handleLoopApproval("rejected")} disabled={deciding}>{deciding ? "处理中…" : "拒绝"}</button></div></div>}
           {imageNodes.length > 0 && <div className="scope-card image-tool-card"><button type="button" className="image-tool-toggle" onClick={() => setImageToolOpen((open) => !open)} aria-expanded={imageToolOpen}><span><span className="scope-kicker">图片工具</span><strong>生成图片候选</strong></span><ChevronDown size={16} className={imageToolOpen ? "rotate" : ""} /></button>{imageToolOpen && <div className="image-tool-body"><p>选择图片节点并生成候选；候选不会自动写回文档。</p><label>目标图片<select value={imageTargetNodeId} onChange={(event) => onImageTargetNodeIdChange(event.target.value)} disabled={imageBusy}><option value="">请选择图片节点</option>{imageNodes.map((node, index) => <option key={node.nodeId} value={node.nodeId}>图片 {index + 1} · {node.nodeId.slice(0, 12)}</option>)}</select></label><label>图片描述<textarea value={imagePrompt} onChange={(event) => onImagePromptChange(event.target.value)} placeholder="例如：简洁的三模块系统结构图" rows={2} disabled={imageBusy} /></label><button type="button" className="primary-small" onClick={() => void onGenerateImages()} disabled={imageBusy || !imageTargetNodeId.trim() || !imagePrompt.trim()}>{imageBusy ? "生成中…" : "生成图片候选"}</button></div>}</div>}
           {imageCandidates.length > 0 && <div className="scope-card image-candidate-card"><span className="scope-kicker">图片候选</span><strong>选择要应用的候选</strong><p>候选不会自动写回；选择后仍会按当前权限策略执行。</p>{imageCandidates.map((candidate) => <button key={candidate.id} onClick={() => onApplyImage(candidate)} disabled={imageBusy}><Image src={candidate.downloadUrl} alt="图片候选" width={240} height={140} unoptimized /><span>应用此候选</span></button>)}</div>}
-          {stage !== "idle" && stage !== "awaiting" && !timelineEvents.length && <div className="progress-card"><div className="progress-top"><strong>{stage === "complete" ? "已完成" : currentTimeline.at(-1) ? eventSummary(currentTimeline.at(-1)!) : "正在准备"}</strong><span>{stage === "complete" ? "完成" : "进行中"}</span></div><small>{stage === "complete" ? "结果已保存为新的文档版本" : "执行过程会实时显示在上方对话时间线"}</small>{stage !== "complete" && <button className="cancel-run" onClick={onCancel}><StopCircle size={13} /> 取消</button>}</div>}
+          {runtimeView.isRunning && !timelineEvents.length && <div className="progress-card"><div className="progress-top"><strong>{currentTimeline.at(-1) ? eventSummary(currentTimeline.at(-1)!) : "正在准备"}</strong><span>进行中</span></div><small>执行过程会实时显示在上方对话时间线</small><button className="cancel-run" onClick={onCancel}><StopCircle size={13} /> 取消</button></div>}
         {showScrollToBottom && <button type="button" className="scroll-to-bottom" onClick={() => { const element = contentRef.current; if (!element) return; element.scrollTo({ top: element.scrollHeight, behavior: "smooth" }); stickToBottomRef.current = true; setShowScrollToBottom(false); }} aria-label="回到底部">↓ 回到底部</button>}
       </div>
       <div className="agent-composer">
@@ -166,12 +165,12 @@ export function AgentPanel({ stage, onCollapse, onRun, onCancel, workspaceReady,
               { value: "full", label: "允许完全访问" },
             ]}
             onChange={(value) => onPermissionModeChange(value as AgentPermissionMode)}
-            disabled={stage === "analyzing" || stage === "awaiting"}
+            disabled={runtimeView.permissionLocked}
             icon={permissionMode === "full" ? <Unlock size={12} className="permission-icon full" /> : <Shield size={12} className="permission-icon" />}
           />
           <div className="composer-actions">
             <span>{inputBlocked ? "当前任务完成后即可发送" : "Enter 发送 · Shift + Enter 换行"}</span>
-            {stage === "analyzing" ? <button className="composer-stop" onClick={() => void onCancel()} aria-label="停止当前任务"><StopCircle size={14} /> 停止</button> : <button className="composer-send" onClick={submit} disabled={!prompt.trim() || inputBlocked || !workspaceReady} aria-label="发送要求"><Send size={14} /></button>}
+            {runtimeView.canCancel ? <button className="composer-stop" onClick={() => void onCancel()} aria-label="停止当前任务"><StopCircle size={14} /> 停止</button> : <button className="composer-send" onClick={submit} disabled={!prompt.trim() || inputBlocked || !workspaceReady} aria-label="发送要求"><Send size={14} /></button>}
           </div>
         </div>
       </div>

@@ -22,7 +22,8 @@ import { taskIdFromPathname, taskUrl } from "@/modules/tasks/task-url";
 import { ensureAnonymousSession } from "@/infrastructure/supabase/browser";
 import type { AgentRun } from "@/modules/agent";
 import type { AgentPermissionMode } from "@/modules/agent/application/loop";
-import type { AgentStage, DocumentLoadState, UploadAsset, VersionItem } from "./types";
+import type { DocumentLoadState, UploadAsset, VersionItem } from "./types";
+import { resolveAgentRuntimeView } from "./runtime-view-state";
 
 const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
@@ -36,7 +37,6 @@ export function Workbench() {
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [mobilePanel, setMobilePanel] = useState<"none" | "outline" | "agent" | "versions">("none");
-  const [stage, setStage] = useState<AgentStage>("idle");
   const [assets, setAssets] = useState(initialAssets);
   const [sourceState, setSourceState] = useState<SourceRegistrationState>(emptySourceRegistrationState);
   const [documentLoad, setDocumentLoad] = useState<DocumentLoadState>(() => (
@@ -66,10 +66,17 @@ export function Workbench() {
   const [loadingEarlierMessages, setLoadingEarlierMessages] = useState(false);
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>("default");
   const taskListRequestRef = useRef<Promise<TaskPage> | undefined>(undefined);
+  const runtimeView = resolveAgentRuntimeView({ run, checkpoint: loopResult?.checkpoint });
+  const applyRuntimeResult = useCallback((runId: string, result: NonNullable<typeof loopResult>) => {
+    setLoopResult(result);
+    setActiveEvents((items) => mergeTimelineEvents(items, result.events));
+    setRun((current) => current && current.id === runId
+      ? { ...current, status: result.checkpoint.status, pendingInteraction: result.checkpoint.pendingInteraction }
+      : current);
+  }, [setActiveEvents, setLoopResult]);
 
   const resetWorkspace = useCallback(() => {
     loadedTaskIdRef.current = undefined;
-    setStage("idle");
     setAssets(initialAssets);
     setSourceState(emptySourceRegistrationState());
     setDocumentLoad({ status: "empty" });
@@ -224,16 +231,14 @@ export function Workbench() {
         if (resumed) {
           setRun(resumed);
           if (resumedLoop) {
-            setLoopResult(resumedLoop);
-            setActiveEvents((items) => mergeTimelineEvents(items, resumedLoop.events));
+            applyRuntimeResult(resumed.id, resumedLoop);
+            setRun({ ...resumed, status: resumedLoop.checkpoint.status, pendingInteraction: resumedLoop.checkpoint.pendingInteraction });
             if (!durableConversationLoaded) setMessages([]);
           } else setLoopResult(undefined);
-          const resumedIsActive = ["queued", "running"].includes(resumed.status);
-          setStage(resumed.status === "awaiting_approval" || resumed.status === "awaiting_user" ? "awaiting" : resumed.status === "completed" ? "complete" : resumedIsActive ? "analyzing" : "idle");
           if (resumed.status === "running") {
             void recoverAndReconcileRun(resumed.id, abort.signal, workspace.task.id, Boolean(workspace.workingDocumentId)).catch(() => undefined);
           }
-        } else setStage("idle");
+        }
         // Completed-run history is intentionally loaded by the independent
         // background effect below; it must not delay the first usable render
         // of the current document and conversation.
@@ -303,17 +308,12 @@ export function Workbench() {
 
   async function recoverAndReconcileRun(runId: string, signal?: AbortSignal, reconcileTaskId = taskId, canReconcileDocument = workspaceReady) {
     const recovered = await recoverBrowserAgentLoop(runId, (event) => setActiveEvents((items) => mergeTimelineEvents(items, [event])), signal);
-    setLoopResult(recovered);
-    setActiveEvents((items) => mergeTimelineEvents(items, recovered.events));
-    setRun((current) => current && current.id === runId ? { ...current, status: recovered.checkpoint.status } : current);
+    applyRuntimeResult(runId, recovered);
     if (recovered.checkpoint.pendingInteraction) {
-      setStage("awaiting");
       setNotice(recovered.checkpoint.pendingInteraction.type === "approval" ? "Agent 已完成读取并请求写入确认" : "Agent 正在等待你的回答");
     } else if (recovered.checkpoint.status === "running") {
-      setStage("analyzing");
       setNotice("连接中断，Agent 仍在服务端运行；已恢复执行记录");
     } else if (recovered.checkpoint.status === "completed") {
-      setStage("complete");
       if (canReconcileDocument && reconcileTaskId) {
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
         const nextDocument = await loadCurrentTaskDocument(reconcileTaskId, fileName);
@@ -323,10 +323,8 @@ export function Workbench() {
       }
       setNotice("连接恢复，已加载本轮最新文档结果");
     } else if (recovered.checkpoint.status === "failed") {
-      setStage("idle");
       setNotice(recovered.checkpoint.finalText ?? "Agent 执行失败");
     } else if (recovered.checkpoint.status === "cancelled") {
-      setStage("idle");
       setNotice("任务已取消，最近有效版本未受影响");
     }
     return recovered;
@@ -339,7 +337,6 @@ export function Workbench() {
     }
     const localMessageId = crypto.randomUUID();
     setMessages((items) => [...items, { id: localMessageId, role: "user", text: prompt, status: "pending" }]);
-    setStage("analyzing");
     setNotice(`纸上鸭正在处理你的请求：“${prompt.slice(0, 24)}${prompt.length > 24 ? "…" : ""}”`);
     const abortController = new AbortController();
     agentAbortRef.current = abortController;
@@ -349,9 +346,9 @@ export function Workbench() {
       // conversation handle for the next user turn. Start a new run for the
       // next request; only an active approval checkpoint may be resumed by
       // the explicit approval controls.
-      const startsFreshRun = !run || stage !== "awaiting" || run.status === "cancelled" || run.status === "completed" || run.status === "failed";
+      const startsFreshRun = !run || ["completed", "failed", "cancelled"].includes(runtimeView.runtimeStatus);
       if (startsFreshRun) {
-        const previousEvents = activeEvents.length ? activeEvents : loopResult?.events ?? [];
+        const previousEvents = activeEvents;
         if (previousEvents.length) setHistoricalEvents((items) => mergeTimelineEvents(items, previousEvents));
         setActiveEvents([]);
         setLoopResult(undefined);
@@ -369,14 +366,12 @@ export function Workbench() {
         if (event.type === "model.delta") setNotice("纸上鸭正在回复");
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
       }, abortController.signal, localMessageId, interactionId);
-      setLoopResult(result);
-      setActiveEvents((items) => mergeTimelineEvents(items, result.events));
+      applyRuntimeResult(activeRun.id, result);
       setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, status: result.checkpoint.status === "failed" ? "failed" : "sent" } : item));
       if (result.checkpoint.status === "failed") {
         // The failed checkpoint already contains the user-facing assistant
         // message and turn.failed event. Keep the unified Timeline as the
         // source of truth instead of appending a second fallback message.
-        setStage("idle");
         setNotice(result.checkpoint.finalText ?? "这次请求没有完成，请稍后重试。");
         return;
       }
@@ -396,7 +391,6 @@ export function Workbench() {
         setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
         await refreshVersions(taskId);
       }
-      setStage(result.checkpoint.pendingInteraction ? "awaiting" : wrote ? "complete" : "idle");
       setNotice(result.checkpoint.pendingInteraction?.type === "approval"
         ? "Agent 已完成读取并请求写入确认"
         : result.checkpoint.pendingInteraction?.type === "user_input"
@@ -412,7 +406,6 @@ export function Workbench() {
         try {
           const recovered = await recoverAndReconcileRun(runToRecover.id);
           if (recovered.checkpoint.pendingInteraction) {
-            setStage("awaiting");
             setNotice(recovered.checkpoint.pendingInteraction.type === "approval" ? "Agent 已完成读取并请求写入确认" : "Agent 正在等待你的回答");
             return;
           }
@@ -426,7 +419,6 @@ export function Workbench() {
       setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, status: "failed" } : item));
       setActiveEvents((items) => mergeTimelineEvents(items, [createAgentEvent(activeRunForRecovery?.id ?? run?.id ?? "unknown", { type: "turn.failed", error: failureMessage })]));
       setMessages((items) => [...items, { role: "agent", text: error instanceof Error ? `这次分析没有完成：${error.message}` : "这次分析没有完成，请重试。" }]);
-      setStage("idle");
       setNotice(error instanceof Error ? error.message : "Agent 分析失败");
     } finally {
       if (agentAbortRef.current === abortController) agentAbortRef.current = undefined;
@@ -445,13 +437,10 @@ export function Workbench() {
         setActiveEvents((items) => mergeTimelineEvents(items, [event]));
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
       }, abortController.signal);
-      setLoopResult(result);
-      setActiveEvents((items) => mergeTimelineEvents(items, result.events));
+      applyRuntimeResult(run.id, result);
       const replies = result.events.flatMap((event) => event.type === "assistant.message" && event.text ? [event.text] : []);
       if (replies.length) setMessages((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text, runId: run.id }))]);
       if (result.checkpoint.status === "completed") {
-        const wrote = result.events.some((event) => event.type === "tool.completed" && (event.name === "apply_text_change" || event.name === "apply_text_changes"));
-        setStage(wrote ? "complete" : "idle");
         if (taskId) {
           const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
           const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
@@ -461,12 +450,10 @@ export function Workbench() {
         }
         setNotice("Agent 已完成写入并通过版本校验");
       } else if (result.checkpoint.status === "awaiting_user") {
-        setStage("awaiting");
         setNotice("Agent 需要你的下一步决定");
       } else if (result.checkpoint.status === "failed") {
         const finalText = result.checkpoint.finalText ?? "Agent 执行失败";
         setMessages((items) => [...items, { role: "agent", text: finalText, runId: run.id }]);
-        setStage("idle");
         setNotice(finalText);
       }
     } catch (error) {
@@ -507,7 +494,6 @@ export function Workbench() {
         setMessages([]);
         setActiveEvents([]);
         setRun(undefined);
-        setStage("idle");
       } else if (maySeedWorkingDocument) setRun(undefined);
       const next = { kind, name: file.name, size: formatFileSize(file.size) };
       setAssets((items) => [...items.filter((item) => item.kind !== kind), next]);
@@ -515,7 +501,6 @@ export function Workbench() {
         // Reference context changed, so the active run no longer matches this
         // example even though the Working Document bytes are stable.
         setRun(undefined);
-        setStage("idle");
       }
       setNotice(isTemplate ? `${file.name} 正在建立文档工作区` : `${file.name} 正在作为参考资料加入工作区`);
       const persisted = await persistSourceFile({ file, bytes, role: kind, taskId });
@@ -598,7 +583,7 @@ export function Workbench() {
       const cancelled = await cancelBrowserAgentRun(run.id);
       setRun(cancelled);
       agentAbortRef.current?.abort();
-      setStage("idle"); setNotice("任务已取消，最近有效版本未受影响");
+      setNotice("任务已取消，最近有效版本未受影响");
     } catch {
       const latest = await loadBrowserAgentRun(run.id).catch(() => undefined);
       if (latest) setRun(latest);
@@ -636,7 +621,7 @@ export function Workbench() {
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
         {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} onLoadMoreTasks={loadMoreTasks} hasMoreTasks={nextTaskOffset !== null} loadingMoreTasks={loadingMoreTasks} loadingTasks={loadingTasks} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
         <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} onChoose={chooseWorkingDocument} /></div>
-        {rightOpen ? <AgentPanel stage={stage} run={run} loopResult={loopResult} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} loadingWorkspace={Boolean(routeTaskId && documentLoad.status === "loading")} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
+        {rightOpen ? <AgentPanel runtimeView={runtimeView} run={run} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} loadingWorkspace={Boolean(routeTaskId && documentLoad.status === "loading")} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 
       <div className="mobile-dock" aria-label="移动端工作台导航"><button onClick={() => setMobilePanel("outline")} className={mobilePanel === "outline" ? "active" : ""}><FilePlus2 size={18} /><span>文档</span></button><button onClick={() => setMobilePanel("agent")} className={mobilePanel === "agent" ? "active" : ""}><Sparkles size={18} /><span>审批</span><i>1</i></button><button onClick={() => setMobilePanel("versions")} className={mobilePanel === "versions" ? "active" : ""}><History size={18} /><span>版本</span></button><button onClick={downloadCurrent}><Download size={18} /><span>下载</span></button></div>

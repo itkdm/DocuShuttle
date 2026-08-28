@@ -158,7 +158,7 @@ button:focus-visible, textarea:focus-visible, label:has(input:focus-visible) { o
 
 .agent-heading { padding-bottom: 11px; }.agent-title { display: flex; align-items: center; gap: 9px; }
 .agent-orb { width: 34px; height: 34px; display: grid; place-items: center; background: var(--duck); border: 1px solid var(--duck-dark); border-radius: 50% 48% 52% 45%; box-shadow: 2px 2px 0 #c9a447; }
-.agent-orb.analyzing, .agent-orb.applying { animation: agentPulse 1.2s ease-in-out infinite; }
+.agent-orb.queued, .agent-orb.running { animation: agentPulse 1.2s ease-in-out infinite; }
 @keyframes agentPulse { 50% { box-shadow: 0 0 0 5px rgba(242,185,40,.18), 2px 2px 0 #c9a447; transform: rotate(4deg); } }
 .agent-tabs { padding: 0 14px; display: flex; border-bottom: 1px solid var(--line); }
 .agent-tabs button { flex: 1; position: relative; height: 34px; border: 0; background: transparent; font-size: 10px; color: var(--muted); cursor: pointer; }

@@ -242,6 +242,47 @@ describe("Agent execution timeline", () => {
     expect(projection.turns[0].assistant.status).toBe("completed");
   });
 
+  it("keeps a rejected approval non-terminal while the run can continue", () => {
+    const events = toEvents([
+      { eventId: "required", type: "approval.required", interactionId: "i-2", callId: "c-2", name: "apply_text_change", input: {} },
+      { eventId: "resolved", type: "approval.resolved", interactionId: "i-2", callId: "c-2", name: "apply_text_change", decision: "rejected" },
+    ]);
+    const projection = projectAgentThread({ messages: [{ id: "u-2", role: "user", parts: [{ type: "text", text: "修改" }], run_id: "run-2", created_at: "2026-01-01", message_key: "u-2" }], historicalEvents: [], activeEvents: events });
+    expect(projection.turns[0].assistant.status).toBe("running");
+    expect(projection.turns[0].assistant.activities).toMatchObject([{ type: "tool", state: "failed", error: "已拒绝" }]);
+  });
+
+  it("projects a rejected approval followed by an assistant response as completed", () => {
+    const projection = projectAgentThread({
+      messages: [{ id: "u-3", role: "user", parts: [{ type: "text", text: "修改" }], run_id: "run-3", created_at: "2026-01-01", message_key: "u-3" }],
+      historicalEvents: [],
+      activeEvents: toEvents([
+        { eventId: "required", type: "approval.required", interactionId: "i-3", callId: "c-3", name: "apply_text_change", input: {} },
+        { eventId: "resolved", type: "approval.resolved", interactionId: "i-3", callId: "c-3", name: "apply_text_change", decision: "rejected" },
+        { eventId: "message", type: "assistant.message", text: "好的，我没有修改文档。" },
+        { eventId: "complete", type: "turn.completed", text: "好的，我没有修改文档。" },
+      ]),
+    });
+    expect(projection.turns[0].assistant.status).toBe("completed");
+    expect(projection.turns[0].assistant.activities).toMatchObject([{ type: "tool", state: "failed", error: "已拒绝" }]);
+  });
+
+  it("lets terminal failure and cancellation override a resolved approval", () => {
+    for (const [runId, terminal] of [["failed-run", "turn.failed"], ["cancelled-run", "turn.cancelled"]] as const) {
+      const events = toEvents([
+        { eventId: "required", type: "approval.required", interactionId: runId, callId: runId, name: "apply_text_change", input: {} },
+        { eventId: "resolved", type: "approval.resolved", interactionId: runId, callId: runId, name: "apply_text_change", decision: "rejected" },
+        { eventId: "terminal", type: terminal, text: "结束" },
+      ], runId);
+      const projection = projectAgentThread({
+        messages: [{ id: runId, role: "user", parts: [{ type: "text", text: "修改" }], run_id: runId, created_at: "2026-01-01", message_key: runId }],
+        historicalEvents: [],
+        activeEvents: events,
+      });
+      expect(projection.turns[0].assistant.status).toBe(terminal === "turn.failed" ? "failed" : "cancelled");
+    }
+  });
+
   it("rejects replay events without a durable identity envelope", () => {
     expect(normalizeReplayEvents([
       { type: "model.delta", text: "ok", eventId: "e-1", runId: "run-1", sequence: 1, timestamp: "2026-01-01" },

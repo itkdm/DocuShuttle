@@ -32,7 +32,6 @@ function assistantStatus(events: readonly AgentEvent[], finalContent?: string): 
   if (approvalRequired) {
     const resolved = ordered.findLast((event) => event.type === "approval.resolved" && event.interactionId === approvalRequired.interactionId) as Extract<AgentEvent, { type: "approval.resolved" }> | undefined;
     if (!resolved) return "awaiting_approval";
-    if (resolved.decision === "rejected") return "failed";
   }
   if (ordered.some((event) => event.type === "turn.completed" || event.type === "assistant.message" || event.type === "tool.completed") || finalContent) return "completed";
   return events.length ? "running" : "completed";

@@ -35,4 +35,13 @@ describe("agent turn durable commentary", () => {
     ], "run-1");
     expect(completed.activities).toEqual([{ type: "note", id: "delta-2", text: "正在检查文档" }]);
   });
+
+  it("keeps distinct ask_user commentary in execution history while showing the question as the answer", () => {
+    const state = reduceAgentEvents([
+      { ...base, eventId: "commentary-ask", type: "model.commentary", text: "我还需要确认一个信息。" },
+      { ...base, eventId: "message-ask", type: "assistant.message", text: "请选择目标表格。" },
+    ], "run-1");
+    expect(state.activities).toEqual([{ type: "note", id: "commentary-ask", text: "我还需要确认一个信息。" }]);
+    expect(state.streamingContent).toBe("请选择目标表格。");
+  });
 });

@@ -543,6 +543,30 @@ describe("AgentLoopRunner", () => {
     expect(store.durableEvents.filter((event) => event.type === "assistant.message")).toHaveLength(1);
   });
 
+  it("does not persist ask_user commentary identical to the question", async () => {
+    const store = new MemoryStore();
+    await new AgentLoopRunner({
+      decide: async ({ onTextDelta }) => {
+        onTextDelta?.("请选择目标表格");
+        return { kind: "ask_user", text: "请选择目标表格" };
+      },
+    }, store, []).run("run-ask-user-identical", "开始");
+    expect(store.durableEvents.filter((event) => event.type === "model.commentary")).toHaveLength(0);
+    expect(store.durableEvents.filter((event) => event.type === "assistant.message")).toHaveLength(1);
+  });
+
+  it("keeps distinct ask_user commentary as a durable execution note", async () => {
+    const store = new MemoryStore();
+    await new AgentLoopRunner({
+      decide: async ({ onTextDelta }) => {
+        onTextDelta?.("我还需要确认一个信息。");
+        return { kind: "ask_user", text: "请选择目标表格。" };
+      },
+    }, store, []).run("run-ask-user-distinct", "开始");
+    expect(store.durableEvents.filter((event) => event.type === "model.commentary")).toMatchObject([{ type: "model.commentary", text: "我还需要确认一个信息。" }]);
+    expect(store.durableEvents.filter((event) => event.type === "assistant.message")).toHaveLength(1);
+  });
+
   it("keeps runtime correctness when event persistence fails and records a diagnostic", async () => {
     const store = new MemoryStore();
     store.failEventPersistence = true;

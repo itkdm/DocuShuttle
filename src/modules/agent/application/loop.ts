@@ -542,7 +542,7 @@ export class AgentLoopRunner {
         continue;
       }
       if (decision.kind === "ask_user") {
-        if (publicCommentary) persistDurableEvent({ type: "model.commentary", text: publicCommentary });
+        if (publicCommentary && publicCommentary !== decision.text) persistDurableEvent({ type: "model.commentary", text: publicCommentary });
         checkpoint.status = "awaiting_user";
         checkpoint.pendingInteraction = { interactionId: crypto.randomUUID(), type: "user_input", question: decision.text };
         checkpoint.messages.push({ role: "assistant", content: decision.text, ...(decision.reasoning ? { reasoning: decision.reasoning } : {}) });

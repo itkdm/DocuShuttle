@@ -192,6 +192,56 @@ describe("Agent execution timeline", () => {
     expect(turns.map((turn) => [turn.user?.content, turn.assistant.finalContent])).toEqual([["A", "B"], ["C", "D"]]);
   });
 
+  it("attributes same-run streaming events to the latest semantic user phase", () => {
+    const messages = [
+      { id: "u-a", role: "user" as const, parts: [{ type: "text", text: "A" }], run_id: "run-1", created_at: "2026-01-01T00:00:01Z", message_key: "u-a" },
+      { id: "a-b", role: "assistant" as const, parts: [{ type: "text", text: "你希望改成什么？" }], run_id: "run-1", created_at: "2026-01-01T00:00:02Z", message_key: "a-b" },
+      { id: "u-c", role: "user" as const, parts: [{ type: "text", text: "改成专业一点" }], run_id: "run-1", created_at: "2026-01-01T00:00:05Z", message_key: "u-c" },
+    ];
+    const events = toEvents([
+      { eventId: "old-start", type: "model.started", runId: "run-1", timestamp: "2026-01-01T00:00:01Z" },
+      { eventId: "old-answer", type: "assistant.message", text: "你希望改成什么？", runId: "run-1", timestamp: "2026-01-01T00:00:02Z" },
+      { eventId: "new-start", type: "model.started", runId: "run-1", timestamp: "2026-01-01T00:00:06Z" },
+      { eventId: "new-delta-1", type: "model.delta", text: "正在", runId: "run-1", timestamp: "2026-01-01T00:00:07Z" },
+      { eventId: "new-delta-2", type: "model.delta", text: "修改", runId: "run-1", timestamp: "2026-01-01T00:00:08Z" },
+    ]);
+    const projection = projectAgentThread({ messages: [...messages].reverse(), historicalEvents: events.slice(0, 2).reverse(), activeEvents: events.slice(2).reverse() });
+    expect(projection.turns).toHaveLength(2);
+    expect(projection.turns[0].assistant.finalContent).toBe("你希望改成什么？");
+    expect(projection.turns[0].assistant.streamingContent).toBeUndefined();
+    expect(projection.turns[1]).toMatchObject({ user: { content: "改成专业一点" }, assistant: { streamingContent: "正在修改" } });
+    const withTool = projectAgentThread({ messages, historicalEvents: [], activeEvents: [...events, ...toEvents([
+      { eventId: "tool-start", type: "tool.started", callId: "call-1", name: "apply_text_change", input: {}, runId: "run-1", timestamp: "2026-01-01T00:00:08Z" },
+      { eventId: "tool-done", type: "tool.completed", callId: "call-1", name: "apply_text_change", output: {}, runId: "run-1", timestamp: "2026-01-01T00:00:09Z" },
+    ])] });
+    expect(withTool.turns[1].assistant.activities.find((activity) => activity.type === "tool")).toMatchObject({ callId: "call-1", state: "completed" });
+  });
+
+  it("replaces the pending assistant phase when final D arrives", () => {
+    const base = [
+      { id: "u-c", role: "user" as const, parts: [{ type: "text", text: "C" }], run_id: "run-1", created_at: "2026-01-01T00:00:05Z", message_key: "u-c" },
+    ];
+    const final = { id: "a-d", role: "assistant" as const, parts: [{ type: "text", text: "已经修改完成" }], run_id: "run-1", created_at: "2026-01-01T00:00:09Z", message_key: "a-d" };
+    const events = toEvents([{ eventId: "delta", type: "model.delta", text: "正在修改", runId: "run-1", timestamp: "2026-01-01T00:00:07Z" }]);
+    const projection = projectAgentThread({ messages: [...base, final].reverse(), historicalEvents: [], activeEvents: events });
+    expect(projection.turns).toHaveLength(1);
+    expect(projection.turns[0].id).toBe("u-c");
+    expect(projection.turns[0].assistant.finalContent).toBe("已经修改完成");
+    expect(projection.turns[0].assistant.streamingContent).toBeUndefined();
+  });
+
+  it("does not leave approval pending after resolution and terminal completion", () => {
+    const events = toEvents([
+      { eventId: "required", type: "approval.required", interactionId: "i-1", callId: "c-1", name: "apply_text_change", input: {} },
+      { eventId: "resolved", type: "approval.resolved", interactionId: "i-1", callId: "c-1", name: "apply_text_change", decision: "approved" },
+      { eventId: "done", type: "tool.completed", callId: "c-1", name: "apply_text_change", output: {} },
+      { eventId: "message", type: "assistant.message", text: "完成" },
+      { eventId: "complete", type: "turn.completed", text: "完成" },
+    ]);
+    const projection = projectAgentThread({ messages: [{ id: "u-1", role: "user", parts: [{ type: "text", text: "修改" }], run_id: "run-1", created_at: "2026-01-01", message_key: "u-1" }], historicalEvents: [], activeEvents: events });
+    expect(projection.turns[0].assistant.status).toBe("completed");
+  });
+
   it("rejects replay events without a durable identity envelope", () => {
     expect(normalizeReplayEvents([
       { type: "model.delta", text: "ok", eventId: "e-1", runId: "run-1", sequence: 1, timestamp: "2026-01-01" },

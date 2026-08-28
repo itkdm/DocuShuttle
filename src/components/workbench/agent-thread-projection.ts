@@ -18,27 +18,48 @@ export type AgentThreadTurn = {
 export type AgentThreadProjection = { turns: readonly AgentThreadTurn[] };
 
 const textPart = (message: BrowserConversationMessage) => message.parts.find((part) => part.type === "text")?.text;
-const timestamp = (value?: string) => value && Number.isFinite(Date.parse(value)) ? value : "";
-const eventTimestamp = (events: readonly AgentEvent[]) => events.map((event) => event.timestamp).filter(Boolean).sort()[0] ?? "";
-const emptyAssistant = (pending: boolean): AgentThreadAssistant => ({ status: pending ? "running" : "completed", activities: [] });
+const parsedTime = (value?: string) => value ? Date.parse(value) : Number.NaN;
+const validTime = (value?: string) => Number.isFinite(parsedTime(value)) ? value! : "";
+const eventTime = (event: AgentEvent) => parsedTime(event.timestamp);
+const earliestEventTime = (events: readonly AgentEvent[]) => [...events].sort((a, b) => eventTime(a) - eventTime(b))[0]?.timestamp ?? "";
+const emptyAssistant = (pending = false): AgentThreadAssistant => ({ status: pending ? "running" : "completed", activities: [] });
+
 function assistantStatus(events: readonly AgentEvent[], finalContent?: string): AgentThreadAssistant["status"] {
-  if (events.some((event) => event.type === "approval.required")) return "awaiting_approval";
-  if (events.some((event) => event.type === "turn.cancelled")) return "cancelled";
-  if (events.some((event) => event.type === "turn.failed")) return "failed";
-  if (events.some((event) => event.type === "turn.completed" || event.type === "assistant.message") || finalContent) return "completed";
+  const ordered = [...events].sort((a, b) => eventTime(a) - eventTime(b));
+  if (ordered.some((event) => event.type === "turn.cancelled")) return "cancelled";
+  if (ordered.some((event) => event.type === "turn.failed")) return "failed";
+  const approvalRequired = ordered.findLast((event) => event.type === "approval.required");
+  if (approvalRequired) {
+    const resolved = ordered.findLast((event) => event.type === "approval.resolved" && event.interactionId === approvalRequired.interactionId) as Extract<AgentEvent, { type: "approval.resolved" }> | undefined;
+    if (!resolved) return "awaiting_approval";
+    if (resolved.decision === "rejected") return "failed";
+  }
+  if (ordered.some((event) => event.type === "turn.completed" || event.type === "assistant.message" || event.type === "tool.completed") || finalContent) return "completed";
   return events.length ? "running" : "completed";
 }
+
 function assistantFor(runId: string, events: readonly AgentEvent[], message?: BrowserConversationMessage): AgentThreadAssistant {
   const finalContent = message && textPart(message);
   const reduced = reduceAgentEvents(events, runId);
   const streamingContent = reduced.streamingContent || reduced.textBuffer;
-  return { messageId: message?.id, status: assistantStatus(events, finalContent), streamingContent: streamingContent || undefined, finalContent: finalContent || undefined, activities: reduced.activities };
+  return { messageId: message?.id, status: assistantStatus(events, finalContent), streamingContent: finalContent ? undefined : streamingContent || undefined, finalContent: finalContent || undefined, activities: reduced.activities };
 }
+
 function compareAnchors(a: AgentThreadTurn, b: AgentThreadTurn) {
-  const at = Date.parse(a.anchor); const bt = Date.parse(b.anchor);
+  const at = parsedTime(a.anchor); const bt = parsedTime(b.anchor);
   if (Number.isFinite(at) && Number.isFinite(bt) && at !== bt) return at - bt;
   if (Number.isFinite(at) !== Number.isFinite(bt)) return Number.isFinite(at) ? -1 : 1;
   return a.id.localeCompare(b.id);
+}
+
+function eventsForPhase(events: readonly AgentEvent[], start: string, end?: string) {
+  const startTime = parsedTime(start); const endTime = parsedTime(end);
+  return events.filter((event) => {
+    const time = eventTime(event);
+    if (!Number.isFinite(time)) return !Number.isFinite(endTime);
+    if (Number.isFinite(startTime) && time < startTime) return false;
+    return !Number.isFinite(endTime) || time < endTime;
+  }).sort((a, b) => eventTime(a) - eventTime(b));
 }
 
 export function projectAgentThread(input: { messages: readonly BrowserConversationMessage[]; historicalEvents: readonly AgentEvent[]; activeEvents: readonly AgentEvent[]; activeRunId?: string }): AgentThreadProjection {
@@ -49,8 +70,8 @@ export function projectAgentThread(input: { messages: readonly BrowserConversati
     const runId = message.run_id ?? undefined;
     if (!runId) {
       turns.push(message.role === "user"
-        ? { id: message.id, user: { id: message.id, content: textPart(message) ?? "", createdAt: message.created_at, deliveryStatus: message.delivery_status ?? "sent" }, assistant: emptyAssistant(message.delivery_status === "pending"), anchor: timestamp(message.created_at) }
-        : { id: message.id, assistant: assistantFor(`message:${message.id}`, [], message), anchor: timestamp(message.created_at) });
+        ? { id: message.id, user: { id: message.id, content: textPart(message) ?? "", createdAt: message.created_at, deliveryStatus: message.delivery_status ?? "sent" }, assistant: emptyAssistant(message.delivery_status === "pending"), anchor: validTime(message.created_at) }
+        : { id: message.id, assistant: assistantFor(`message:${message.id}`, [], message), anchor: validTime(message.created_at) });
       return;
     }
     const list = messagesByRun.get(runId) ?? []; list.push({ message, index }); messagesByRun.set(runId, list);
@@ -61,32 +82,30 @@ export function projectAgentThread(input: { messages: readonly BrowserConversati
     if (!list.some((candidate) => candidate.eventId === event.eventId)) list.push(event);
     eventsByRun.set(event.runId, list);
   }
+
   for (const [runId, indexedMessages] of messagesByRun) {
-    const messages = [...indexedMessages].sort((a, b) => timestamp(a.message.created_at).localeCompare(timestamp(b.message.created_at)) || a.index - b.index).map(({ message }) => message);
+    const messages = [...indexedMessages].sort((a, b) => parsedTime(a.message.created_at) - parsedTime(b.message.created_at) || a.index - b.index).map(({ message }) => message);
     const events = eventsByRun.get(runId) ?? [];
-    const lastAssistantIndex = messages.map((message, index) => message.role === "assistant" ? index : -1).filter((index) => index >= 0).at(-1);
-    let previousUser: AgentThreadTurn | undefined;
-    for (const [index, message] of messages.entries()) {
-      if (message.role === "user") {
-        const userTurn: AgentThreadTurn = { id: message.id, runId, user: { id: message.id, content: textPart(message) ?? "", createdAt: message.created_at, deliveryStatus: message.delivery_status ?? "sent" }, assistant: emptyAssistant(message.delivery_status === "pending"), anchor: timestamp(message.created_at) };
-        previousUser = userTurn; turns.push(userTurn);
-      } else {
-        const assistant = assistantFor(runId, index === lastAssistantIndex ? events : [], message);
-        if (previousUser && !previousUser.assistant.messageId && !previousUser.assistant.finalContent && !previousUser.assistant.streamingContent && previousUser.assistant.activities.length === 0) { previousUser.assistant = assistant; previousUser = undefined; }
-        else turns.push({ id: message.id, runId, assistant, anchor: timestamp(message.created_at) || eventTimestamp(events) });
-      }
+    const users = messages.filter((message) => message.role === "user");
+    const phaseTurns = users.map((message, index) => {
+      const nextUser = users[index + 1];
+      const phaseEvents = eventsForPhase(events, message.created_at, nextUser?.created_at);
+      const assistantMessage = messages.find((candidate) => candidate.role === "assistant" && parsedTime(candidate.created_at) >= parsedTime(message.created_at) && (!nextUser || parsedTime(candidate.created_at) < parsedTime(nextUser.created_at)));
+      const assistant = assistantMessage ? assistantFor(runId, phaseEvents, assistantMessage) : phaseEvents.length ? assistantFor(runId, phaseEvents) : emptyAssistant(message.delivery_status === "pending");
+      return { id: message.id, runId, user: { id: message.id, content: textPart(message) ?? "", createdAt: message.created_at, deliveryStatus: message.delivery_status ?? "sent" }, assistant, anchor: validTime(message.created_at) } satisfies AgentThreadTurn;
+    });
+    const assignedAssistants = new Set(phaseTurns.map((turn) => turn.assistant.messageId).filter(Boolean));
+    const orphanAssistants = messages.filter((message) => message.role === "assistant" && !assignedAssistants.has(message.id)).map((message) => ({ id: message.id, runId, assistant: assistantFor(runId, [], message), anchor: validTime(message.created_at) } satisfies AgentThreadTurn));
+    turns.push(...phaseTurns, ...orphanAssistants);
+    if (!users.length && events.length) {
+      const started = events.find((event) => event.type === "turn.started");
+      turns.push({ id: `${runId}:user`, runId, user: { id: `${runId}:user`, content: started?.text ?? "", createdAt: started?.timestamp, deliveryStatus: "sent" }, assistant: assistantFor(runId, events), anchor: started?.timestamp ?? earliestEventTime(events) });
     }
-    if (events.length && lastAssistantIndex === undefined) {
-      const user = [...turns].reverse().find((turn) => turn.runId === runId && turn.user && !turn.assistant.messageId && !turn.assistant.finalContent && !turn.assistant.streamingContent && turn.assistant.activities.length === 0); const assistant = assistantFor(runId, events);
-      if (user) user.assistant = assistant;
-      else { const started = events.find((event) => event.type === "turn.started"); turns.push({ id: `${runId}:assistant`, runId, assistant, anchor: started?.timestamp ?? eventTimestamp(events) }); }
-    }
-    if (!messages.length && events.length) { const started = events.find((event) => event.type === "turn.started"); turns.push({ id: `${runId}:user`, runId, user: { id: `${runId}:user`, content: started?.text ?? "", createdAt: started?.timestamp, deliveryStatus: "sent" }, assistant: assistantFor(runId, events), anchor: started?.timestamp ?? eventTimestamp(events) }); }
   }
   for (const [runId, events] of eventsByRun) {
     if (messagesByRun.has(runId)) continue;
     const started = events.find((event) => event.type === "turn.started");
-    turns.push({ id: `${runId}:user`, runId, user: { id: `${runId}:user`, content: started?.text ?? "", createdAt: started?.timestamp, deliveryStatus: "sent" }, assistant: assistantFor(runId, events), anchor: started?.timestamp ?? eventTimestamp(events) });
+    turns.push({ id: `${runId}:user`, runId, user: { id: `${runId}:user`, content: started?.text ?? "", createdAt: started?.timestamp, deliveryStatus: "sent" }, assistant: assistantFor(runId, events), anchor: started?.timestamp ?? earliestEventTime(events) });
   }
-  return { turns: turns.filter((turn) => turn.user || turn.assistant).sort(compareAnchors) };
+  return { turns: turns.sort(compareAnchors) };
 }

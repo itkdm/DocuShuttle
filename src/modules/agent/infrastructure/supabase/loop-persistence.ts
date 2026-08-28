@@ -17,7 +17,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     return measure("agent.checkpoint.load", { runId, table: "agent_runs", operation: "select" }, async () => {
       const result = await this.client.from("agent_runs").select("state, lock_version").eq("id", runId).maybeSingle();
       if (result.error) throw new Error(`Unable to load agent loop checkpoint: ${result.error.message}`);
-      if (result.data) this.versions.set(runId, result.data.lock_version);
+      if (result.data && !this.versions.has(runId)) this.versions.set(runId, result.data.lock_version);
       const state = result.data?.state as Record<string, unknown> | undefined;
       return normalizeAgentLoopCheckpoint(state?.loopCheckpoint);
     });
@@ -39,7 +39,11 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
         p_message_text: message.text,
       });
       if (result.error) throw new Error(`Unable to persist checkpoint and assistant message: ${result.error.message}`);
-      this.versions.set(runId, expectedVersion + 1);
+      const payload = result.data as { checkpoint?: unknown; lockVersion?: unknown } | null;
+      if (!payload || typeof payload.lockVersion !== "number" || !Number.isInteger(payload.lockVersion) || payload.lockVersion < 0 || !payload.checkpoint) {
+        throw new Error("Invalid checkpoint/message commit response");
+      }
+      this.versions.set(runId, payload.lockVersion);
     });
   }
 

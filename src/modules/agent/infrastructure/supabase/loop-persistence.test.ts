@@ -9,10 +9,12 @@ describe("SupabaseAgentLoopStore interaction resolution contract", () => {
     query.select.mockReturnValue(query);
     query.eq.mockReturnValue(query);
     query.maybeSingle.mockResolvedValueOnce({ data: { state: { loopCheckpoint: { status: "running" } }, lock_version: 4 }, error: null })
+      .mockResolvedValueOnce({ data: { state: { loopCheckpoint: { status: "completed" } }, lock_version: 5 }, error: null })
       .mockResolvedValueOnce({ data: { state: { loopCheckpoint: { status: "completed" } }, lock_version: 5 }, error: null });
     query.update.mockReturnValue(query);
     const from = vi.fn().mockReturnValue(query);
     const store = new SupabaseAgentLoopStore({ from } as unknown as SupabaseClient);
+    await store.load("run-stale");
     await store.load("run-stale");
     await expect(store.save("run-stale", { messages: [], iterations: 2, toolCallCount: 0, status: "running" })).rejects.toThrow("changed while it was being updated");
     expect(query.update).not.toHaveBeenCalled();
@@ -22,9 +24,11 @@ describe("SupabaseAgentLoopStore interaction resolution contract", () => {
     const query = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn() };
     query.select.mockReturnValue(query);
     query.eq.mockReturnValue(query);
-    query.maybeSingle.mockResolvedValue({ data: { state: { loopCheckpoint: { status: "running" } }, lock_version: 9 }, error: null });
+    query.maybeSingle.mockResolvedValueOnce({ data: { state: { loopCheckpoint: { status: "running" } }, lock_version: 9 }, error: null })
+      .mockResolvedValueOnce({ data: { state: { loopCheckpoint: { status: "completed" } }, lock_version: 10 }, error: null });
     const rpc = vi.fn().mockResolvedValue({ data: null, error: { message: "RUN_VERSION_CONFLICT" } });
     const store = new SupabaseAgentLoopStore({ from: vi.fn().mockReturnValue(query), rpc } as unknown as SupabaseClient);
+    await store.load("run-stale-message");
     await store.load("run-stale-message");
     await expect(store.saveWithAssistantMessage("run-stale-message", { messages: [], iterations: 2, toolCallCount: 0, status: "completed" }, { messageKey: "assistant:old", text: "旧结果" })).rejects.toThrow("RUN_VERSION_CONFLICT");
     expect(rpc).toHaveBeenCalledWith("commit_agent_checkpoint_with_message", expect.objectContaining({ p_expected_lock_version: 9 }));

@@ -21,12 +21,13 @@ async function createRunner(runId: string) {
   if (row.error || !row.data) throw new Error("RUN_NOT_FOUND");
   const kernel = new OoxmlPreservationKernel();
   const taskId = row.data.task_id as string;
+  const loopStore = new SupabaseAgentLoopStore(client);
   const tools = [
-    ...createDocumentTools(kernel, new SupabaseWorkingDocumentAccess(client, taskId, runId), ({ event, metadata }) => logger.info(event, { ...metadata, runId, taskId })),
+    ...createDocumentTools(kernel, new SupabaseWorkingDocumentAccess(client, taskId, runId, () => loopStore.getOwnedLockVersion(runId)), ({ event, metadata }) => logger.info(event, { ...metadata, runId, taskId })),
     ...createSourceContextTools(taskId, new SupabaseSourceDocumentContext(client), kernel),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
-  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), new SupabaseAgentLoopStore(client), tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client));
+  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client));
 }
 
 async function execute(request: Request, runId: string, stream: boolean) {

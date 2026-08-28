@@ -35,7 +35,7 @@ async function createRunner(runId: string) {
   const taskId = bootstrap.taskId;
   const loopStore = new SupabaseAgentLoopStore(client, bootstrap);
   const tools = [
-    ...createDocumentTools(kernel, new SupabaseWorkingDocumentAccess(client, taskId, runId), ({ event, metadata }) => logger.info(event, { ...metadata, runId, taskId })),
+    ...createDocumentTools(kernel, new SupabaseWorkingDocumentAccess(client, taskId, runId, () => loopStore.getOwnedLockVersion(runId)), ({ event, metadata }) => logger.info(event, { ...metadata, runId, taskId })),
     ...createSourceContextTools(taskId, new SupabaseSourceDocumentContext(client), kernel),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];

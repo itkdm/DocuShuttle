@@ -65,6 +65,10 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     });
   }
 
+  getOwnedLockVersion(runId: string): number | undefined {
+    return this.versions.get(runId);
+  }
+
   async save(runId: string, checkpoint: AgentLoopCheckpoint): Promise<void> {
     return measure("agent.checkpoint.save", { runId, table: "agent_runs", operation: "checkpoint_and_projection", checkpointStatus: checkpoint.status }, async () => this.saveInternal(runId, checkpoint));
   }

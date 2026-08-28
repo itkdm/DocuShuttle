@@ -6,12 +6,14 @@ import { buildTaskObjectKey } from "@/modules/storage/object-key";
 import { buildStableArtifactStem } from "@/modules/storage/artifact-name";
 import type { PrivateObjectStoragePort } from "@/modules/storage/ports";
 import { measure } from "@/infrastructure/observability";
+import { ConcurrentRunUpdateError } from "../../domain/errors";
 
 export class SupabaseWorkingDocumentAccess implements WorkingDocumentAccessPort {
   constructor(
     private readonly client: SupabaseClient,
     private readonly taskId: string,
     private readonly runId: string,
+    private readonly getOwnedRunVersion: () => number | undefined,
     private readonly storage: PrivateObjectStoragePort = new SupabaseStorageAdapter(client),
   ) {}
 
@@ -37,7 +39,9 @@ export class SupabaseWorkingDocumentAccess implements WorkingDocumentAccessPort 
   }
 
   async commit(input: { idempotencyKey: string; expectedRevision: string; bytes: Uint8Array; revision: string; changedEntries: readonly string[]; effectReceipt: DocumentEffectReceiptInput }): Promise<{ revision: string; lockVersion?: number }> {
-    const run = await this.client.from("agent_runs").select("owner_user_id, working_document_id, lock_version").eq("id", this.runId).single();
+    const expectedRunVersion = this.getOwnedRunVersion();
+    if (expectedRunVersion === undefined) throw new ConcurrentRunUpdateError(this.runId);
+    const run = await this.client.from("agent_runs").select("owner_user_id, working_document_id").eq("id", this.runId).single();
     if (run.error || !run.data) throw new Error("RUN_NOT_FOUND");
     const stableArtifactName = buildStableArtifactStem(input.idempotencyKey);
     const objectKey = buildTaskObjectKey({ userId: run.data.owner_user_id as string, taskId: this.taskId, category: "versions", fileName: `${stableArtifactName}.docx` });
@@ -53,7 +57,7 @@ export class SupabaseWorkingDocumentAccess implements WorkingDocumentAccessPort 
       rpcAttempted = true;
       const committed = await measure("db.rpc", { rpc: "commit_loop_document_version", operation: "commit", table: "document_versions", runId: this.runId, documentId: run.data.working_document_id }, async () => await this.client.rpc("commit_loop_document_version", {
         p_run_id: this.runId,
-        p_expected_run_version: run.data.lock_version,
+        p_expected_run_version: expectedRunVersion,
         p_document_id: run.data.working_document_id,
         p_expected_revision: input.expectedRevision,
         p_derived_revision: input.revision,

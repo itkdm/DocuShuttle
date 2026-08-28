@@ -24,6 +24,21 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     return measure("agent.checkpoint.save", { runId, table: "agent_runs", operation: "checkpoint_and_projection", checkpointStatus: checkpoint.status }, async () => this.saveInternal(runId, checkpoint));
   }
 
+  async saveWithAssistantMessage(runId: string, checkpoint: AgentLoopCheckpoint, message: { messageKey: string; text: string }): Promise<void> {
+    return measure("agent.checkpoint.save_with_message", { runId, table: "agent_runs", operation: "checkpoint_and_assistant_message", checkpointStatus: checkpoint.status }, async () => {
+      const current = await this.client.from("agent_runs").select("lock_version").eq("id", runId).maybeSingle();
+      if (current.error || !current.data) throw new Error("RUN_NOT_FOUND");
+      const result = await this.client.rpc("commit_agent_checkpoint_with_message", {
+        p_run_id: runId,
+        p_expected_lock_version: current.data.lock_version,
+        p_checkpoint: checkpoint,
+        p_message_key: message.messageKey,
+        p_message_text: message.text,
+      });
+      if (result.error) throw new Error(`Unable to persist checkpoint and assistant message: ${result.error.message}`);
+    });
+  }
+
   private async saveInternal(runId: string, checkpoint: AgentLoopCheckpoint): Promise<void> {
     const current = await this.client.from("agent_runs").select("state, lock_version, owner_user_id").eq("id", runId).maybeSingle();
     if (current.error || !current.data) throw new Error("RUN_NOT_FOUND");

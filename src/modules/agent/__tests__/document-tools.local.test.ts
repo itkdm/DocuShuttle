@@ -13,6 +13,7 @@ class MemoryStore {
   private checkpoint?: AgentLoopCheckpoint;
   async load() { return this.checkpoint; }
   async save(_runId: string, checkpoint: AgentLoopCheckpoint) { this.checkpoint = structuredClone(checkpoint); }
+  async saveWithAssistantMessage(runId: string, checkpoint: AgentLoopCheckpoint, message: { messageKey: string; text: string }) { void runId; void message; await this.save(runId, checkpoint); }
 }
 
 describe.skipIf(!fixturePath)("Agent document tools against a real DOCX", () => {

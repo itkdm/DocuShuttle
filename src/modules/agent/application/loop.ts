@@ -69,6 +69,8 @@ export const normalizeAgentLoopCheckpoint = (raw: unknown): AgentLoopCheckpoint 
 export type AgentLoopStore = {
   load(runId: string): Promise<AgentLoopCheckpoint | undefined>;
   save(runId: string, checkpoint: AgentLoopCheckpoint): Promise<void>;
+  /** Atomically persist a checkpoint with one semantic assistant message. */
+  saveWithAssistantMessage(runId: string, checkpoint: AgentLoopCheckpoint, message: { messageKey: string; text: string }): Promise<void>;
   /** Append execution facts independently from the recovery snapshot. */
   appendEvents?(runId: string, events: readonly AgentEvent[]): Promise<void>;
   /** Persist only user-visible conversation semantics, never tool transcripts. */
@@ -102,6 +104,8 @@ export type AgentLoopResult = {
   checkpoint: AgentLoopCheckpoint;
   events: AgentEvent[];
 };
+
+type AssistantMessageEvent = Extract<AgentEvent, { type: "assistant.message" }>;
 
 export type AgentEngineeringEvent = {
   event: string;
@@ -367,11 +371,14 @@ export class AgentLoopRunner {
       events.push(activityEvent);
       this.observe(runId, activityEvent, checkpoint.permissionMode);
       if (shouldPersistAgentEvent(activityEvent)) durableEvents.push(activityEvent);
-      if (activityEvent.type === "assistant.message" && activityEvent.text) {
-        void this.store.appendAssistantMessage?.(runId, { id: activityEvent.eventId ?? crypto.randomUUID(), text: activityEvent.text }).catch(() => undefined);
-      }
       if (notify) onEvent?.(activityEvent);
       return activityEvent;
+    };
+    const persistAssistantMessage = async (messageEvent: AgentEvent) => {
+      if (messageEvent.type !== "assistant.message") throw new Error("ASSISTANT_MESSAGE_EVENT_REQUIRED");
+      await this.store.saveWithAssistantMessage(runId, checkpoint, { messageKey: `assistant:${messageEvent.eventId}`, text: messageEvent.text });
+      await flushDurableEvents();
+      onEvent?.(messageEvent);
     };
     if (userText.trim()) emit({ type: "turn.started", text: userText, ...(clientMessageId ? { clientMessageId } : {}) });
 
@@ -421,9 +428,10 @@ export class AgentLoopRunner {
           : message.length > 240 ? `${message.slice(0, 240)}…` : message;
         checkpoint.status = "failed";
         checkpoint.finalText = `这次请求暂时没有完成（模型服务异常）。${safeMessage}，请稍后重试。`;
-        const failureMessage = emit({ type: "assistant.message", text: checkpoint.finalText }, false);
+        const failureMessage = emit({ type: "assistant.message", text: checkpoint.finalText }, false) as AssistantMessageEvent;
         const failureEvent = emit({ type: "turn.failed", error: checkpoint.finalText }, false);
-        await saveCheckpoint();
+        await this.store.saveWithAssistantMessage(runId, checkpoint, { messageKey: `assistant:${failureMessage.eventId}`, text: failureMessage.text });
+        await flushDurableEvents();
         onEvent?.(failureMessage); onEvent?.(failureEvent);
         return { checkpoint, events };
       } finally {
@@ -433,23 +441,25 @@ export class AgentLoopRunner {
       emit({ type: "model.completed", durationMs: Date.now() - modelStartedAt });
       if (decision.kind === "message") {
         checkpoint.messages.push({ role: "assistant", content: decision.text });
-        emit({ type: "assistant.message", text: decision.text });
+        const messageEvent = emit({ type: "assistant.message", text: decision.text }, false) as AssistantMessageEvent;
         if (decision.finish !== false) {
           checkpoint.status = "completed";
           checkpoint.finalText = decision.text;
-          emit({ type: "turn.completed", text: decision.text });
-          await saveCheckpoint();
+          const completedEvent = emit({ type: "turn.completed", text: decision.text }, false);
+          await this.store.saveWithAssistantMessage(runId, checkpoint, { messageKey: `assistant:${messageEvent.eventId}`, text: messageEvent.text });
+          await flushDurableEvents();
+          onEvent?.(messageEvent); onEvent?.(completedEvent);
           return { checkpoint, events };
         }
-        await saveCheckpoint();
+        await persistAssistantMessage(messageEvent);
         continue;
       }
       if (decision.kind === "ask_user") {
         checkpoint.status = "awaiting_user";
         checkpoint.pendingInteraction = { interactionId: crypto.randomUUID(), type: "user_input", question: decision.text };
         checkpoint.messages.push({ role: "assistant", content: decision.text });
-        emit({ type: "assistant.message", text: decision.text });
-        await saveCheckpoint();
+        const messageEvent = emit({ type: "assistant.message", text: decision.text }, false) as AssistantMessageEvent;
+        await persistAssistantMessage(messageEvent);
         return { checkpoint, events };
       }
       for (const call of decision.calls) {
@@ -457,10 +467,10 @@ export class AgentLoopRunner {
         if (checkpoint.toolCallCount > this.maxToolCalls) {
           checkpoint.status = "failed";
           checkpoint.finalText = "Agent stopped after reaching its tool-call safety budget.";
-          await saveCheckpoint();
-          const failureMessage = emit({ type: "assistant.message", text: checkpoint.finalText }, false);
+          const failureMessage = emit({ type: "assistant.message", text: checkpoint.finalText }, false) as AssistantMessageEvent;
           const failureEvent = emit({ type: "turn.failed", error: checkpoint.finalText }, false);
-          await saveCheckpoint();
+          await this.store.saveWithAssistantMessage(runId, checkpoint, { messageKey: `assistant:${failureMessage.eventId}`, text: failureMessage.text });
+          await flushDurableEvents();
           onEvent?.(failureMessage); onEvent?.(failureEvent);
           return { checkpoint, events };
         }
@@ -543,9 +553,10 @@ export class AgentLoopRunner {
     }
     checkpoint.status = "failed";
     checkpoint.finalText = "本轮操作未能在安全步数内完成。已保留已完成的读取结果，未提交未确认的写入；请缩小范围后重试。";
-    const terminalMessage = emit({ type: "assistant.message", text: checkpoint.finalText }, false);
+    const terminalMessage = emit({ type: "assistant.message", text: checkpoint.finalText }, false) as AssistantMessageEvent;
     const terminalFailure = emit({ type: "turn.failed", error: checkpoint.finalText }, false);
-    await saveCheckpoint();
+    await this.store.saveWithAssistantMessage(runId, checkpoint, { messageKey: `assistant:${terminalMessage.eventId}`, text: terminalMessage.text });
+    await flushDurableEvents();
     onEvent?.(terminalMessage); onEvent?.(terminalFailure);
     return { checkpoint, events };
   }
@@ -599,9 +610,6 @@ export class AgentLoopRunner {
       events.push(activityEvent);
       this.observe(runId, activityEvent, checkpoint.permissionMode);
       if (shouldPersistAgentEvent(activityEvent)) durableEvents.push(activityEvent);
-      if (activityEvent.type === "assistant.message" && activityEvent.text) {
-        void this.store.appendAssistantMessage?.(runId, { id: activityEvent.eventId ?? crypto.randomUUID(), text: activityEvent.text }).catch(() => undefined);
-      }
       if (notify) onEvent?.(activityEvent);
       return activityEvent;
     };

@@ -4,6 +4,26 @@ import { describe, expect, it, vi } from "vitest";
 import { SupabaseAgentLoopStore } from "./loop-persistence";
 
 describe("SupabaseAgentLoopStore interaction resolution contract", () => {
+  it("commits the checkpoint and semantic assistant message through the atomic RPC", async () => {
+    const checkpoint = { messages: [], iterations: 1, toolCallCount: 0, status: "completed" as const, finalText: "完成" };
+    const selectQuery = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn() };
+    selectQuery.select.mockReturnValue(selectQuery);
+    selectQuery.eq.mockReturnValue(selectQuery);
+    selectQuery.maybeSingle.mockResolvedValue({ data: { lock_version: 7 }, error: null });
+    const from = vi.fn().mockReturnValue(selectQuery);
+    const rpc = vi.fn().mockResolvedValue({ data: checkpoint, error: null });
+    const store = new SupabaseAgentLoopStore({ from, rpc } as unknown as SupabaseClient);
+
+    await store.saveWithAssistantMessage("run-message", checkpoint, { messageKey: "assistant:event-1", text: "完成" });
+    expect(rpc).toHaveBeenCalledWith("commit_agent_checkpoint_with_message", {
+      p_run_id: "run-message",
+      p_expected_lock_version: 7,
+      p_checkpoint: checkpoint,
+      p_message_key: "assistant:event-1",
+      p_message_text: "完成",
+    });
+  });
+
   it("sends only the approval decision and relies on the RPC for canonical tool data", async () => {
     const checkpoint = {
       messages: [{ role: "assistant" as const, content: "", toolCalls: [{ id: "call-1", name: "apply_change", input: { nodeId: "p-1" } }] }],

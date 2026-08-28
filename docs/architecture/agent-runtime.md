@@ -77,6 +77,18 @@ RPC 在单次事务中分配并去重；Live Stream 是当前连接上的 transi
 Logs 只记录诊断。每个副作用工具使用 `runId:callId` 作为稳定幂等键，结果写入 Effect
 Receipt，重试优先重放 Receipt。服务端异常日志不得记录模型密钥、系统提示词或未脱敏工具详情。
 
+### Durable Assistant Messages
+
+`messages` 是 canonical semantic conversation projection，只保存用户可见的语义消息：
+最终回答、`ask_user` 问题、终态失败说明以及非终态的可见 assistant message。模型增量、
+工具调用与工具原始输出、审批活动和工程日志不写入 `messages`。每个语义 assistant event
+使用 `assistant:<eventId>` 作为稳定 `message_key`，由数据库唯一约束保证重试不会生成重复行。
+
+语义消息与 `AgentLoopCheckpoint` 通过 `commit_agent_checkpoint_with_message` 在同一
+数据库事务中提交；checkpoint 成功后才刷新 EventStore，EventStore 写失败只记录诊断，
+不改变 Runtime truth。语义事务失败时不发送 assistant 或 terminal live event，后续恢复以
+数据库中的 checkpoint 和 conversation message 为准。
+
 ## Pending Interaction 与权限策略
 
 `AgentLoopCheckpoint` 只使用一个 `pendingInteraction`：

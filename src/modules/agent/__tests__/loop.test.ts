@@ -7,6 +7,8 @@ import type { AgentEvent } from "../application/events";
 class MemoryStore {
   private value?: AgentLoopCheckpoint;
   private receipts = new Map<string, AgentEffectReceipt>();
+  assistantMessages = new Map<string, { text: string; runId: string }>();
+  failAssistantMessagePersistence = false;
   saves = 0;
   heartbeats = 0;
   durableEvents: AgentEvent[] = [];
@@ -15,6 +17,11 @@ class MemoryStore {
   failFromSave?: number;
   async load() { return structuredClone(this.value); }
   async save(_runId: string, checkpoint: AgentLoopCheckpoint) { this.saves += 1; if (this.failFromSave !== undefined && this.saves >= this.failFromSave) throw new Error("simulated checkpoint failure"); this.value = structuredClone(checkpoint); }
+  async saveWithAssistantMessage(runId: string, checkpoint: AgentLoopCheckpoint, message: { messageKey: string; text: string }) {
+    if (this.failAssistantMessagePersistence) throw new Error("simulated semantic checkpoint failure");
+    await this.save(runId, checkpoint);
+    this.assistantMessages.set(message.messageKey, { runId, text: message.text });
+  }
   seed(checkpoint: AgentLoopCheckpoint) { this.value = structuredClone(checkpoint); }
   async heartbeat() { this.heartbeats += 1; return true; }
   async releaseLeaseForRecovery() {}
@@ -302,6 +309,39 @@ describe("AgentLoopRunner", () => {
     expect(result.checkpoint.status).toBe("failed");
     expect(result.checkpoint.finalText).toContain("模型服务异常");
     expect((await store.load())?.status).toBe("failed");
+    expect(store.assistantMessages).toHaveLength(1);
+  });
+
+  it("persists completed and ask-user replies as semantic conversation messages", async () => {
+    const completedStore = new MemoryStore();
+    await new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "已完成。" }) }, completedStore, []).run("run-message-complete", "完成");
+    expect([...completedStore.assistantMessages.values()].map(({ text }) => text)).toEqual(["已完成。"]);
+
+    const askStore = new MemoryStore();
+    const asked = await new AgentLoopRunner({ decide: async () => ({ kind: "ask_user", text: "请补充范围。" }) }, askStore, []).run("run-message-ask", "开始");
+    expect(asked.checkpoint.status).toBe("awaiting_user");
+    expect([...askStore.assistantMessages.values()].map(({ text }) => text)).toEqual(["请补充范围。"]);
+  });
+
+  it("does not publish a terminal event when semantic checkpoint/message commit fails", async () => {
+    const store = new MemoryStore();
+    store.failAssistantMessagePersistence = true;
+    const live: AgentEvent[] = [];
+    await expect(new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "不应发布" }) }, store, []).runWithPermission("run-message-failure", "开始", "default", undefined, (event) => live.push(event))).rejects.toThrow("simulated semantic checkpoint failure");
+    expect(live.some((event) => event.type === "assistant.message" || event.type === "turn.completed")).toBe(false);
+    expect(store.assistantMessages).toHaveLength(0);
+  });
+
+  it("keeps semantic messages when EventStore projection fails and deduplicates the message key", async () => {
+    const store = new MemoryStore();
+    store.failEventPersistence = true;
+    const result = await new AgentLoopRunner({ decide: async () => ({ kind: "message", text: "投影失败仍已完成。" }) }, store, []).run("run-message-event-failure", "开始");
+    expect(result.checkpoint.status).toBe("completed");
+    expect(store.assistantMessages).toHaveLength(1);
+    const checkpoint = await store.load();
+    await store.saveWithAssistantMessage("run-message-event-failure", checkpoint!, { messageKey: "assistant:stable", text: "同一消息" });
+    await store.saveWithAssistantMessage("run-message-event-failure", checkpoint!, { messageKey: "assistant:stable", text: "同一消息" });
+    expect(store.assistantMessages).toHaveLength(2);
   });
 
   it("times out a provider that never resolves", async () => {

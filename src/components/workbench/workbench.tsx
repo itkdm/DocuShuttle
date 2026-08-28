@@ -24,6 +24,7 @@ import type { AgentRun } from "@/modules/agent";
 import type { AgentPermissionMode } from "@/modules/agent/application/loop";
 import type { DocumentLoadState, UploadAsset, VersionItem } from "./types";
 import { resolveAgentRuntimeView } from "./runtime-view-state";
+import { startProgressiveProjection } from "./progressive-restore";
 
 const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
@@ -51,6 +52,7 @@ export function Workbench() {
   const [nextTaskOffset, setNextTaskOffset] = useState<number | null>(null);
   const [loadingMoreTasks, setLoadingMoreTasks] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [conversationLoading, setConversationLoading] = useState(false);
   const [run, setRun] = useState<AgentRun>();
   const [currentRevision, setCurrentRevision] = useState<string>();
   const [imageCandidates, setImageCandidates] = useState<BrowserImageCandidate[]>([]);
@@ -83,6 +85,7 @@ export function Workbench() {
     setVersions(initialVersions);
     setTaskId(undefined);
     setWorkspaceReady(false);
+    setConversationLoading(false);
     setRun(undefined);
     setCurrentRevision(undefined);
     setImageCandidates([]);
@@ -154,7 +157,6 @@ export function Workbench() {
         setNotice("正在打开这个任务的最新文档和对话");
         const workspace = await loadBrowserTaskWorkspace(routeTaskId);
         if (abort.signal.aborted) return;
-        let durableConversationLoaded = false;
         let nextSource = emptySourceRegistrationState();
         for (const source of workspace.sources) {
           nextSource = reduceSourceRegistration(nextSource, {
@@ -175,79 +177,70 @@ export function Workbench() {
         setWorkspaceReady(Boolean(workspace.workingDocumentId));
         setMessages([]);
         setConversationCursor(null);
+        setConversationLoading(true);
         setLoopResult(undefined);
         setActiveEvents([]);
         setHistoricalEvents([]);
         setRun(undefined);
-        // These projections are independent after the workspace identity is
-        // known. Fetch them concurrently so a slow document download or
-        // Supabase history query does not block the other panels from
-        // becoming interactive on refresh.
-        const [durableResult, documentResult, inspectionResult, versionsResult, resumedResult, resumedLoopResult] = await Promise.allSettled([
-          loadBrowserConversationMessages(workspace.task.id),
-          workspace.workingDocumentId ? loadCurrentTaskDocument(workspace.task.id, workspace.fileName) : Promise.resolve(undefined),
-          workspace.workingDocumentId ? inspectBrowserTaskDocument(workspace.task.id) : Promise.resolve(undefined),
-          workspace.workingDocumentId ? loadBrowserDocumentVersions(workspace.task.id) : Promise.resolve(undefined),
-          workspace.latestRunId ? loadBrowserAgentRun(workspace.latestRunId) : Promise.resolve(undefined),
-          workspace.latestRunId ? loadBrowserAgentLoop(workspace.latestRunId) : Promise.resolve(undefined),
-        ]);
-        if (abort.signal.aborted) return;
-        const durable = durableResult.status === "fulfilled" ? durableResult.value : undefined;
-        if (durable) {
-          durableConversationLoaded = durable.messages.length > 0;
+        // Workspace identity is the only shared prerequisite. Each projection
+        // commits as soon as its own request settles; a slow document or
+        // inspection request cannot hold back semantic conversation history.
+        loadedTaskIdRef.current = workspace.task.id;
+        const isCurrentProjection = () => !abort.signal.aborted && loadedTaskIdRef.current === workspace.task.id;
+        startProgressiveProjection({ load: () => loadBrowserConversationMessages(workspace.task.id), onSuccess: (durable) => {
           setConversationCursor(durable.nextCursor);
           setMessages(projectAgentThread({ messages: durable.messages, historicalEvents: [], activeEvents: [] }).turns.flatMap((turn) => [
             { id: turn.user.id, role: "user" as const, text: turn.user.content, runId: turn.runId, status: turn.user.deliveryStatus },
             ...(turn.assistant.finalContent ? [{ id: turn.assistant.messageId, role: "agent" as const, text: turn.assistant.finalContent, runId: turn.runId, status: "sent" as const }] : []),
           ]));
-        }
-        if (documentResult.status === "fulfilled" && documentResult.value) {
-          const document = documentResult.value;
-          setDocumentLoad({ status: "ready", document: { file: document.file, bytes: document.bytes } });
-          setCurrentRevision(document.version.revision);
-        } else if (!workspace.workingDocumentId) {
+        }, onSettled: () => setConversationLoading(false) }, isCurrentProjection);
+
+        if (workspace.workingDocumentId) {
+          startProgressiveProjection({ load: () => loadCurrentTaskDocument(workspace.task.id, workspace.fileName), onSuccess: (document) => {
+            setDocumentLoad({ status: "ready", document: { file: document.file, bytes: document.bytes } });
+            setCurrentRevision(document.version.revision);
+          }, onFailure: (error) => setDocumentLoad({ status: "error", message: error instanceof Error ? error.message : "文档打开失败" }) }, isCurrentProjection);
+          startProgressiveProjection({ load: () => inspectBrowserTaskDocument(workspace.task.id), onSuccess: (inspection) => {
+            setImageNodes(inspection.images);
+            setParagraphCount(inspection.counts.paragraphs);
+            setTableCellCount(inspection.counts.tableCells);
+          } }, isCurrentProjection);
+          startProgressiveProjection({ load: () => loadBrowserDocumentVersions(workspace.task.id), onSuccess: (history) => {
+            setVersions(history.versions.map((version) => ({
+              id: version.id,
+              versionNumber: version.version_number,
+              label: version.origin === "import" ? "导入并通过结构检查" : version.origin === "agent" ? "Agent 写入并通过重开校验" : version.origin === "restore" ? "从历史版本恢复" : "用户创建的版本",
+              time: new Date(version.created_at).toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
+              actor: version.origin === "agent" ? "纸上鸭" : "你",
+              current: version.id === history.currentVersionId,
+            })));
+          } }, isCurrentProjection);
+        } else {
           setDocumentLoad({ status: "empty" });
           setVersions(initialVersions);
         }
-        if (inspectionResult.status === "fulfilled" && inspectionResult.value) {
-          const inspection = inspectionResult.value;
-          setImageNodes(inspection.images);
-          setParagraphCount(inspection.counts.paragraphs);
-          setTableCellCount(inspection.counts.tableCells);
+
+        if (workspace.latestRunId) {
+          void Promise.allSettled([loadBrowserAgentRun(workspace.latestRunId), loadBrowserAgentLoop(workspace.latestRunId)]).then(([resumedResult, resumedLoopResult]) => {
+            if (abort.signal.aborted) return;
+            const resumed = resumedResult.status === "fulfilled" ? resumedResult.value : undefined;
+            const resumedLoop = resumedLoopResult.status === "fulfilled" ? resumedLoopResult.value : undefined;
+            if (!resumed) return;
+            setRun(resumed);
+            if (resumedLoop) {
+              applyRuntimeResult(resumed.id, resumedLoop);
+              setRun({ ...resumed, status: resumedLoop.checkpoint.status, pendingInteraction: resumedLoop.checkpoint.pendingInteraction });
+            } else setLoopResult(undefined);
+            if (resumed.status === "running") void recoverAndReconcileRun(resumed.id, abort.signal, workspace.task.id, Boolean(workspace.workingDocumentId)).catch(() => undefined);
+          });
         }
-        if (versionsResult.status === "fulfilled" && versionsResult.value) {
-          const history = versionsResult.value;
-          setVersions(history.versions.map((version) => ({
-            id: version.id,
-            versionNumber: version.version_number,
-            label: version.origin === "import" ? "导入并通过结构检查" : version.origin === "agent" ? "Agent 写入并通过重开校验" : version.origin === "restore" ? "从历史版本恢复" : "用户创建的版本",
-            time: new Date(version.created_at).toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
-            actor: version.origin === "agent" ? "纸上鸭" : "你",
-            current: version.id === history.currentVersionId,
-          })));
-        }
-        const resumed = resumedResult.status === "fulfilled" ? resumedResult.value : undefined;
-        const resumedLoop = resumedLoopResult.status === "fulfilled" ? resumedLoopResult.value : undefined;
-        if (resumed) {
-          setRun(resumed);
-          if (resumedLoop) {
-            applyRuntimeResult(resumed.id, resumedLoop);
-            setRun({ ...resumed, status: resumedLoop.checkpoint.status, pendingInteraction: resumedLoop.checkpoint.pendingInteraction });
-            if (!durableConversationLoaded) setMessages([]);
-          } else setLoopResult(undefined);
-          if (resumed.status === "running") {
-            void recoverAndReconcileRun(resumed.id, abort.signal, workspace.task.id, Boolean(workspace.workingDocumentId)).catch(() => undefined);
-          }
-        }
-        // Completed-run history is intentionally loaded by the independent
-        // background effect below; it must not delay the first usable render
-        // of the current document and conversation.
+
         setHistoricalEvents([]);
-        loadedTaskIdRef.current = workspace.task.id;
         setNotice(workspace.workingDocumentId ? "已打开这个任务的最新文档和对话" : "已打开历史任务；请继续上传文档");
       } catch (error) {
         if (abort.signal.aborted) return;
         loadedTaskIdRef.current = undefined;
+        setConversationLoading(false);
         setDocumentLoad({ status: "error", message: error instanceof Error ? error.message : "任务打开失败" });
         setNotice(error instanceof Error ? `无法打开任务：${error.message}` : "无法打开任务");
       }
@@ -618,7 +611,7 @@ export function Workbench() {
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
         {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} onLoadMoreTasks={loadMoreTasks} hasMoreTasks={nextTaskOffset !== null} loadingMoreTasks={loadingMoreTasks} loadingTasks={loadingTasks} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
         <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} onChoose={chooseWorkingDocument} /></div>
-        {rightOpen ? <AgentPanel runtimeView={runtimeView} run={run} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} loadingWorkspace={Boolean(routeTaskId && documentLoad.status === "loading")} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
+        {rightOpen ? <AgentPanel runtimeView={runtimeView} run={run} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} conversationLoading={conversationLoading} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 
       <div className="mobile-dock" aria-label="移动端工作台导航"><button onClick={() => setMobilePanel("outline")} className={mobilePanel === "outline" ? "active" : ""}><FilePlus2 size={18} /><span>文档</span></button><button onClick={() => setMobilePanel("agent")} className={mobilePanel === "agent" ? "active" : ""}><Sparkles size={18} /><span>审批</span><i>1</i></button><button onClick={() => setMobilePanel("versions")} className={mobilePanel === "versions" ? "active" : ""}><History size={18} /><span>版本</span></button><button onClick={downloadCurrent}><Download size={18} /><span>下载</span></button></div>

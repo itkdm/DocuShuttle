@@ -22,7 +22,7 @@ import { taskIdFromPathname, taskUrl } from "@/modules/tasks/task-url";
 import { ensureAnonymousSession } from "@/infrastructure/supabase/browser";
 import type { AgentRun } from "@/modules/agent";
 import type { AgentPermissionMode } from "@/modules/agent/application/loop";
-import type { AgentStage, DocumentLoadState, ProposalState, UploadAsset, VersionItem } from "./types";
+import type { AgentStage, DocumentLoadState, UploadAsset, VersionItem } from "./types";
 
 const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
@@ -36,7 +36,6 @@ export function Workbench() {
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [mobilePanel, setMobilePanel] = useState<"none" | "outline" | "agent" | "versions">("none");
-  const [proposal, setProposal] = useState<ProposalState>("pending");
   const [stage, setStage] = useState<AgentStage>("idle");
   const [assets, setAssets] = useState(initialAssets);
   const [sourceState, setSourceState] = useState<SourceRegistrationState>(emptySourceRegistrationState);
@@ -53,7 +52,6 @@ export function Workbench() {
   const [loadingMoreTasks, setLoadingMoreTasks] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [run, setRun] = useState<AgentRun>();
-  const [proposalSummary, setProposalSummary] = useState<string>();
   const [awaitingFinalReview, setAwaitingFinalReview] = useState(false);
   const [currentRevision, setCurrentRevision] = useState<string>();
   const [imageCandidates, setImageCandidates] = useState<BrowserImageCandidate[]>([]);
@@ -72,7 +70,6 @@ export function Workbench() {
 
   const resetWorkspace = useCallback(() => {
     loadedTaskIdRef.current = undefined;
-    setProposal("pending");
     setStage("idle");
     setAssets(initialAssets);
     setSourceState(emptySourceRegistrationState());
@@ -81,7 +78,6 @@ export function Workbench() {
     setTaskId(undefined);
     setWorkspaceReady(false);
     setRun(undefined);
-    setProposalSummary(undefined);
     setAwaitingFinalReview(false);
     setCurrentRevision(undefined);
     setImageCandidates([]);
@@ -178,7 +174,6 @@ export function Workbench() {
         setActiveEvents([]);
         setHistoricalEvents([]);
         setRun(undefined);
-        setProposalSummary(undefined);
         setAwaitingFinalReview(false);
         // These projections are independent after the workspace identity is
         // known. Fetch them concurrently so a slow document download or
@@ -341,12 +336,6 @@ export function Workbench() {
     return recovered;
   }
 
-  const decide = async (decision: ProposalState) => {
-    if (run && loopResult?.checkpoint.pendingInteraction?.type === "approval") return decideLoop(decision === "accepted" ? "approved" : "rejected");
-    setMessages((items) => [...items, { role: "agent", text: "请先打开一份 DOCX，建立文档工作区后我就可以开始处理。" }]);
-    setNotice("请先打开一份 DOCX，建立文档工作区");
-  };
-
   const runAgent = async (prompt: string) => {
     if (!workspaceReady || !taskId) {
       setNotice("请先打开一份 DOCX，建立文档工作区");
@@ -357,7 +346,6 @@ export function Workbench() {
     setStage("analyzing");
     setNotice(`纸上鸭正在处理你的请求：“${prompt.slice(0, 24)}${prompt.length > 24 ? "…" : ""}”`);
     setAwaitingFinalReview(false);
-    setProposalSummary(undefined);
     const abortController = new AbortController();
     agentAbortRef.current = abortController;
     let activeRunForRecovery: AgentRun | undefined;
@@ -467,7 +455,6 @@ export function Workbench() {
       const replies = result.events.flatMap((event) => event.type === "assistant.message" && event.text ? [event.text] : []);
       if (replies.length) setMessages((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text, runId: run.id }))]);
       if (result.checkpoint.status === "completed") {
-        setProposalSummary(undefined);
         const wrote = result.events.some((event) => event.type === "tool.completed" && (event.name === "apply_text_change" || event.name === "apply_text_changes"));
         setStage(wrote ? "complete" : "idle");
         if (taskId) {
@@ -525,18 +512,15 @@ export function Workbench() {
         setMessages([]);
         setActiveEvents([]);
         setRun(undefined);
-        setProposalSummary(undefined);
         setAwaitingFinalReview(false);
         setStage("idle");
       } else if (maySeedWorkingDocument) setRun(undefined);
       const next = { kind, name: file.name, size: formatFileSize(file.size) };
       setAssets((items) => [...items.filter((item) => item.kind !== kind), next]);
       if (!maySeedWorkingDocument) {
-        // Reference context changed, so any proposal generated without this
-        // example is stale even though the Working Document bytes are stable.
+        // Reference context changed, so the active run no longer matches this
+        // example even though the Working Document bytes are stable.
         setRun(undefined);
-        setProposal("pending");
-        setProposalSummary(undefined);
         setAwaitingFinalReview(false);
         setStage("idle");
       }
@@ -647,6 +631,9 @@ export function Workbench() {
     catch (error) { setNotice(error instanceof Error ? error.message : "图片应用失败，请刷新后重试"); }
     finally { setImageBusy(false); }
   };
+  const pendingApproval = loopResult?.checkpoint.pendingInteraction?.type === "approval"
+    ? loopResult.checkpoint.pendingInteraction
+    : undefined;
   return (
     <main className="workbench-app">
       <a className="skip-link" href="#document-canvas">跳到文档</a>
@@ -660,14 +647,14 @@ export function Workbench() {
 
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
         {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} onLoadMoreTasks={loadMoreTasks} hasMoreTasks={nextTaskOffset !== null} loadingMoreTasks={loadingMoreTasks} loadingTasks={loadingTasks} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
-        <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} proposal={proposal} onChoose={chooseWorkingDocument} onDecide={decide} proposalSummary={proposalSummary} /></div>
-        {rightOpen ? <AgentPanel stage={stage} proposal={proposal} run={run} loopResult={loopResult} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} onDecide={decide} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} proposalSummary={proposalSummary} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} loadingWorkspace={Boolean(routeTaskId && documentLoad.status === "loading")} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
+        <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} onChoose={chooseWorkingDocument} /></div>
+        {rightOpen ? <AgentPanel stage={stage} run={run} loopResult={loopResult} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} awaitingFinalReview={awaitingFinalReview} onFinalReview={finalReview} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} loadingWorkspace={Boolean(routeTaskId && documentLoad.status === "loading")} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 
       <div className="mobile-dock" aria-label="移动端工作台导航"><button onClick={() => setMobilePanel("outline")} className={mobilePanel === "outline" ? "active" : ""}><FilePlus2 size={18} /><span>文档</span></button><button onClick={() => setMobilePanel("agent")} className={mobilePanel === "agent" ? "active" : ""}><Sparkles size={18} /><span>审批</span><i>1</i></button><button onClick={() => setMobilePanel("versions")} className={mobilePanel === "versions" ? "active" : ""}><History size={18} /><span>版本</span></button><button onClick={downloadCurrent}><Download size={18} /><span>下载</span></button></div>
 
       {mobilePanel !== "none" && <div className="mobile-sheet" role="dialog" aria-modal="true" aria-label={mobilePanel === "agent" ? "移动审批" : mobilePanel === "outline" ? "源文档" : "版本历史"}><div className="sheet-handle" /><button className="sheet-close" onClick={() => setMobilePanel("none")} aria-label="关闭"><X size={18} /></button>
-        {mobilePanel === "agent" && <div className="mobile-approval"><span className="eyebrow">{awaitingFinalReview ? "需要确认" : "Agent 工作区"}</span><h2>{awaitingFinalReview ? "确认最终版本" : "确认局部改写建议"}</h2><p>{proposalSummary ?? "请先打开文档并让 Agent 生成修改计划。"}</p><div>{awaitingFinalReview ? <button className="mobile-approve" onClick={() => { void finalReview("approved"); setMobilePanel("none"); }}><Check size={16} /> 确认交付</button> : <button className="mobile-approve" onClick={() => { void decide("accepted"); setMobilePanel("none"); }} disabled={!proposalSummary}><Check size={16} /> 批准并应用</button>}<button onClick={() => { void decide("rejected"); setMobilePanel("none"); }} disabled={!proposalSummary}>拒绝</button></div></div>}
+        {mobilePanel === "agent" && <div className="mobile-approval"><span className="eyebrow">{awaitingFinalReview ? "需要确认" : "Agent 工作区"}</span><h2>{awaitingFinalReview ? "确认最终版本" : pendingApproval ? "确认文档操作" : "Agent 工作区"}</h2><p>{awaitingFinalReview ? "中央画布已切换到生成后的真实 DOCX。确认后完成任务；拒绝会保留审计记录。" : pendingApproval ? `Agent 已生成明确的修改参数：${pendingApproval.toolName}` : "审批、运行状态和对话会显示在 Agent 面板中。"}</p><div>{awaitingFinalReview ? <><button className="mobile-approve" onClick={() => { void finalReview("approved"); setMobilePanel("none"); }}><Check size={16} /> 确认交付</button><button onClick={() => { void finalReview("rejected"); setMobilePanel("none"); }}>拒绝版本</button></> : pendingApproval ? <><button className="mobile-approve" onClick={() => { void decideLoop("approved"); setMobilePanel("none"); }}><Check size={16} /> 批准并执行</button><button onClick={() => { void decideLoop("rejected"); setMobilePanel("none"); }}>拒绝</button></> : null}</div></div>}
         {mobilePanel === "outline" && <div className="mobile-sources"><span className="eyebrow">任务输入</span><h2>源文档</h2>{assets.length ? assets.map((asset) => <div key={asset.kind}><FilePlus2 size={17} /><span><strong>{asset.kind === "template" ? "空白模板" : "完成示例"}</strong><small>{asset.name} · {asset.size}</small></span><Check size={15} /></div>) : <p>先选择空白模板或完成示例，再开始一个任务。</p>}<TaskList tasks={tasks} activeTaskId={taskId} onSelectTask={(id) => { openTask(id); setMobilePanel("none"); }} onCreateTask={() => { startNewTask(); setMobilePanel("none"); }} onLoadMore={loadMoreTasks} hasMore={nextTaskOffset !== null} loadingMore={loadingMoreTasks} loading={loadingTasks} /></div>}
           {mobilePanel === "versions" && <div className="mobile-versions"><span className="eyebrow">不会覆盖历史</span><h2>版本</h2>{versions.slice(0, 4).map((version) => <button key={version.id} onClick={() => { if (!version.current) void restoreVersion(version.id); }}><span>{version.id}</span><div><strong>{version.label}</strong><small>{version.time} · {version.actor}</small></div>{!version.current && <RotateCcw size={14} />}</button>)}</div>}
       </div>}

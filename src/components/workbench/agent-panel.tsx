@@ -1,7 +1,7 @@
 import { Check, ChevronDown, PanelRightClose, Send, Shield, Sparkles, StopCircle, Unlock } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import type { AgentStage, ProposalState } from "./types";
+import type { AgentStage } from "./types";
 import type { BrowserAgentLoopResult, BrowserImageCandidate, BrowserImageNode } from "@/modules/agent/browser-runtime";
 import type { AgentEvent } from "@/modules/agent/application/events";
 import type { AgentRun } from "@/modules/agent";
@@ -11,11 +11,9 @@ import { AgentThread } from "./agent-thread";
 import { projectAgentThread } from "./agent-thread-projection";
 
 interface AgentPanelProps {
-  stage: AgentStage; proposal: ProposalState; onCollapse: () => void;
+  stage: AgentStage; onCollapse: () => void;
   onRun: (prompt: string) => void | Promise<void>; onCancel: () => void | Promise<void>;
-  onDecide: (decision: ProposalState) => void | Promise<void>;
   workspaceReady: boolean;
-  proposalSummary?: string;
   awaitingFinalReview?: boolean;
   onFinalReview: (choice: "approved" | "rejected") => void | Promise<void>;
   imageCandidates?: BrowserImageCandidate[];
@@ -88,7 +86,7 @@ function CustomSelect({ value, options, onChange, disabled, icon }: { value: str
   );
 }
 
-export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDecide, workspaceReady, proposalSummary, awaitingFinalReview, onFinalReview, imageCandidates = [], onApplyImage, imageBusy, run, messages = [], loopResult, activeEvents = [], historicalEvents = [], onLoopApproval, permissionMode, onPermissionModeChange, imageNodes = [], imageTargetNodeId, imagePrompt, onImageTargetNodeIdChange, onImagePromptChange, onGenerateImages, onLoadEarlier, hasEarlierMessages = false, loadingEarlierMessages = false, loadingWorkspace = false }: AgentPanelProps) {
+export function AgentPanel({ stage, onCollapse, onRun, onCancel, workspaceReady, awaitingFinalReview, onFinalReview, imageCandidates = [], onApplyImage, imageBusy, run, messages = [], loopResult, activeEvents = [], historicalEvents = [], onLoopApproval, permissionMode, onPermissionModeChange, imageNodes = [], imageTargetNodeId, imagePrompt, onImageTargetNodeIdChange, onImagePromptChange, onGenerateImages, onLoadEarlier, hasEarlierMessages = false, loadingEarlierMessages = false, loadingWorkspace = false }: AgentPanelProps) {
   const [prompt, setPrompt] = useState("");
   const [deciding, setDeciding] = useState(false);
   const [imageToolOpen, setImageToolOpen] = useState(false);
@@ -154,7 +152,6 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
       <div className="agent-content" ref={contentRef} onScroll={handleContentScroll}>
         <AgentThread turns={turns} loadingWorkspace={loadingWorkspace} hasEarlierMessages={hasEarlierMessages} onLoadEarlier={() => { prependHeightRef.current = contentRef.current?.scrollHeight ?? null; onLoadEarlier?.(); }} loadingEarlierMessages={loadingEarlierMessages} onApproval={onLoopApproval} deciding={deciding} />
         {turns.length === 0 && !loadingWorkspace && <div className="assistant-turn assistant-empty"><div className="assistant-byline"><span className="agent-avatar">鸭</span><strong>纸上鸭</strong><small>准备就绪</small></div><p>我可以帮你理解、修改和导出当前 Word 文档。直接告诉我目标；默认模式会在写入前请你确认。</p></div>}
-          {proposalSummary && !awaitingFinalReview && pendingInteraction?.type !== "approval" && <div className="scope-card"><span className="scope-kicker">等待范围确认</span><strong>Agent 修改计划</strong><p>{proposalSummary}</p>{proposal === "pending" ? <div className="scope-actions"><button className="primary-small" onClick={() => onDecide("accepted")}><Check size={14} /> 批准并应用</button><button onClick={() => onDecide("rejected")}>拒绝</button></div> : <span className="decision-note">{proposal === "accepted" ? "范围已冻结，正在安全写入" : "已拒绝，原文不变"}</span>}</div>}
           {pendingInteraction?.type === "approval" && !timelineEvents.some((event) => event.type === "approval.required" && event.interactionId === pendingInteraction.interactionId) && <div className="scope-card"><span className="scope-kicker">需要你的确认</span><strong>准备执行：{pendingInteraction.toolName}</strong><p>Agent 已生成明确的修改参数。批准后会写入文档并生成新版本。</p><div className="scope-actions"><button className="primary-small" onClick={() => void handleLoopApproval("approved")} disabled={deciding}>{deciding ? "执行中…" : <><Check size={14} /> 批准并执行</>}</button><button onClick={() => void handleLoopApproval("rejected")} disabled={deciding}>{deciding ? "处理中…" : "拒绝"}</button></div></div>}
           {awaitingFinalReview && <div className="scope-card"><span className="scope-kicker">最终版本复核</span><strong>新版本已通过 OOXML 重开校验</strong><p>中央画布已切换到生成后的真实 DOCX。确认后完成任务；拒绝会保留审计记录。</p><div className="scope-actions"><button className="primary-small" onClick={() => onFinalReview("approved")}><Check size={14} /> 确认交付</button><button onClick={() => onFinalReview("rejected")}>拒绝版本</button></div></div>}
           {imageNodes.length > 0 && <div className="scope-card image-tool-card"><button type="button" className="image-tool-toggle" onClick={() => setImageToolOpen((open) => !open)} aria-expanded={imageToolOpen}><span><span className="scope-kicker">图片工具</span><strong>生成图片候选</strong></span><ChevronDown size={16} className={imageToolOpen ? "rotate" : ""} /></button>{imageToolOpen && <div className="image-tool-body"><p>选择图片节点并生成候选；候选不会自动写回文档。</p><label>目标图片<select value={imageTargetNodeId} onChange={(event) => onImageTargetNodeIdChange(event.target.value)} disabled={imageBusy}><option value="">请选择图片节点</option>{imageNodes.map((node, index) => <option key={node.nodeId} value={node.nodeId}>图片 {index + 1} · {node.nodeId.slice(0, 12)}</option>)}</select></label><label>图片描述<textarea value={imagePrompt} onChange={(event) => onImagePromptChange(event.target.value)} placeholder="例如：简洁的三模块系统结构图" rows={2} disabled={imageBusy} /></label><button type="button" className="primary-small" onClick={() => void onGenerateImages()} disabled={imageBusy || !imageTargetNodeId.trim() || !imagePrompt.trim()}>{imageBusy ? "生成中…" : "生成图片候选"}</button></div>}</div>}
@@ -177,7 +174,7 @@ export function AgentPanel({ stage, proposal, onCollapse, onRun, onCancel, onDec
           />
           <div className="composer-actions">
             <span>{inputBlocked ? "当前任务完成后即可发送" : "Enter 发送 · Shift + Enter 换行"}</span>
-            {stage === "analyzing" || stage === "applying" ? <button className="composer-stop" onClick={() => void onCancel()} aria-label="停止当前任务"><StopCircle size={14} /> 停止</button> : <button className="composer-send" onClick={submit} disabled={!prompt.trim() || inputBlocked || !workspaceReady} aria-label="发送要求"><Send size={14} /></button>}
+            {stage === "analyzing" ? <button className="composer-stop" onClick={() => void onCancel()} aria-label="停止当前任务"><StopCircle size={14} /> 停止</button> : <button className="composer-send" onClick={submit} disabled={!prompt.trim() || inputBlocked || !workspaceReady} aria-label="发送要求"><Send size={14} /></button>}
           </div>
         </div>
       </div>

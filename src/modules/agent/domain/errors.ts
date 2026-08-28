@@ -42,14 +42,8 @@ export class StaleDocumentRevisionError extends AgentDomainError {
   ) {
     super(
       "STALE_DOCUMENT_REVISION",
-      `Proposal targets document revision ${expectedRevision}, but the current revision is ${actualRevision}.`,
+      `Agent operation targets document revision ${expectedRevision}, but the current revision is ${actualRevision}.`,
     );
-  }
-}
-
-export class DecisionFrozenError extends AgentDomainError {
-  constructor(proposalId: string) {
-    super("DECISION_FROZEN", `The decision for proposal ${proposalId} is already frozen.`);
   }
 }
 

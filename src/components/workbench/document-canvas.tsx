@@ -1,13 +1,10 @@
-import { AlertCircle, Check, FileUp, LoaderCircle, RotateCcw, X } from "lucide-react";
+import { AlertCircle, FileUp, LoaderCircle, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { DocumentLoadState, ProposalState } from "./types";
+import type { DocumentLoadState } from "./types";
 
 interface DocumentCanvasProps {
   loadState: DocumentLoadState;
-  proposal: ProposalState;
   onChoose: (file?: File) => void;
-  onDecide: (decision: ProposalState) => void;
-  proposalSummary?: string;
 }
 
 function DocxRenderer({ bytes, onError }: { bytes: ArrayBuffer; onError: (message: string) => void }) {
@@ -41,9 +38,8 @@ function DocxRenderer({ bytes, onError }: { bytes: ArrayBuffer; onError: (messag
   return <><div ref={styleRef} />{rendering && <div className="docx-rendering" role="status"><LoaderCircle size={20} /> 正在排版真实 DOCX…</div>}<div ref={bodyRef} className="docx-preview-host" data-testid="docx-preview" /></>;
 }
 
-export function DocumentCanvas({ loadState, proposal, onChoose, onDecide, proposalSummary }: DocumentCanvasProps) {
+export function DocumentCanvas({ loadState, onChoose }: DocumentCanvasProps) {
   const [renderError, setRenderError] = useState<string | null>(null);
-  const proposalText = proposal === "accepted" ? "通过分层访问控制与日志审计，验证不同角色的最小权限边界。" : proposal === "rejected" ? "已保留原文，不会写回当前文件。" : "验证访问控制策略是否按预期生效，并记录审计日志中的关键事件。";
   const error = loadState.status === "error" ? loadState.message : renderError;
 
   return (
@@ -58,7 +54,6 @@ export function DocumentCanvas({ loadState, proposal, onChoose, onDecide, propos
         {error && <div className="canvas-error" role="alert"><AlertCircle size={28} /><strong>这份文档暂时打不开</strong><p>{error}</p><label><input id="canvas-retry-docx" name="docx" type="file" accept=".docx" onChange={(event) => onChoose(event.target.files?.[0])} /><RotateCcw size={15} /> 选择其他文件</label></div>}
         {loadState.status === "ready" && !error && <div className="real-document-wrap">
           <DocxRenderer bytes={loadState.document.bytes} onError={setRenderError} />
-          {proposalSummary && <aside className={`preview-proposal ${proposal}`} aria-label="Agent 修改建议"><div><span className="duck-pin">◆</span><strong>Agent 修改建议</strong><small>批准后将写入当前文档并生成新版本</small></div><p>{proposalSummary || proposalText}</p>{proposal === "pending" ? <div className="proposal-actions"><button className="accept" onClick={() => onDecide("accepted")}><Check size={14} /> 批准</button><button onClick={() => onDecide("rejected")}><X size={14} /> 拒绝</button></div> : <span className="decision-note">{proposal === "accepted" ? "已批准" : "已拒绝"}</span>}</aside>}
         </div>}
       </div>
     </section>

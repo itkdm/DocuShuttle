@@ -1,0 +1,47 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { describe, expect, it, vi } from "vitest";
+
+import { SupabaseWorkingDocumentAccess } from "./working-document-access";
+import { assertTaskObjectKey } from "@/modules/storage/object-key";
+import type { PrivateObjectStoragePort } from "@/modules/storage/ports";
+
+describe("SupabaseWorkingDocumentAccess.commit", () => {
+  it("derives safe version and manifest keys before the real commit RPC", async () => {
+    const query = { select: vi.fn(), eq: vi.fn(), single: vi.fn() };
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+    query.single.mockResolvedValue({
+      data: { owner_user_id: "user-1", working_document_id: "document-1", lock_version: 4 },
+      error: null,
+    });
+    const rpc = vi.fn().mockResolvedValue({ data: { kind: "committed", revision: "revision-2" }, error: null });
+    const client = { from: vi.fn().mockReturnValue(query), rpc } as unknown as SupabaseClient;
+    const uploaded: string[] = [];
+    const storage: PrivateObjectStoragePort = {
+      put: vi.fn(async (objectKey: string) => { uploaded.push(objectKey); }),
+      get: vi.fn(),
+      remove: vi.fn(),
+      createSignedUpload: vi.fn(),
+      createSignedDownload: vi.fn(),
+    };
+    const access = new SupabaseWorkingDocumentAccess(client, "task-1", "run-1", storage);
+
+    const result = await access.commit({
+      idempotencyKey: "run:run-1/call:call-1",
+      expectedRevision: "revision-1",
+      bytes: new Uint8Array([1, 2, 3]),
+      revision: "revision-2",
+      changedEntries: ["word/document.xml"],
+    });
+
+    expect(result).toEqual({ revision: "revision-2" });
+    expect(uploaded).toHaveLength(2);
+    uploaded.forEach(assertTaskObjectKey);
+    expect(uploaded[0]).toMatch(/\/versions\/[a-f0-9]{64}\.docx$/);
+    expect(uploaded[1]).toMatch(/\/manifests\/[a-f0-9]{64}\.json$/);
+    expect(rpc).toHaveBeenCalledWith("commit_loop_document_version", expect.objectContaining({
+      p_expected_run_version: 4,
+      p_output_ref: expect.stringContaining(uploaded[0]),
+    }));
+  });
+});

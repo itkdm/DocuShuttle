@@ -3,6 +3,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { WorkingDocumentAccessPort } from "../../application/document-tools";
 import { SupabaseStorageAdapter } from "../../../storage/adapters/supabase-storage";
 import { buildTaskObjectKey } from "@/modules/storage/object-key";
+import { buildStableArtifactStem } from "@/modules/storage/artifact-name";
+import type { PrivateObjectStoragePort } from "@/modules/storage/ports";
 import { measure } from "@/infrastructure/observability";
 
 export class SupabaseWorkingDocumentAccess implements WorkingDocumentAccessPort {
@@ -10,7 +12,7 @@ export class SupabaseWorkingDocumentAccess implements WorkingDocumentAccessPort 
     private readonly client: SupabaseClient,
     private readonly taskId: string,
     private readonly runId: string,
-    private readonly storage = new SupabaseStorageAdapter(client),
+    private readonly storage: PrivateObjectStoragePort = new SupabaseStorageAdapter(client),
   ) {}
 
   async load(): Promise<{ bytes: Uint8Array; revision: string }> {
@@ -24,7 +26,7 @@ export class SupabaseWorkingDocumentAccess implements WorkingDocumentAccessPort 
   async commit(input: { idempotencyKey: string; expectedRevision: string; bytes: Uint8Array; revision: string; changedEntries: readonly string[] }): Promise<{ revision: string }> {
     const run = await this.client.from("agent_runs").select("owner_user_id, working_document_id, lock_version").eq("id", this.runId).single();
     if (run.error || !run.data) throw new Error("RUN_NOT_FOUND");
-    const stableArtifactName = encodeURIComponent(input.idempotencyKey);
+    const stableArtifactName = buildStableArtifactStem(input.idempotencyKey);
     const objectKey = buildTaskObjectKey({ userId: run.data.owner_user_id as string, taskId: this.taskId, category: "versions", fileName: `${stableArtifactName}.docx` });
     const manifestObjectKey = buildTaskObjectKey({ userId: run.data.owner_user_id as string, taskId: this.taskId, category: "manifests", fileName: `${stableArtifactName}.json` });
     const operationLog = [{ kind: "agent-loop", changedEntries: input.changedEntries }];

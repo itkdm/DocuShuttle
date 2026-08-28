@@ -157,11 +157,38 @@ describe("Agent execution timeline", () => {
         { type: "tool.started", eventId: "e-4", runId: "run-1", callId: "call-1", name: "inspect_document", input: {} },
         { type: "tool.completed", eventId: "e-5", runId: "run-1", callId: "call-1", name: "inspect_document", output: {} },
         { type: "assistant.message", eventId: "e-6", runId: "run-1", text: "已完成" },
-      ]),
+      ], "run-chronology"),
     });
     expect(projection.turns).toHaveLength(1);
     expect(projection.turns[0].assistant.streamingContent).toBe("已完成");
     expect(projection.turns[0].assistant.activities).toMatchObject([{ type: "note", text: "先检查" }, { type: "tool", state: "completed" }]);
+  });
+
+  it("keeps interleaved commentary in chronological execution notes and deduplicates approval", () => {
+    const projection = projectAgentThread({
+      messages: [
+        { id: "u-chronology", role: "user", parts: [{ type: "text", text: "修改文档" }], run_id: "run-chronology", created_at: "2026-01-01", message_key: "u-chronology" },
+        { id: "a-chronology", role: "assistant", parts: [{ type: "text", text: "C-final" }], run_id: "run-chronology", created_at: "2026-01-01T00:00:10Z", message_key: "a-chronology" },
+      ],
+      historicalEvents: [],
+      activeEvents: toEvents([
+        { type: "model.delta", text: "A" },
+        { type: "approval.required", interactionId: "i-1", callId: "call-1", name: "apply_text_change", input: {} },
+        { type: "approval.resolved", interactionId: "i-1", callId: "call-1", name: "apply_text_change", decision: "approved" },
+        { type: "tool.started", callId: "call-1", name: "apply_text_change", input: {} },
+        { type: "tool.completed", callId: "call-1", name: "apply_text_change", output: {} },
+        { type: "model.delta", text: "B" },
+        { type: "tool.started", callId: "call-2", name: "inspect_document", input: {} },
+        { type: "tool.completed", callId: "call-2", name: "inspect_document", output: {} },
+        { type: "model.delta", text: "C" },
+        { type: "assistant.message", text: "C-final" },
+      ], "run-chronology"),
+    });
+    const assistant = projection.turns[0].assistant;
+    expect(assistant.activities.map((activity) => activity.type === "note" ? activity.text : activity.callId)).toEqual(["A", "call-1", "B", "call-2"]);
+    expect(assistant.activities.filter((activity) => activity.type === "tool" && activity.callId === "call-1")).toHaveLength(1);
+    expect(assistant.finalContent).toBe("C-final");
+    expect(assistant.streamingContent).toBeUndefined();
   });
 
   it("keeps equal prompts in separate turns", () => {

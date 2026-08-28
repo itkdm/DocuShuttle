@@ -385,7 +385,7 @@ export class AgentLoopRunner {
       await flushDurableEvents();
       onEvent?.(messageEvent);
     };
-    if (userText.trim()) emit({ type: "turn.started", text: userText, ...(clientMessageId ? { clientMessageId } : {}) });
+    if (isFreshRun && userText.trim()) emit({ type: "turn.started", text: userText, ...(clientMessageId ? { clientMessageId } : {}) });
 
     while (checkpoint.iterations < this.maxIterations) {
       checkpoint.iterations += 1;

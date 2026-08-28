@@ -415,11 +415,8 @@ export function Workbench() {
           }
         } catch { /* preserve the original error below */ }
       }
-      const failureMessage = error instanceof Error ? error.message : "这次分析没有完成，请重试。";
       setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, status: "failed" } : item));
-      setActiveEvents((items) => mergeTimelineEvents(items, [createAgentEvent(activeRunForRecovery?.id ?? run?.id ?? "unknown", { type: "turn.failed", error: failureMessage })]));
-      setMessages((items) => [...items, { role: "agent", text: error instanceof Error ? `这次分析没有完成：${error.message}` : "这次分析没有完成，请重试。" }]);
-      setNotice(error instanceof Error ? error.message : "Agent 分析失败");
+      setNotice(error instanceof Error ? `连接中断，恢复失败：${error.message}` : "连接中断，恢复失败，请刷新后重试。");
     } finally {
       if (agentAbortRef.current === abortController) agentAbortRef.current = undefined;
     }

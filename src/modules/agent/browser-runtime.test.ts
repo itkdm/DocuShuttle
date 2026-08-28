@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { recoverBrowserAgentLoop } from "./browser-runtime";
+import { normalizeReplayEvents, recoverBrowserAgentLoop } from "./browser-runtime";
 
 const checkpoint = (status: "running" | "completed") => ({
   status,
@@ -37,5 +37,38 @@ describe("browser Agent recovery", () => {
     const recovered = await recoverBrowserAgentLoop("run-running", () => {});
     expect(recovered.checkpoint.status).toBe("completed");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("replays every durable page before recovering the same run", async () => {
+    let replayCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/loop?")) {
+        replayCalls += 1;
+        const after = new URL(url, "http://localhost").searchParams.get("after");
+        if (after === "0") {
+          return new Response(JSON.stringify({ checkpoint: checkpoint("running"), events: [{ eventId: "e1", runId: "run-pages", timestamp: "2026-08-28T00:00:00.000Z", sequence: 1, type: "model.started", text: "request" }], nextSequence: 1, hasMore: true }), { status: 200 });
+        }
+        expect(after).toBe("1");
+        return new Response(JSON.stringify({ checkpoint: checkpoint("running"), events: [{ eventId: "e2", runId: "run-pages", timestamp: "2026-08-28T00:00:01.000Z", sequence: 2, type: "model.completed", durationMs: 1 }], nextSequence: 2, hasMore: false }), { status: 200 });
+      }
+      expect(url).toBe("/api/agent/runs/run-pages/loop/recover");
+      expect(init?.method).toBe("PUT");
+      return new Response(`event: result\ndata: ${JSON.stringify({ checkpoint: checkpoint("completed"), events: [] })}\n\n`, { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const events: string[] = [];
+    const recovered = await recoverBrowserAgentLoop("run-pages", (event) => events.push(event.eventId));
+    expect(replayCalls).toBe(2);
+    expect(events).toEqual(["e1", "e2"]);
+    expect(recovered.checkpoint.status).toBe("completed");
+  });
+
+  it("keeps replay strictly durable and excludes live-only model deltas", () => {
+    const events = normalizeReplayEvents([
+      { eventId: "delta", runId: "run-1", timestamp: "2026-08-28T00:00:00.000Z", type: "model.delta", text: "live" },
+      { eventId: "started", runId: "run-1", timestamp: "2026-08-28T00:00:01.000Z", sequence: 1, type: "model.started", text: "request" },
+    ]);
+    expect(events.map((event) => event.eventId)).toEqual(["started"]);
   });
 });

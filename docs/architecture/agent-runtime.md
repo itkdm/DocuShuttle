@@ -154,3 +154,13 @@ Run 继续执行。刷新与流中断共用 replay → checkpoint reconcile → 
 
 Tool call/result、EventStore 活动、effect receipt、approval/resolution、权限和预算计数不跨 Run
 进入模型上下文；当前文档事实仍以 Document Tools、working document 与 revision/version 为准。
+## Runtime Verification Matrix
+
+| Contract | Verification |
+| --- | --- |
+| Chat, approval, `ask_user`, permission continuity | `src/modules/agent/__tests__/runtime-integration.test.ts`, `src/modules/agent/__tests__/loop.test.ts` |
+| Effect receipt recovery and transport interruption | `src/modules/agent/__tests__/runtime-integration.test.ts`, `src/modules/agent/__tests__/loop.test.ts` |
+| Durable SSE replay, pagination, and live-only `model.delta` | `src/modules/agent/browser-runtime.test.ts`, `src/modules/agent/browser-runtime.ts` |
+| Runtime view and Workbench state projection | `src/components/workbench/runtime-view-state.test.ts` |
+| Supabase CAS, stale executor, and atomic message semantics | `src/modules/agent/infrastructure/supabase/loop-persistence.test.ts` |
+| Cross-run semantic context, cap, and compaction | `src/modules/agent/infrastructure/supabase/conversation-context.test.ts`, `src/modules/agent/__tests__/loop.test.ts` |

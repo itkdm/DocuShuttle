@@ -4,6 +4,32 @@ import { describe, expect, it, vi } from "vitest";
 import { SupabaseAgentLoopStore } from "./loop-persistence";
 
 describe("SupabaseAgentLoopStore interaction resolution contract", () => {
+  it("rejects a stale normal checkpoint without adopting the newer database version", async () => {
+    const query = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn(), update: vi.fn() };
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+    query.maybeSingle.mockResolvedValueOnce({ data: { state: { loopCheckpoint: { status: "running" } }, lock_version: 4 }, error: null })
+      .mockResolvedValueOnce({ data: { state: { loopCheckpoint: { status: "completed" } }, lock_version: 5 }, error: null });
+    query.update.mockReturnValue(query);
+    const from = vi.fn().mockReturnValue(query);
+    const store = new SupabaseAgentLoopStore({ from } as unknown as SupabaseClient);
+    await store.load("run-stale");
+    await expect(store.save("run-stale", { messages: [], iterations: 2, toolCallCount: 0, status: "running" })).rejects.toThrow("changed while it was being updated");
+    expect(query.update).not.toHaveBeenCalled();
+  });
+
+  it("uses the owned version for atomic assistant saves and rejects stale writers", async () => {
+    const query = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn() };
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+    query.maybeSingle.mockResolvedValue({ data: { state: { loopCheckpoint: { status: "running" } }, lock_version: 9 }, error: null });
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: { message: "RUN_VERSION_CONFLICT" } });
+    const store = new SupabaseAgentLoopStore({ from: vi.fn().mockReturnValue(query), rpc } as unknown as SupabaseClient);
+    await store.load("run-stale-message");
+    await expect(store.saveWithAssistantMessage("run-stale-message", { messages: [], iterations: 2, toolCallCount: 0, status: "completed" }, { messageKey: "assistant:old", text: "旧结果" })).rejects.toThrow("RUN_VERSION_CONFLICT");
+    expect(rpc).toHaveBeenCalledWith("commit_agent_checkpoint_with_message", expect.objectContaining({ p_expected_lock_version: 9 }));
+  });
+
   it("commits the checkpoint and semantic assistant message through the atomic RPC", async () => {
     const checkpoint = { messages: [], iterations: 1, toolCallCount: 0, status: "completed" as const, finalText: "完成" };
     const selectQuery = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn() };
@@ -11,9 +37,10 @@ describe("SupabaseAgentLoopStore interaction resolution contract", () => {
     selectQuery.eq.mockReturnValue(selectQuery);
     selectQuery.maybeSingle.mockResolvedValue({ data: { lock_version: 7 }, error: null });
     const from = vi.fn().mockReturnValue(selectQuery);
-    const rpc = vi.fn().mockResolvedValue({ data: checkpoint, error: null });
+    const rpc = vi.fn().mockResolvedValue({ data: { checkpoint, lockVersion: 8 }, error: null });
     const store = new SupabaseAgentLoopStore({ from, rpc } as unknown as SupabaseClient);
 
+    await store.load("run-message");
     await store.saveWithAssistantMessage("run-message", checkpoint, { messageKey: "assistant:event-1", text: "完成" });
     expect(rpc).toHaveBeenCalledWith("commit_agent_checkpoint_with_message", {
       p_run_id: "run-message",
@@ -39,7 +66,7 @@ describe("SupabaseAgentLoopStore interaction resolution contract", () => {
         decision: "approved" as const,
       },
     };
-    const rpc = vi.fn().mockResolvedValue({ data: { ...checkpoint, trace: [{ type: "model.started" }] }, error: null });
+    const rpc = vi.fn().mockResolvedValue({ data: { checkpoint: { ...checkpoint, trace: [{ type: "model.started" }] }, lockVersion: 1 }, error: null });
     const store = new SupabaseAgentLoopStore({ rpc } as unknown as SupabaseClient);
 
     await expect(store.resolvePendingApproval("run-1", "interaction-1", "call-1", "approved")).resolves.toEqual(checkpoint);
@@ -55,7 +82,7 @@ describe("SupabaseAgentLoopStore interaction resolution contract", () => {
   });
 
   it("keeps user-input message identity in the resolution RPC payload", async () => {
-    const rpc = vi.fn().mockResolvedValue({ data: { status: "running", trace: [{ type: "model.started" }] }, error: null });
+    const rpc = vi.fn().mockResolvedValue({ data: { checkpoint: { status: "running", trace: [{ type: "model.started" }] }, lockVersion: 1 }, error: null });
     const store = new SupabaseAgentLoopStore({ rpc } as unknown as SupabaseClient);
 
     const result = await store.resolvePendingUserInput("run-2", "interaction-2", { id: "message-2", text: "第三章" });

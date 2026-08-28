@@ -9,12 +9,15 @@ type RunRow = { state: Record<string, unknown>; lock_version: number; owner_user
 
 /** Optimistic checkpoint storage nested in the existing agent run state. */
 export class SupabaseAgentLoopStore implements AgentLoopStore {
+  private readonly versions = new Map<string, number>();
+
   constructor(private readonly client: SupabaseClient) {}
 
   async load(runId: string): Promise<AgentLoopCheckpoint | undefined> {
     return measure("agent.checkpoint.load", { runId, table: "agent_runs", operation: "select" }, async () => {
-      const result = await this.client.from("agent_runs").select("state").eq("id", runId).maybeSingle();
+      const result = await this.client.from("agent_runs").select("state, lock_version").eq("id", runId).maybeSingle();
       if (result.error) throw new Error(`Unable to load agent loop checkpoint: ${result.error.message}`);
+      if (result.data) this.versions.set(runId, result.data.lock_version);
       const state = result.data?.state as Record<string, unknown> | undefined;
       return normalizeAgentLoopCheckpoint(state?.loopCheckpoint);
     });
@@ -26,16 +29,17 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
 
   async saveWithAssistantMessage(runId: string, checkpoint: AgentLoopCheckpoint, message: { messageKey: string; text: string }): Promise<void> {
     return measure("agent.checkpoint.save_with_message", { runId, table: "agent_runs", operation: "checkpoint_and_assistant_message", checkpointStatus: checkpoint.status }, async () => {
-      const current = await this.client.from("agent_runs").select("lock_version").eq("id", runId).maybeSingle();
-      if (current.error || !current.data) throw new Error("RUN_NOT_FOUND");
+      const expectedVersion = this.versions.get(runId);
+      if (expectedVersion === undefined) throw new ConcurrentRunUpdateError(runId);
       const result = await this.client.rpc("commit_agent_checkpoint_with_message", {
         p_run_id: runId,
-        p_expected_lock_version: current.data.lock_version,
+        p_expected_lock_version: expectedVersion,
         p_checkpoint: checkpoint,
         p_message_key: message.messageKey,
         p_message_text: message.text,
       });
       if (result.error) throw new Error(`Unable to persist checkpoint and assistant message: ${result.error.message}`);
+      this.versions.set(runId, expectedVersion + 1);
     });
   }
 
@@ -43,7 +47,9 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     const current = await this.client.from("agent_runs").select("state, lock_version, owner_user_id").eq("id", runId).maybeSingle();
     if (current.error || !current.data) throw new Error("RUN_NOT_FOUND");
     const row = current.data as RunRow;
-    const nextVersion = row.lock_version + 1;
+    const expectedVersion = this.versions.get(runId);
+    if (expectedVersion === undefined || row.lock_version !== expectedVersion) throw new ConcurrentRunUpdateError(runId);
+    const nextVersion = expectedVersion + 1;
     const status = ["completed", "failed", "cancelled"].includes(checkpoint.status)
       ? checkpoint.status
       : checkpoint.status === "awaiting_approval"
@@ -64,13 +70,14 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       .from("agent_runs")
       .update({ state, status, resume_cursor: checkpoint, lock_version: nextVersion, updated_at: new Date().toISOString(), lease_expires_at: AGENT_LEASE_MANAGED_STATUSES.includes(status as typeof AGENT_LEASE_MANAGED_STATUSES[number]) ? new Date(Date.now() + 120_000).toISOString() : null })
       .eq("id", runId)
-      .eq("lock_version", row.lock_version)
+      .eq("lock_version", expectedVersion)
       // Cancellation owns the terminal state. Never let an in-flight loop
       // write its stale checkpoint back over it.
       .neq("status", "cancelled")
       .select("id")
       .maybeSingle();
     if (updated.error || !updated.data) throw new ConcurrentRunUpdateError(runId);
+    this.versions.set(runId, nextVersion);
   }
 
   async appendEvents(runId: string, events: readonly AgentEvent[]): Promise<void> {
@@ -134,7 +141,9 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       if (result.error.message.includes("RUN_STILL_ACTIVE")) throw new Error("RUN_STILL_ACTIVE");
       throw new Error(`Unable to claim agent recovery: ${result.error.message}`);
     }
-    return normalizeAgentLoopCheckpoint(result.data);
+    const payload = result.data as { checkpoint?: unknown; lockVersion?: number } | null;
+    if (payload?.lockVersion !== undefined) this.versions.set(runId, payload.lockVersion);
+    return normalizeAgentLoopCheckpoint(payload?.checkpoint ?? result.data);
   }
 
   async releaseLeaseForRecovery(runId: string): Promise<void> {
@@ -145,24 +154,30 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
   async markCancelled(runId: string): Promise<void> {
     const current = await this.client.from("agent_runs").select("state, lock_version, status").eq("id", runId).maybeSingle();
     if (current.error || !current.data) throw new Error("RUN_NOT_FOUND");
+    const ownedVersion = this.versions.get(runId);
+    if (ownedVersion !== undefined && ownedVersion !== current.data.lock_version) throw new ConcurrentRunUpdateError(runId);
+    const expectedVersion = ownedVersion ?? current.data.lock_version;
+    this.versions.set(runId, expectedVersion);
     const state = (current.data.state ?? {}) as Record<string, unknown>;
     const checkpoint = state.loopCheckpoint as AgentLoopCheckpoint | undefined;
     if (!checkpoint) {
       const updated = await this.client.from("agent_runs")
-        .update({ state: { ...state, status: "cancelled", pendingInteraction: null, pendingResolution: null }, status: "cancelled", resume_cursor: {}, lock_version: current.data.lock_version + 1, updated_at: new Date().toISOString(), lease_expires_at: null })
-        .eq("id", runId).eq("lock_version", current.data.lock_version).select("id").maybeSingle();
+        .update({ state: { ...state, status: "cancelled", pendingInteraction: null, pendingResolution: null }, status: "cancelled", resume_cursor: {}, lock_version: expectedVersion + 1, updated_at: new Date().toISOString(), lease_expires_at: null })
+        .eq("id", runId).eq("lock_version", expectedVersion).select("id").maybeSingle();
       if (updated.error || !updated.data) throw new ConcurrentRunUpdateError(runId);
+      this.versions.set(runId, expectedVersion + 1);
       return;
     }
     if (checkpoint.status === "cancelled") return;
     const event = createAgentEvent(runId, { type: "turn.cancelled", text: "本轮操作已取消。" });
     const checkpointWithoutTrace = normalizeAgentLoopCheckpoint(checkpoint)!;
     const nextCheckpoint: AgentLoopCheckpoint = { ...checkpointWithoutTrace, status: "cancelled", pendingInteraction: undefined, pendingResolution: undefined, finalText: event.text };
-    const nextState = { ...state, status: "cancelled", pendingInteraction: null, pendingResolution: null, loopCheckpoint: nextCheckpoint, version: current.data.lock_version + 1 };
+    const nextState = { ...state, status: "cancelled", pendingInteraction: null, pendingResolution: null, loopCheckpoint: nextCheckpoint, version: expectedVersion + 1 };
     const updated = await this.client.from("agent_runs")
-      .update({ state: nextState, status: "cancelled", resume_cursor: nextCheckpoint, lock_version: current.data.lock_version + 1, updated_at: new Date().toISOString() })
-      .eq("id", runId).eq("lock_version", current.data.lock_version).select("id").maybeSingle();
+      .update({ state: nextState, status: "cancelled", resume_cursor: nextCheckpoint, lock_version: expectedVersion + 1, updated_at: new Date().toISOString() })
+      .eq("id", runId).eq("lock_version", expectedVersion).select("id").maybeSingle();
     if (updated.error || !updated.data) throw new ConcurrentRunUpdateError(runId);
+    this.versions.set(runId, expectedVersion + 1);
     try {
       await this.appendEvents(runId, [event]);
     } catch {
@@ -200,7 +215,9 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
         }
         throw new Error(`Unable to claim agent interaction: ${result.error.message}`);
       }
-      return normalizeAgentLoopCheckpoint(result.data);
+      const payload = result.data as { checkpoint?: unknown; lockVersion?: number } | null;
+      if (payload?.lockVersion !== undefined) this.versions.set(runId, payload.lockVersion);
+      return normalizeAgentLoopCheckpoint(payload?.checkpoint ?? result.data);
     });
   }
 }

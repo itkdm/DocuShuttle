@@ -5,7 +5,6 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentPanel } from "./agent-panel";
 import { mergeTimelineEvents } from "./agent-timeline";
-import { projectAgentThread } from "./agent-thread-projection";
 import { DocumentCanvas } from "./document-canvas";
 import { OutlinePanel } from "./outline-panel";
 import { PaperDuckMark } from "./paperduck-mark";
@@ -14,7 +13,6 @@ import { formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
 import { applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, recoverBrowserAgentLoop, restoreBrowserDocumentVersion, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
-import { createAgentEvent } from "@/modules/agent/application/events";
 import { useConversationStore } from "./conversation-store";
 import { listBrowserTasks, loadBrowserTaskWorkspace, type TaskPage } from "@/modules/tasks/browser-tasks";
 import type { TaskSummary } from "@/modules/tasks/domain";
@@ -158,10 +156,11 @@ export function Workbench() {
       load: () => loadBrowserConversationMessages(routeTaskId),
       onSuccess: (durable) => {
         setConversationCursor(durable.nextCursor);
-        setMessages(projectAgentThread({ messages: durable.messages, historicalEvents: [], activeEvents: [] }).turns.flatMap((turn) => [
-          { id: turn.user.id, role: "user" as const, text: turn.user.content, runId: turn.runId, status: turn.user.deliveryStatus },
-          ...(turn.assistant.finalContent ? [{ id: turn.assistant.messageId, role: "agent" as const, text: turn.assistant.finalContent, runId: turn.runId, status: "sent" as const }] : []),
-        ]));
+        setMessages(durable.messages.flatMap((message) => {
+          const text = message.parts.find((part) => part.type === "text")?.text;
+          if (!text || (message.role !== "user" && message.role !== "assistant")) return [];
+          return [{ id: message.id, role: message.role === "user" ? "user" as const : "agent" as const, text, runId: message.run_id ?? undefined, createdAt: message.created_at, status: message.delivery_status ?? "sent" }];
+        }));
       },
       onFailure: () => undefined,
       onSettled: () => setConversationLoading(false),
@@ -308,6 +307,11 @@ export function Workbench() {
   async function recoverAndReconcileRun(runId: string, signal?: AbortSignal, reconcileTaskId = taskId, canReconcileDocument = workspaceReady) {
     const recovered = await recoverBrowserAgentLoop(runId, (event) => setActiveEvents((items) => mergeTimelineEvents(items, [event])), signal);
     applyRuntimeResult(runId, recovered);
+    if (recovered.checkpoint.finalText) {
+      setMessages((items) => items.some((item) => item.role === "agent" && item.runId === runId && item.text === recovered.checkpoint.finalText)
+        ? items
+        : [...items, { id: `recovered:${runId}:final`, role: "agent", text: recovered.checkpoint.finalText!, runId, createdAt: new Date().toISOString(), status: recovered.checkpoint.status === "failed" ? "failed" : "sent" }]);
+    }
     if (recovered.checkpoint.pendingInteraction) {
       setNotice(recovered.checkpoint.pendingInteraction.type === "approval" ? "Agent 已完成读取并请求写入确认" : "Agent 正在等待你的回答");
     } else if (recovered.checkpoint.status === "running") {
@@ -335,7 +339,7 @@ export function Workbench() {
       return;
     }
     const localMessageId = crypto.randomUUID();
-    setMessages((items) => [...items, { id: localMessageId, role: "user", text: prompt, status: "pending" }]);
+    setMessages((items) => [...items, { id: localMessageId, role: "user", text: prompt, createdAt: new Date().toISOString(), status: "pending" }]);
     setNotice(`纸上鸭正在处理你的请求：“${prompt.slice(0, 24)}${prompt.length > 24 ? "…" : ""}”`);
     const abortController = new AbortController();
     agentAbortRef.current = abortController;
@@ -354,11 +358,8 @@ export function Workbench() {
       }
       const activeRun = startsFreshRun ? await createBrowserAgentRun(taskId, prompt, localMessageId) : run;
       activeRunForRecovery = activeRun;
+      setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, runId: activeRun.id } : item));
       setRun(activeRun);
-      // Show the user's turn immediately. The server emits the durable
-      // turn.started event shortly afterwards; mergeTimelineEvents replaces
-      // this local item when that event arrives.
-      setActiveEvents((items) => mergeTimelineEvents(items, [createAgentEvent(activeRun.id, { type: "turn.started", text: prompt, clientMessageId: localMessageId })]));
       const interactionId = loopResult?.checkpoint.pendingInteraction?.type === "user_input" ? loopResult.checkpoint.pendingInteraction.interactionId : undefined;
       const result = await runBrowserAgentLoopStream(activeRun.id, prompt, permissionMode, (event) => {
         setActiveEvents((items) => mergeTimelineEvents(items, [event]));
@@ -374,8 +375,8 @@ export function Workbench() {
         setNotice(result.checkpoint.finalText ?? "这次请求没有完成，请稍后重试。");
         return;
       }
-      const replies = result.events.flatMap((event) => event.type === "assistant.message" && event.text ? [event.text] : []);
-      if (replies.length) setMessages((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text, runId: activeRun.id }))]);
+      const replies = result.events.flatMap((event) => event.type === "assistant.message" && event.text ? [{ id: `event:${event.eventId}`, text: event.text, createdAt: event.timestamp }] : []);
+      if (replies.length) setMessages((items) => [...items, ...replies.map((reply) => ({ ...reply, role: "agent" as const, runId: activeRun.id, status: "sent" as const }))]);
       const wrote = result.events.some((event) => event.type === "tool.completed" && (event.name === "apply_text_change" || event.name === "apply_text_changes"));
       if (wrote && taskId) {
         // A document mutation is not user-visible until the immutable version
@@ -434,8 +435,8 @@ export function Workbench() {
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
       }, abortController.signal);
       applyRuntimeResult(run.id, result);
-      const replies = result.events.flatMap((event) => event.type === "assistant.message" && event.text ? [event.text] : []);
-      if (replies.length) setMessages((items) => [...items, ...replies.map((text) => ({ role: "agent" as const, text, runId: run.id }))]);
+      const replies = result.events.flatMap((event) => event.type === "assistant.message" && event.text ? [{ id: `event:${event.eventId}`, text: event.text, createdAt: event.timestamp }] : []);
+      if (replies.length) setMessages((items) => [...items, ...replies.map((reply) => ({ ...reply, role: "agent" as const, runId: run.id, status: "sent" as const }))]);
       if (result.checkpoint.status === "completed") {
         if (taskId) {
           const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
@@ -449,7 +450,7 @@ export function Workbench() {
         setNotice("Agent 需要你的下一步决定");
       } else if (result.checkpoint.status === "failed") {
         const finalText = result.checkpoint.finalText ?? "Agent 执行失败";
-        setMessages((items) => [...items, { role: "agent", text: finalText, runId: run.id }]);
+        setMessages((items) => [...items, { id: `error:${run.id}:${Date.now()}`, role: "agent", text: finalText, runId: run.id, createdAt: new Date().toISOString(), status: "failed" }]);
         setNotice(finalText);
       }
     } catch (error) {

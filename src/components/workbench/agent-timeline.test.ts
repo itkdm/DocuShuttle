@@ -55,7 +55,7 @@ describe("Agent execution timeline", () => {
       historicalEvents: [],
       activeEvents: toEvents([{ eventId: "event-1", type: "turn.started", text: "请检查", clientMessageId: "message-1", runId: "run-1" }]),
     });
-    expect(projection.turns[0]).toMatchObject({ id: "run-1", runId: "run-1", user: { id: "message-1" } });
+    expect(projection.turns[0]).toMatchObject({ id: "message-1", runId: "run-1", user: { id: "message-1" } });
   });
 
   it("orders replayed events by sequence within a run without mixing runs", () => {
@@ -167,6 +167,29 @@ describe("Agent execution timeline", () => {
   it("keeps equal prompts in separate turns", () => {
     const messages = ["run-1", "run-2"].map((runId, index) => ({ id: `u-${index}`, role: "user" as const, parts: [{ type: "text", text: "继续" }], run_id: runId, created_at: "2026-01-01", message_key: `u-${index}` }));
     expect(projectAgentThread({ messages, historicalEvents: [], activeEvents: [] }).turns).toHaveLength(2);
+  });
+
+  it("does not guess an unbound message into the active run", () => {
+    const projection = projectAgentThread({
+      messages: [{ id: "optimistic", role: "user", parts: [{ type: "text", text: "新消息" }], created_at: "2026-01-01T00:00:02Z", message_key: "optimistic", delivery_status: "pending" }],
+      historicalEvents: [], activeEvents: toEvents([{ type: "turn.started", text: "旧消息", runId: "old-run", timestamp: "2026-01-01T00:00:01Z" }]), activeRunId: "old-run",
+    });
+    expect(projection.turns).toHaveLength(2);
+    expect(projection.turns[0].id).toBe("old-run:user");
+    expect(projection.turns[1]).toMatchObject({ id: "optimistic", user: { id: "optimistic", deliveryStatus: "pending" }, assistant: { status: "running" } });
+    expect(projection.turns[1].runId).toBeUndefined();
+  });
+
+  it("keeps multiple semantic messages in chronological order within one run", () => {
+    const messages = [
+      { id: "u-a", role: "user" as const, parts: [{ type: "text", text: "A" }], run_id: "run-1", created_at: "2026-01-01T00:00:01Z", message_key: "u-a" },
+      { id: "a-b", role: "assistant" as const, parts: [{ type: "text", text: "B" }], run_id: "run-1", created_at: "2026-01-01T00:00:02Z", message_key: "a-b" },
+      { id: "u-c", role: "user" as const, parts: [{ type: "text", text: "C" }], run_id: "run-1", created_at: "2026-01-01T00:00:03Z", message_key: "u-c" },
+      { id: "a-d", role: "assistant" as const, parts: [{ type: "text", text: "D" }], run_id: "run-1", created_at: "2026-01-01T00:00:04Z", message_key: "a-d" },
+    ];
+    const turns = projectAgentThread({ messages, historicalEvents: [], activeEvents: [] }).turns;
+    expect(turns.map((turn) => turn.id)).toEqual(["u-a", "u-c"]);
+    expect(turns.map((turn) => [turn.user?.content, turn.assistant.finalContent])).toEqual([["A", "B"], ["C", "D"]]);
   });
 
   it("rejects replay events without a durable identity envelope", () => {

@@ -168,9 +168,10 @@ button:focus-visible, textarea:focus-visible, label:has(input:focus-visible) { o
 .scroll-to-bottom { position: sticky; z-index: 2; bottom: 8px; justify-self: center; padding: 6px 11px; border: 1px solid #d9d7cc; border-radius: 999px; background: rgba(255,254,250,.96); color: #5e6258; font-size: 11px; cursor: pointer; box-shadow: 0 3px 10px rgba(42,42,35,.08); }
 .agent-thread { display: grid; gap: 18px; }
 .thread-message.user { display: flex; justify-content: flex-end; }
-.user-bubble { max-width: 88%; padding: 10px 13px; border-radius: 14px 14px 4px 14px; background: #efede4; color: var(--ink); }
-.user-bubble p { margin: 5px 0 0; font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
-.thread-label { font-size: 11px; color: #76786f; }
+.user-bubble { max-width: min(88%, 480px); padding: 9px 13px; border-radius: 14px 14px 4px 14px; background: #efede4; color: var(--ink); }
+.user-bubble p { margin: 0; font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.thread-message.user[data-status="pending"] .user-bubble { opacity: .72; }
+.thread-message.user[data-status="failed"] .user-bubble { border: 1px solid #e4b9b2; color: var(--red); }
 .assistant-turn { padding: 0 2px; color: var(--ink); }
 .assistant-byline { display: flex; align-items: center; gap: 7px; min-height: 24px; color: #34372f; }
 .assistant-byline strong { font-size: 13px; }

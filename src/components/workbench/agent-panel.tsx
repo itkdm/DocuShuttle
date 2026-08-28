@@ -9,6 +9,7 @@ import type { AgentPermissionMode } from "@/modules/agent/application/loop";
 import type { ConversationMessage } from "./conversation-store";
 import { AgentThread } from "./agent-thread";
 import { projectAgentThread } from "./agent-thread-projection";
+import { isAtBottom, scrollToBottom } from "./chat-scroll";
 
 interface AgentPanelProps {
   runtimeView: AgentRuntimeView; onCollapse: () => void;
@@ -103,6 +104,10 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
   const latestTimelineEvent = timelineEvents.at(-1);
   const latestTimelineEventId = latestTimelineEvent?.eventId;
   const latestTimelineText = latestTimelineEvent && "text" in latestTimelineEvent ? latestTimelineEvent.text : undefined;
+  const latestTurn = turns.at(-1);
+  const latestTurnId = latestTurn?.id;
+  const latestTurnText = latestTurn?.user?.content ?? latestTurn?.assistant?.finalContent ?? latestTurn?.assistant?.streamingContent;
+  const latestTurnStatus = latestTurn?.assistant?.status ?? latestTurn?.user?.deliveryStatus;
   const pendingInteraction = runtimeView.pendingInteraction;
   const awaitingUserQuestion = pendingInteraction?.type === "user_input";
   // Runtime Approval pauses the composer; an ask_user checkpoint is
@@ -111,9 +116,9 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
   useEffect(() => {
     const element = contentRef.current;
     if (!element || !stickToBottomRef.current) return;
-    element.scrollTop = element.scrollHeight;
+    scrollToBottom(element);
     setShowScrollToBottom(false);
-  }, [timelineEvents.length, latestTimelineEventId, latestTimelineText, runtimeView.runtimeStatus]);
+  }, [timelineEvents.length, latestTimelineEventId, latestTimelineText, messages.length, latestTurnId, latestTurnText, latestTurnStatus, runtimeView.runtimeStatus]);
   useEffect(() => {
     const element = contentRef.current;
     const previousHeight = prependHeightRef.current;
@@ -130,7 +135,7 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
   const handleContentScroll = () => {
     const element = contentRef.current;
     if (!element) return;
-    const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+    const atBottom = isAtBottom(element);
     stickToBottomRef.current = atBottom;
     setShowScrollToBottom(!atBottom);
   };
@@ -139,7 +144,7 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
     setDeciding(true);
     try { await onLoopApproval(choice); } finally { setDeciding(false); }
   };
-  const submit = () => { if (inputBlocked || !workspaceReady) return; const value = prompt.trim(); if (!value) return; onRun(value); setPrompt(""); };
+  const submit = () => { if (inputBlocked || !workspaceReady) return; const value = prompt.trim(); if (!value) return; stickToBottomRef.current = true; setShowScrollToBottom(false); onRun(value); setPrompt(""); };
   return (
     <aside className="agent-panel" aria-label="纸上鸭 Agent">
       <div className="agent-heading">
@@ -153,7 +158,7 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
           {imageNodes.length > 0 && <div className="scope-card image-tool-card"><button type="button" className="image-tool-toggle" onClick={() => setImageToolOpen((open) => !open)} aria-expanded={imageToolOpen}><span><span className="scope-kicker">图片工具</span><strong>生成图片候选</strong></span><ChevronDown size={16} className={imageToolOpen ? "rotate" : ""} /></button>{imageToolOpen && <div className="image-tool-body"><p>选择图片节点并生成候选；候选不会自动写回文档。</p><label>目标图片<select value={imageTargetNodeId} onChange={(event) => onImageTargetNodeIdChange(event.target.value)} disabled={imageBusy}><option value="">请选择图片节点</option>{imageNodes.map((node, index) => <option key={node.nodeId} value={node.nodeId}>图片 {index + 1} · {node.nodeId.slice(0, 12)}</option>)}</select></label><label>图片描述<textarea value={imagePrompt} onChange={(event) => onImagePromptChange(event.target.value)} placeholder="例如：简洁的三模块系统结构图" rows={2} disabled={imageBusy} /></label><button type="button" className="primary-small" onClick={() => void onGenerateImages()} disabled={imageBusy || !imageTargetNodeId.trim() || !imagePrompt.trim()}>{imageBusy ? "生成中…" : "生成图片候选"}</button></div>}</div>}
           {imageCandidates.length > 0 && <div className="scope-card image-candidate-card"><span className="scope-kicker">图片候选</span><strong>选择要应用的候选</strong><p>候选不会自动写回；选择后仍会按当前权限策略执行。</p>{imageCandidates.map((candidate) => <button key={candidate.id} onClick={() => onApplyImage(candidate)} disabled={imageBusy}><Image src={candidate.downloadUrl} alt="图片候选" width={240} height={140} unoptimized /><span>应用此候选</span></button>)}</div>}
           {runtimeView.isRunning && !timelineEvents.length && <div className="progress-card"><div className="progress-top"><strong>{currentTimeline.at(-1) ? eventSummary(currentTimeline.at(-1)!) : "正在准备"}</strong><span>进行中</span></div><small>执行过程会实时显示在上方对话时间线</small><button className="cancel-run" onClick={onCancel}><StopCircle size={13} /> 取消</button></div>}
-        {showScrollToBottom && <button type="button" className="scroll-to-bottom" onClick={() => { const element = contentRef.current; if (!element) return; element.scrollTo({ top: element.scrollHeight, behavior: "smooth" }); stickToBottomRef.current = true; setShowScrollToBottom(false); }} aria-label="回到底部">↓ 回到底部</button>}
+        {showScrollToBottom && <button type="button" className="scroll-to-bottom" onClick={() => { const element = contentRef.current; if (!element) return; stickToBottomRef.current = true; setShowScrollToBottom(false); scrollToBottom(element, "smooth"); }} aria-label="回到底部">↓ 回到底部</button>}
       </div>
       <div className="agent-composer">
         <textarea ref={promptRef} id="agent-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter" && !event.shiftKey && !inputBlocked && workspaceReady) { event.preventDefault(); submit(); } }} placeholder={awaitingUserQuestion ? "请回答纸上鸭的问题…" : !workspaceReady ? "请先打开一份 DOCX" : inputBlocked ? "Agent 运行中，可先输入下一条提示词…" : "例如：把实验结论改得更专业，只改一个单元格…"} rows={2} disabled={!workspaceReady} />

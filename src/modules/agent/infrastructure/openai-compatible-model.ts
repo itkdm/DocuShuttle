@@ -1,15 +1,17 @@
-import { createOpenAI } from "@ai-sdk/openai";
 import { generateText, streamText, tool } from "ai";
 import { z } from "zod";
 
 import type { AgentModelDecision, AgentModelPort, AgentLoopMessage, AgentTool } from "../application/loop";
 import { createTimer, logger } from "@/infrastructure/observability";
+import { assertReasoningModeSupported, createAgentLanguageModel, readAgentModelEnvironmentConfig, type AgentModelProvider, type AgentReasoningMode } from "./model-provider";
 
 export type OpenAICompatibleModelOptions = {
   apiKey: string;
   baseUrl: string;
   model: string;
   system?: string;
+  provider?: AgentModelProvider;
+  reasoningMode?: AgentReasoningMode;
 };
 
 const parseToolResult = (content: string) => {
@@ -42,14 +44,12 @@ export const PAPERDUCK_AGENT_SYSTEM = `你是纸上鸭（PaperDuck），一个�
  * be used by changing baseUrl and model.
  */
 export class OpenAICompatibleAgentModel implements AgentModelPort {
-  private readonly provider;
+  private readonly provider: Awaited<ReturnType<typeof createAgentLanguageModel>>;
 
   constructor(private readonly options: OpenAICompatibleModelOptions) {
-    this.provider = createOpenAI({
-      apiKey: options.apiKey,
-      baseURL: options.baseUrl,
-      name: "paperduck-openai-compatible",
-    });
+    const config = { provider: options.provider ?? "openai-compatible", reasoningMode: options.reasoningMode ?? "disabled", apiKey: options.apiKey, baseUrl: options.baseUrl, model: options.model };
+    assertReasoningModeSupported(config);
+    this.provider = createAgentLanguageModel(config);
   }
 
   async decide(input: {
@@ -59,14 +59,20 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
     onTextDelta?: (text: string) => void;
   }): Promise<AgentModelDecision> {
     const inputCharacterCount = input.messages.reduce((total, message) => total + message.content.length, 0);
-    const timer = createTimer("agent.model", { provider: "openai-compatible", model: this.options.model, inputMessageCount: input.messages.length, inputCharacterCount, toolCount: input.tools.length });
+    const provider = this.options.provider ?? "openai-compatible";
+    const reasoningMode = this.options.reasoningMode ?? "disabled";
+    const timer = createTimer("agent.model", { provider, model: this.options.model, reasoningMode, inputMessageCount: input.messages.length, inputCharacterCount, toolCount: input.tools.length });
     logger.info("agent.model.started", timer.metadata);
     let firstTokenMs: number | undefined;
     const onTextDelta = input.onTextDelta ? (text: string) => {
       if (firstTokenMs === undefined) { firstTokenMs = timer.elapsed(); timer.mark("first_token"); logger.info("agent.model.first_token", { ...timer.metadata, firstTokenMs }); }
       input.onTextDelta?.(text);
     } : undefined;
-    const complete = (decision: AgentModelDecision, usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }) => { logger.info("agent.model.completed", { ...timer.metadata, durationMs: timer.elapsed(), firstTokenMs, outcome: "success", ...(usage ?? {}), toolCallNames: decision.kind === "tool_calls" ? decision.calls.map((call) => call.name) : [] }); return decision; };
+    const complete = (decision: AgentModelDecision, usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }) => {
+      const reasoning = decision.reasoning;
+      logger.info("agent.model.completed", { ...timer.metadata, durationMs: timer.elapsed(), firstTokenMs, outcome: "success", ...(usage ?? {}), toolCallNames: decision.kind === "tool_calls" ? decision.calls.map((call) => call.name) : [], reasoningPresent: Boolean(reasoning), reasoningCharacters: reasoning?.length ?? 0 });
+      return decision;
+    };
     // ask_user is a control-plane tool: the model may explicitly suspend the
     // same conversation when required information is missing. It is converted
     // back to the runner's durable HITL decision rather than executed as a
@@ -80,7 +86,7 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
       },
     ];
     const request = {
-      model: this.provider.chat(this.options.model),
+      model: this.provider,
       system: this.options.system ?? PAPERDUCK_AGENT_SYSTEM,
       messages: input.messages.map((message) => message.role === "tool"
         ? ({
@@ -95,13 +101,14 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
         : message.role === "assistant" && message.toolCalls
           ? ({
               role: "assistant",
-              content: message.toolCalls.map((call) => ({
-                type: "tool-call",
-                toolCallId: call.id,
-                toolName: call.name,
-                input: call.input,
-              })),
+              content: [
+                ...(message.reasoning ? [{ type: "reasoning", text: message.reasoning }] : []),
+                ...(message.content ? [{ type: "text", text: message.content }] : []),
+                ...message.toolCalls.map((call) => ({ type: "tool-call", toolCallId: call.id, toolName: call.name, input: call.input })),
+              ],
             })
+        : message.role === "assistant" && message.reasoning
+          ? ({ role: "assistant", content: [{ type: "reasoning", text: message.reasoning }, ...(message.content ? [{ type: "text", text: message.content }] : [])] })
         : ({ role: message.role, content: message.content })),
       tools: Object.fromEntries(providerTools.map((candidate) => [candidate.name, tool({
         description: candidate.description,
@@ -109,6 +116,7 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
       })])),
       stopWhen: () => true,
       abortSignal: input.signal,
+      ...(provider === "deepseek" ? { providerOptions: { deepseek: { thinking: { type: reasoningMode } } } } : {}),
     } as Parameters<typeof streamText>[0];
     if (onTextDelta) {
       let lastError: unknown;
@@ -126,18 +134,21 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
             onTextDelta(delta);
           }
           const toolCalls = await response.toolCalls;
+          const reasoning = (await response.reasoningText) || undefined;
           const usage = await response.usage;
           if (toolCalls.length > 0) {
             const ask = toolCalls.find((call) => call.toolName === "ask_user");
             if (ask && typeof ask.input === "object" && ask.input !== null && "text" in ask.input) {
-              return complete({ kind: "ask_user", text: String((ask.input as { text: unknown }).text) }, usage);
+              return complete({ kind: "ask_user", text: String((ask.input as { text: unknown }).text), reasoning }, usage);
             }
             return complete({
               kind: "tool_calls",
               calls: toolCalls.map((call) => ({ id: call.toolCallId, name: call.toolName, input: call.input })),
+              text: streamedText || undefined,
+              reasoning,
             }, usage);
           }
-          return complete({ kind: "message", text: streamedText || "我暂时没有足够信息继续，请补充一下目标。" }, usage);
+          return complete({ kind: "message", text: streamedText || "我暂时没有足够信息继续，请补充一下目标。", reasoning }, usage);
         } catch (error) {
           lastError = error;
           if (attempt === 0 && streamedText.length === 0 && !input.signal?.aborted) {
@@ -153,23 +164,25 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
     }
     const response = await generateText(request);
     const usage = response.usage;
+    const reasoning = response.reasoningText || undefined;
     if (response.toolCalls.length > 0) {
       const ask = response.toolCalls.find((call) => call.toolName === "ask_user");
       if (ask && typeof ask.input === "object" && ask.input !== null && "text" in ask.input) {
-        return complete({ kind: "ask_user", text: String((ask.input as { text: unknown }).text) }, usage);
+        return complete({ kind: "ask_user", text: String((ask.input as { text: unknown }).text), reasoning }, usage);
       }
       return complete({
         kind: "tool_calls",
         calls: response.toolCalls.map((call) => ({ id: call.toolCallId, name: call.toolName, input: call.input })),
+        text: response.text || undefined,
+        reasoning,
       }, usage);
     }
     const text = response.text || "I need more information to continue.";
-    return complete({ kind: "message", text }, usage);
+    return complete({ kind: "message", text, reasoning }, usage);
   }
 }
 
-export const createOpenAICompatibleAgentModelFromEnvironment = () => new OpenAICompatibleAgentModel({
-  apiKey: process.env.DEEPSEEK_API_KEY ?? process.env.OPENAI_API_KEY ?? "",
-  baseUrl: process.env.DEEPSEEK_BASE_URL ?? process.env.OPENAI_BASE_URL ?? "https://api.deepseek.com",
-  model: process.env.DEEPSEEK_MODEL ?? process.env.OPENAI_MODEL ?? "deepseek-chat",
-});
+export const createOpenAICompatibleAgentModelFromEnvironment = () => {
+  const config = readAgentModelEnvironmentConfig();
+  return new OpenAICompatibleAgentModel({ ...config });
+};

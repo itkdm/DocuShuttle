@@ -19,7 +19,9 @@
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
   },
   "dependencies": {
+    "@ai-sdk/deepseek": "3.0.35",
     "@ai-sdk/openai": "4.0.47",
+    "@ai-sdk/openai-compatible": "3.0.39",
     "@streamdown/cjk": "^1.0.3",
     "@supabase/ssr": "0.12.5",
     "@supabase/supabase-js": "2.112.4",

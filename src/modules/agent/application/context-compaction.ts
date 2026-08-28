@@ -42,6 +42,7 @@ const messageCharacters = (message: AgentLoopMessage) => {
   if (message.toolCallId) value += message.toolCallId.length;
   if (message.toolName) value += message.toolName.length;
   if (message.toolCalls) value += JSON.stringify(message.toolCalls).length;
+  if (message.reasoning) value += message.reasoning.length;
   return value;
 };
 
@@ -137,9 +138,12 @@ const enforceHardBudget = (messages: readonly AgentLoopMessage[], policy: AgentC
     if (message.role === "assistant" && message.toolCalls) {
       const calls = message.toolCalls.map((call) => ({ ...call, input: compactValueForContext(call.input) }));
       const candidate = { ...message, content: message.content.slice(0, maxContent), toolCalls: calls };
-      // If call metadata alone is too large, omit the call rather than emit an
-      // invalid oversized provider message; its paired result is removed too.
-      return messageCharacters(candidate) <= policy.maxCharacters ? candidate : { role: "assistant", content: "工具调用已压缩。" };
+      // Keep the complete continuation unit together. If it still cannot fit,
+      // the whole unit is removed by the final hard-budget pass; reasoning is
+      // never stripped independently from its assistant tool call.
+      return messageCharacters(candidate) <= policy.maxCharacters
+        ? candidate
+        : { ...message, content: "工具调用已压缩。", toolCalls: calls };
     }
     const content = message.role === "tool"
       ? compactToolContentForContext(message.content, maxContent)
@@ -160,7 +164,7 @@ const enforceHardBudget = (messages: readonly AgentLoopMessage[], policy: AgentC
   if (flattened.reduce((total, message) => total + messageCharacters(message), 0) > policy.maxCharacters) {
     flattened = flattened.map((message) => {
       const remaining = Math.max(0, policy.maxCharacters - flattened.filter((candidate) => candidate !== message).reduce((total, candidate) => total + messageCharacters(candidate), 0));
-      if (message.role === "assistant" && message.toolCalls) return { role: "assistant", content: message.content.slice(0, remaining) };
+      if (message.role === "assistant" && message.toolCalls) return { ...message, content: message.content.slice(0, remaining) };
       return { ...message, content: message.content.slice(0, remaining) };
     });
   }

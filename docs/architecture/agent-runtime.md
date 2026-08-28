@@ -47,7 +47,13 @@ run 前 API 会先检查当前 conversation 的 pending interaction；即使两�
 
 ## 模型配置
 
-文本模型统一使用 OpenAI-compatible Chat Completions 接口。服务端通过 `DEEPSEEK_API_KEY`（或 `OPENAI_API_KEY`）、`DEEPSEEK_BASE_URL`（或 `OPENAI_BASE_URL`）和 `DEEPSEEK_MODEL`（或 `OPENAI_MODEL`）配置，不在代码中写死供应商或模型别名。当前适配器基于 Vercel AI SDK 的 `@ai-sdk/openai`，因此 DeepSeek、OpenAI 或自托管兼容网关都能复用同一端口；不使用 Anthropic API。
+文本模型通过小型 provider factory 选择 `deepseek`、`openai` 或
+`openai-compatible`。`PAPERDUCK_REASONING_MODE` 只接受 `disabled` 或
+`enabled`；DeepSeek 使用 AI SDK 的 `thinking.type` 显式控制，其他 provider 在
+未实现私有推理协议时对 `enabled` 快速报配置错误。模型返回的 reasoning 只作为
+同一 Run 的 provider continuation state 写入 checkpoint，下一轮以标准 reasoning
+part 发送回 provider；它不会进入 `onTextDelta`、SSE、EventStore、messages 或 UI，
+日志也只记录是否存在及字符数，不记录原文。
 
 ## HITL、版本与流式展示
 

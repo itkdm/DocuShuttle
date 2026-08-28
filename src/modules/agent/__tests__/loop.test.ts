@@ -146,6 +146,18 @@ describe("AgentLoopRunner", () => {
     expect(result.events.every((event) => typeof event.eventId === "string")).toBe(true);
   });
 
+  it("persists private reasoning through tool continuation and final response", async () => {
+    const store = new MemoryStore();
+    const decisions = [
+      { kind: "tool_calls" as const, reasoning: "先确认文档事实", calls: [{ id: "reasoning-tool", name: "inspect_document", input: { query: "headings" } }] },
+      { kind: "message" as const, text: "已确认。", reasoning: "工具结果足够", finish: true },
+    ];
+    const model: AgentModelPort = { decide: async () => decisions.shift()! };
+    const result = await new AgentLoopRunner(model, store, [inspectTool]).run("run-reasoning", "检查");
+    expect(result.checkpoint.messages.find((message) => message.toolCalls?.[0]?.id === "reasoning-tool")?.reasoning).toBe("先确认文档事实");
+    expect(result.checkpoint.messages.at(-1)).toMatchObject({ role: "assistant", content: "已确认。", reasoning: "工具结果足够" });
+  });
+
   it("treats a transport abort as recoverable instead of cancelling the run", async () => {
     const store = new MemoryStore();
     let released = 0;

@@ -10,6 +10,8 @@ export type AgentLoopMessage = {
   toolCallId?: string;
   toolName?: string;
   toolCalls?: ReadonlyArray<{ id: string; name: string; input: unknown }>;
+  /** Private provider continuation state; never expose this to users. */
+  reasoning?: string;
 };
 
 export type AgentToolContext = {
@@ -29,9 +31,9 @@ export type AgentTool<TSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
 };
 
 export type AgentModelDecision =
-  | { kind: "message"; text: string; finish?: boolean }
-  | { kind: "tool_calls"; calls: ReadonlyArray<{ id: string; name: string; input: unknown }> }
-  | { kind: "ask_user"; text: string };
+  | { kind: "message"; text: string; finish?: boolean; reasoning?: string }
+  | { kind: "tool_calls"; calls: ReadonlyArray<{ id: string; name: string; input: unknown }>; text?: string; reasoning?: string }
+  | { kind: "ask_user"; text: string; reasoning?: string };
 
 /** Controls how much autonomy the user grants to this run. */
 export type AgentPermissionMode = "default" | "full";
@@ -455,7 +457,7 @@ export class AgentLoopRunner {
       }
       emit({ type: "model.completed", durationMs: Date.now() - modelStartedAt });
       if (decision.kind === "message") {
-        checkpoint.messages.push({ role: "assistant", content: decision.text });
+        checkpoint.messages.push({ role: "assistant", content: decision.text, ...(decision.reasoning ? { reasoning: decision.reasoning } : {}) });
         const messageEvent = emit({ type: "assistant.message", text: decision.text }, false) as AssistantMessageEvent;
         if (decision.finish !== false) {
           checkpoint.status = "completed";
@@ -472,12 +474,12 @@ export class AgentLoopRunner {
       if (decision.kind === "ask_user") {
         checkpoint.status = "awaiting_user";
         checkpoint.pendingInteraction = { interactionId: crypto.randomUUID(), type: "user_input", question: decision.text };
-        checkpoint.messages.push({ role: "assistant", content: decision.text });
+        checkpoint.messages.push({ role: "assistant", content: decision.text, ...(decision.reasoning ? { reasoning: decision.reasoning } : {}) });
         const messageEvent = emit({ type: "assistant.message", text: decision.text }, false) as AssistantMessageEvent;
         await persistAssistantMessage(messageEvent);
         return { checkpoint, events };
       }
-      for (const call of decision.calls) {
+      for (const [index, call] of decision.calls.entries()) {
         checkpoint.toolCallCount += 1;
         if (checkpoint.toolCallCount > this.maxToolCalls) {
           checkpoint.status = "failed";
@@ -493,7 +495,12 @@ export class AgentLoopRunner {
         // follows it. If a later call needs approval, calls after that
         // boundary are intentionally left for the next model decision rather
         // than persisting unpaired tool-call IDs into the transcript.
-        checkpoint.messages.push({ role: "assistant", content: "", toolCalls: [call] });
+        checkpoint.messages.push({
+          role: "assistant",
+          content: index === 0 ? (decision.text ?? "") : "",
+          toolCalls: [call],
+          ...(decision.reasoning ? { reasoning: decision.reasoning } : {}),
+        });
         const tool = this.tools.find((candidate) => candidate.name === call.name);
         if (!tool) {
           checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: `Unknown agent tool: ${call.name}` }), toolCallId: call.id, toolName: call.name });

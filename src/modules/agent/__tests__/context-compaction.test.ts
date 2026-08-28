@@ -53,6 +53,19 @@ describe("agent context compaction", () => {
     expect(result.messages).toEqual(messages);
   });
 
+  it("counts and retains reasoning as part of an assistant tool-call unit", () => {
+    const reasoning = "推理依据".repeat(80);
+    const result = compactAgentMessages([
+      { role: "user", content: "检查文档" },
+      { role: "assistant", content: "", reasoning, toolCalls: [{ id: "reasoning-call", name: "inspect_document", input: {} }] },
+      { role: "tool", content: JSON.stringify({ revision: "r1" }), toolCallId: "reasoning-call", toolName: "inspect_document" },
+      { role: "assistant", content: "继续。" },
+    ], { ...policy, maxCharacters: 2_000, keepRecentUnits: 2 });
+    const assistant = result.messages.find((message) => message.toolCalls?.some((call) => call.id === "reasoning-call"));
+    expect(assistant?.reasoning).toBe(reasoning);
+    expect(result.messages.some((message) => message.role === "tool" && message.toolCallId === "reasoning-call")).toBe(true);
+  });
+
   it("reduces oversized recent tool payloads without breaking JSON", () => {
     const result = compactAgentMessages([
       { role: "user", content: "分析文档" },

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildTimeline, isTimelineActive, mergeTimelineEvents, sanitizeForDisplay } from "./agent-timeline";
-import { projectAgentThread } from "./agent-thread-projection";
+import { executionSummary, projectAgentThread } from "./agent-thread-projection";
 import { normalizeReplayEvents } from "@/modules/agent/browser-runtime";
 import type { AgentEvent } from "@/modules/agent/application/events";
 
@@ -12,6 +12,58 @@ const toEvents = (values: readonly object[], runId = "run-test"): AgentEvent[] =
 const build = (values: readonly object[]) => buildTimeline(toEvents(values));
 
 describe("Agent execution timeline", () => {
+  it("keeps the assistant running after a tool completes without a terminal event", () => {
+    const projection = projectAgentThread({
+      messages: [{ id: "u-running", role: "user", parts: [{ type: "text", text: "检查" }], run_id: "run-running", created_at: "2026-01-01", message_key: "u-running" }],
+      historicalEvents: [],
+      activeEvents: toEvents([
+        { type: "tool.started", callId: "call-running", name: "inspect_document", input: {} },
+        { type: "tool.completed", callId: "call-running", name: "inspect_document", output: {} },
+      ], "run-running"),
+    });
+    expect(projection.turns[0].assistant.status).toBe("running");
+  });
+
+  it("keeps execution running across later model and tool activity", () => {
+    const projection = projectAgentThread({
+      messages: [{ id: "u-multi", role: "user", parts: [{ type: "text", text: "检查" }], run_id: "run-multi", created_at: "2026-01-01", message_key: "u-multi" }],
+      historicalEvents: [],
+      activeEvents: toEvents([
+        { type: "tool.completed", callId: "call-one", name: "inspect_document", output: {} },
+        { type: "model.started" },
+        { type: "model.delta", text: "继续处理" },
+        { type: "tool.started", callId: "call-two", name: "read_document_region", input: {} },
+      ], "run-multi"),
+    });
+    expect(projection.turns[0].assistant.status).toBe("running");
+  });
+
+  it("keeps a failed tool non-terminal while the runtime continues", () => {
+    const projection = projectAgentThread({
+      messages: [{ id: "u-tool-failed", role: "user", parts: [{ type: "text", text: "检查" }], run_id: "run-tool-failed", created_at: "2026-01-01", message_key: "u-tool-failed" }],
+      historicalEvents: [],
+      activeEvents: toEvents([
+        { type: "tool.failed", callId: "call-failed", name: "inspect_document", error: "暂时失败" },
+        { type: "model.started" },
+      ], "run-tool-failed"),
+    });
+    expect(projection.turns[0].assistant.status).toBe("running");
+    expect(projection.turns[0].assistant.activities).toMatchObject([{ type: "tool", state: "failed" }]);
+  });
+
+  it("summarizes only completed tool activities", () => {
+    const activities = [
+      { type: "tool", id: "done", callId: "done", name: "inspect_document", state: "completed" },
+      { type: "tool", id: "running", callId: "running", name: "inspect_document", state: "running" },
+      { type: "tool", id: "approval", callId: "approval", name: "apply_text_change", state: "approval" },
+      { type: "tool", id: "failed", callId: "failed", name: "inspect_document", state: "failed" },
+    ] as const;
+    expect(executionSummary("running", activities)).toBe("正在处理");
+    expect(executionSummary("awaiting_approval", activities)).toBe("等待确认");
+    expect(executionSummary("completed", activities)).toBe("已完成 1 个步骤");
+    expect(executionSummary("failed", activities)).toBe("执行未完成");
+  });
+
   it("keeps the original turn when resumed events arrive", () => {
     const first = [{ eventId: "u1", type: "turn.started", text: "改名字" }] as never;
     const resumed = [

@@ -437,6 +437,34 @@ describe("AgentLoopRunner", () => {
     expect(store.durableEvents.some((event) => event.type === "model.started")).toBe(true);
   });
 
+  it("forwards the first model delta before the provider decision resolves", async () => {
+    const store = new MemoryStore();
+    const live: AgentEvent[] = [];
+    let release!: () => void;
+    const decisionPaused = new Promise<void>((resolve) => { release = resolve; });
+    let firstDelta!: () => void;
+    const firstDeltaObserved = new Promise<void>((resolve) => { firstDelta = resolve; });
+    let resolved = false;
+    const promise = new AgentLoopRunner({
+      decide: async ({ onTextDelta }) => {
+        onTextDelta?.("A");
+        await decisionPaused;
+        onTextDelta?.("B");
+        return { kind: "message", text: "AB" };
+      },
+    }, store, []).runWithPermission("run-streaming", "回答", "default", undefined, (event) => {
+      live.push(event);
+      if (event.type === "model.delta" && event.text === "A") firstDelta();
+    });
+    void promise.then(() => { resolved = true; });
+    await firstDeltaObserved;
+    expect(live.some((event) => event.type === "model.delta" && event.text === "A")).toBe(true);
+    expect(resolved).toBe(false);
+    release();
+    const result = await promise;
+    expect(result.checkpoint.finalText).toBe("AB");
+  });
+
   it("heartbeats during a long provider call instead of relying on checkpoint saves", async () => {
     const store = new MemoryStore();
     const result = await new AgentLoopRunner({
@@ -446,7 +474,7 @@ describe("AgentLoopRunner", () => {
       },
     }, store, [], 12, 32, 1_000, undefined, 5).run("run-heartbeat", "检查");
     expect(result.checkpoint.status).toBe("completed");
-    expect(store.heartbeats).toBeGreaterThanOrEqual(3);
+    expect(store.heartbeats).toBeGreaterThanOrEqual(2);
   });
 
   it("keeps model deltas live without persisting them", async () => {

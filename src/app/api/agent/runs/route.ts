@@ -5,7 +5,6 @@ import { logger } from "@/infrastructure/observability";
 
 import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { SupabaseAgentRunStore } from "@/modules/agent/infrastructure/supabase/runtime-persistence";
-import { AGENT_LEASE_MANAGED_STATUSES } from "@/modules/agent/application/loop";
 import { isDurableAgentEvent, type DurableAgentEvent } from "@/modules/agent/application/events";
 import { agentErrorResponse } from "../http";
 
@@ -59,32 +58,13 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const started = performance.now();
   try {
     const input = schema.parse(await request.json());
     const { client, userId } = await requireSupabaseIdentity();
-    // Do not allocate a new immutable run while the conversation has a
-    // durable HITL boundary. Approval and ask_user answers must continue the
-    // existing run/checkpoint; creating here would fork and lose context.
-    const latest = await client.from("agent_runs")
-      .select("id, state, status, lease_expires_at")
-      .eq("task_id", input.taskId)
-      .eq("owner_user_id", userId)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (latest.error) throw new Error(`Unable to inspect active agent run: ${latest.error.message}`);
-    const checkpoint = (latest.data?.state as { loopCheckpoint?: { pendingInteraction?: unknown } } | null)?.loopCheckpoint;
-    const activeStatus = [...AGENT_LEASE_MANAGED_STATUSES, "awaiting_approval", "awaiting_user"].includes(latest.data?.status as string);
-    // HITL waits are intentionally lease-less: a user may take hours to
-    // answer. Only an invocation phase can become stale and be reclaimed.
-    const leaseManagedStatus = AGENT_LEASE_MANAGED_STATUSES.includes(latest.data?.status as typeof AGENT_LEASE_MANAGED_STATUSES[number]);
-    const leaseExpired = leaseManagedStatus && latest.data?.lease_expires_at && new Date(latest.data.lease_expires_at as string).getTime() <= Date.now();
-    if (leaseExpired && latest.data?.id) {
-      const reclaimed = await client.rpc("reclaim_stale_agent_run", { p_run_id: latest.data.id });
-      if (reclaimed.error) throw new Error(`Unable to reclaim stale agent run: ${reclaimed.error.message}`);
-    } else if (checkpoint?.pendingInteraction || activeStatus) {
-      return NextResponse.json({ code: "TURN_NOT_ALLOWED", runId: latest.data?.id }, { status: 409 });
-    }
+    // The database RPC owns the active-run guard, stale lease reclaim, working
+    // document/revision lookup, conversation identity, and atomic turn insert.
+    // Keeping these reads in one transaction removes the fresh-run RTT chain.
     const run = await new SupabaseAgentRunStore(client).createForTask({
       taskId: input.taskId,
       ownerUserId: userId,
@@ -92,9 +72,10 @@ export async function POST(request: Request) {
       goal: input.goal,
       clientMessageId: input.clientMessageId,
     });
+    logger.info("agent.run_create.completed", { taskId: input.taskId, durationMs: performance.now() - started, userId });
     return NextResponse.json({ run }, { status: 201 });
   } catch (error) {
-    if (error instanceof Error && error.message === "CONCURRENT_TURN") {
+    if (error instanceof Error && ["CONCURRENT_TURN", "TURN_NOT_ALLOWED"].includes(error.message)) {
       return NextResponse.json({ code: "TURN_NOT_ALLOWED", message: "当前对话已有一轮请求正在处理，请稍后继续。" }, { status: 409 });
     }
     return agentErrorResponse(error);

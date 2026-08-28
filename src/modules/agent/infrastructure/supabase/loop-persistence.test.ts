@@ -4,20 +4,43 @@ import { describe, expect, it, vi } from "vitest";
 import { SupabaseAgentLoopStore } from "./loop-persistence";
 
 describe("SupabaseAgentLoopStore interaction resolution contract", () => {
+  it("hydrates checkpoint ownership and semantic context from one bootstrap RPC", async () => {
+    const rpc = vi.fn().mockResolvedValue({
+      data: {
+        runId: "run-bootstrap",
+        taskId: "task-1",
+        lockVersion: 3,
+        checkpoint: { status: "running", messages: [], iterations: 1, toolCallCount: 0 },
+        conversationId: "conversation-1",
+        priorMessages: [{ role: "user", content: "之前的问题" }, { role: "assistant", content: "之前的回答" }],
+        loadedCount: 2,
+        truncated: false,
+      },
+      error: null,
+    });
+    const client = { rpc } as unknown as SupabaseClient;
+    const bootstrap = await new SupabaseAgentLoopStore(client).loadBootstrap("run-bootstrap");
+    const store = new SupabaseAgentLoopStore(client, bootstrap);
+
+    expect(await store.load("run-bootstrap")).toMatchObject({ status: "running" });
+    expect(bootstrap.context.messages).toEqual([{ role: "user", content: "之前的问题" }, { role: "assistant", content: "之前的回答" }]);
+    expect(rpc).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a stale normal checkpoint without adopting the newer database version", async () => {
-    const query = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn(), update: vi.fn() };
+    const query = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn() };
     query.select.mockReturnValue(query);
     query.eq.mockReturnValue(query);
     query.maybeSingle.mockResolvedValueOnce({ data: { state: { loopCheckpoint: { status: "running" } }, lock_version: 4 }, error: null })
       .mockResolvedValueOnce({ data: { state: { loopCheckpoint: { status: "completed" } }, lock_version: 5 }, error: null })
       .mockResolvedValueOnce({ data: { state: { loopCheckpoint: { status: "completed" } }, lock_version: 5 }, error: null });
-    query.update.mockReturnValue(query);
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: { message: "RUN_VERSION_CONFLICT" } });
     const from = vi.fn().mockReturnValue(query);
-    const store = new SupabaseAgentLoopStore({ from } as unknown as SupabaseClient);
+    const store = new SupabaseAgentLoopStore({ from, rpc } as unknown as SupabaseClient);
     await store.load("run-stale");
     await store.load("run-stale");
     await expect(store.save("run-stale", { messages: [], iterations: 2, toolCallCount: 0, status: "running" })).rejects.toThrow("changed while it was being updated");
-    expect(query.update).not.toHaveBeenCalled();
+    expect(rpc).toHaveBeenCalledWith("save_agent_loop_checkpoint", expect.objectContaining({ p_expected_lock_version: 4 }));
   });
 
   it("uses the owned version for atomic assistant saves and rejects stale writers", async () => {

@@ -181,10 +181,10 @@ export class AgentLoopRunner {
     this.onEngineeringEvent({ event: `agent.${event.type}`, metadata });
   }
 
-  private async withLeaseHeartbeat<T>(runId: string, operation: () => Promise<T>): Promise<T> {
+  private async withLeaseHeartbeat<T>(runId: string, operation: () => Promise<T>, options: { skipInitialBeat?: boolean } = {}): Promise<T> {
     if (!this.store.heartbeat) return operation();
     const beat = () => this.store.heartbeat!(runId).catch(() => false);
-    await beat();
+    if (!options.skipInitialBeat) await beat();
     const timer = setInterval(() => { void beat(); }, this.heartbeatIntervalMs);
     try { return await operation(); }
     finally { clearInterval(timer); }
@@ -351,20 +351,24 @@ export class AgentLoopRunner {
     checkpoint.finalText = undefined;
     const events: AgentEvent[] = [];
     const durableEvents: AgentEvent[] = [];
-    const flushDurableEvents = async () => {
-      if (!durableEvents.length || !this.store.appendEvents) return;
+    let eventPersistenceChain = Promise.resolve();
+    const flushDurableEvents = () => {
+      if (!durableEvents.length || !this.store.appendEvents) return eventPersistenceChain;
       const batch = durableEvents.splice(0, durableEvents.length);
-      try {
-        await this.store.appendEvents(runId, batch);
-      } catch {
-        for (const event of batch) {
-          this.onEngineeringEvent?.({ event: "agent.event.persist_failed", metadata: { runId, eventId: event.eventId, eventType: event.type } });
+      eventPersistenceChain = eventPersistenceChain.then(async () => {
+        try {
+          await this.store.appendEvents!(runId, batch);
+        } catch {
+          for (const event of batch) {
+            this.onEngineeringEvent?.({ event: "agent.event.persist_failed", metadata: { runId, eventId: event.eventId, eventType: event.type } });
+          }
         }
-      }
+      });
+      return eventPersistenceChain;
     };
     const saveCheckpoint = async () => {
       await this.store.save(runId, checkpoint);
-      await flushDurableEvents();
+      void flushDurableEvents();
     };
     const emit = (event: AgentEventPayload, notify = true) => {
       const timestamped = createAgentEvent(runId, event);
@@ -414,7 +418,7 @@ export class AgentLoopRunner {
       const timeout = setTimeout(() => modelController.abort(new Error("模型响应超时")), this.modelTimeoutMs);
       signal?.addEventListener("abort", abortModel, { once: true });
       try {
-        decision = await this.withLeaseHeartbeat(runId, () => this.model.decide({ messages: context.messages, tools: this.tools, signal: modelController.signal, onTextDelta: (text) => emit({ type: "model.delta", text, channel: "commentary" }) }));
+        decision = await this.withLeaseHeartbeat(runId, () => this.model.decide({ messages: context.messages, tools: this.tools, signal: modelController.signal, onTextDelta: (text) => emit({ type: "model.delta", text, channel: "commentary" }) }), { skipInitialBeat: true });
       } catch (error) {
         if (signal?.aborted) {
           const cancelled = await this.store.load(runId);
@@ -595,20 +599,24 @@ export class AgentLoopRunner {
     const input = tool.inputSchema.parse(inputValue);
     const events: AgentEvent[] = [];
     const durableEvents: AgentEvent[] = [];
-    const flushDurableEvents = async () => {
-      if (!durableEvents.length || !this.store.appendEvents) return;
+    let eventPersistenceChain = Promise.resolve();
+    const flushDurableEvents = () => {
+      if (!durableEvents.length || !this.store.appendEvents) return eventPersistenceChain;
       const batch = durableEvents.splice(0, durableEvents.length);
-      try {
-        await this.store.appendEvents(runId, batch);
-      } catch {
-        for (const event of batch) {
-          this.onEngineeringEvent?.({ event: "agent.event.persist_failed", metadata: { runId, eventId: event.eventId, eventType: event.type } });
+      eventPersistenceChain = eventPersistenceChain.then(async () => {
+        try {
+          await this.store.appendEvents!(runId, batch);
+        } catch {
+          for (const event of batch) {
+            this.onEngineeringEvent?.({ event: "agent.event.persist_failed", metadata: { runId, eventId: event.eventId, eventType: event.type } });
+          }
         }
-      }
+      });
+      return eventPersistenceChain;
     };
     const saveCheckpoint = async () => {
       await this.store.save(runId, checkpoint);
-      await flushDurableEvents();
+      void flushDurableEvents();
     };
     const emit = (event: AgentEventPayload, notify = true) => {
       const activityEvent = createAgentEvent(runId, event);

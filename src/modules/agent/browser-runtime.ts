@@ -17,7 +17,7 @@ const userFacingError = (code: string | undefined, fallback: string) => ({
   TURN_NOT_ALLOWED: "当前对话正在等待处理，请先完成待处理的确认或回答。",
 }[code ?? ""] ?? fallback);
 
-type BrowserLog = { event: string; durationMs?: number; status?: number; route?: string; firstEventMs?: number; chunkCount?: number; frameCount?: number; bytesReceived?: number; lastEventId?: string; finalResultReceived?: boolean };
+type BrowserLog = { event: string; durationMs?: number; totalMs?: number; timeToHeadersMs?: number; firstEventMs?: number; firstSseEventMs?: number; firstModelDeltaMs?: number; chunkCount?: number; frameCount?: number; bytesReceived?: number; status?: number; route?: string; lastEventId?: string; finalResultReceived?: boolean };
 const browserLogQueue: BrowserLog[] = [];
 let browserLogFlushTimer: ReturnType<typeof setTimeout> | undefined;
 const flushBrowserLogs = () => {
@@ -60,8 +60,11 @@ async function consumeAgentStream(
   response: Response,
   runId: string,
   onEvent: (event: AgentEvent) => void,
+  startedAt: number,
+  timeToHeadersMs: number,
 ) {
   if (!response.ok || !response.body) {
+    logBrowserEvent({ event: "client.agent.loop_stream.failed", timeToHeadersMs, totalMs: performance.now() - startedAt, status: response.status, chunkCount: 0, frameCount: 0, bytesReceived: 0, finalResultReceived: false });
     const body = await response.json().catch(() => ({})) as { code?: string; message?: string };
     throw new Error(body.message ?? body.code ?? `HTTP_${response.status}`);
   }
@@ -71,25 +74,28 @@ async function consumeAgentStream(
   let chunkCount = 0;
   let frameCount = 0;
   let bytesReceived = 0;
-  let firstEventMs: number | undefined;
-  const started = performance.now();
+  let firstSseEventMs: number | undefined;
+  let firstModelDeltaMs: number | undefined;
   try {
     while (true) {
       const next = await reader.read();
       if (next.done) break;
     chunkCount += 1;
     bytesReceived += next.value.byteLength;
-    firstEventMs ??= performance.now() - started;
       for (const frame of parser.push(next.value)) {
         const event = frame.event;
         const raw = frame.data;
         if (!event) continue;
         frameCount += 1;
+        firstSseEventMs ??= performance.now() - startedAt;
         if (!raw) continue;
         const data = JSON.parse(raw) as unknown;
         if (event === "event") {
           const normalized = isAgentEvent(data) && data.runId === runId ? data : undefined;
-          if (normalized) onEvent(normalized);
+          if (normalized) {
+            if (normalized.type === "model.delta") firstModelDeltaMs ??= performance.now() - startedAt;
+            onEvent(normalized);
+          }
         }
         if (event === "result" && typeof data === "object" && data !== null) finalResult = data as BrowserAgentLoopResult;
         if (event === "error") {
@@ -104,22 +110,56 @@ async function consumeAgentStream(
       const data = JSON.parse(frame.data) as unknown;
       if (frame.event === "event") {
         const normalized = isAgentEvent(data) && data.runId === runId ? data : undefined;
-        if (normalized) onEvent(normalized);
+        if (normalized) {
+          if (normalized.type === "model.delta") firstModelDeltaMs ??= performance.now() - startedAt;
+          onEvent(normalized);
+        }
       }
       if (frame.event === "result" && typeof data === "object" && data !== null) finalResult = data as BrowserAgentLoopResult;
       if (frame.event === "error") throw new Error(userFacingError((data as { code?: string }).code, "这次请求没有完成，请稍后重试。"));
     }
   } catch (error) {
-    logBrowserEvent({ event: "client.sse.failed", firstEventMs, chunkCount, frameCount, bytesReceived, finalResultReceived: Boolean(finalResult) });
+    logBrowserEvent({ event: "client.agent.loop_stream.failed", timeToHeadersMs, firstSseEventMs, firstModelDeltaMs, totalMs: performance.now() - startedAt, chunkCount, frameCount, bytesReceived, finalResultReceived: Boolean(finalResult) });
     throw error;
   }
-  logBrowserEvent({ event: finalResult ? "client.sse.completed" : "client.sse.failed", firstEventMs, chunkCount, frameCount, bytesReceived, finalResultReceived: Boolean(finalResult) });
-  if (!finalResult) throw new Error("AGENT_STREAM_INCOMPLETE");
+  if (!finalResult) {
+    logBrowserEvent({ event: "client.agent.loop_stream.failed", timeToHeadersMs, firstSseEventMs, firstModelDeltaMs, totalMs: performance.now() - startedAt, chunkCount, frameCount, bytesReceived, finalResultReceived: false });
+    throw new Error("AGENT_STREAM_INCOMPLETE");
+  }
+  logBrowserEvent({ event: "client.agent.loop_stream.completed", timeToHeadersMs, firstSseEventMs, firstModelDeltaMs, totalMs: performance.now() - startedAt, chunkCount, frameCount, bytesReceived, finalResultReceived: true });
   return { ...finalResult, events: finalResult.events.filter(isAgentEvent) };
 }
 
-export const createBrowserAgentRun = async (taskId: string, goal: string, clientMessageId?: string) =>
-  (await json<AgentResponse>("/api/agent/runs", post({ taskId, goal, ...(clientMessageId ? { clientMessageId } : {}) }))).run;
+const consumeAgentFetch = async (
+  request: Promise<Response>,
+  runId: string,
+  onEvent: (event: AgentEvent) => void,
+) => {
+  const startedAt = performance.now();
+  let responseReceived = false;
+  try {
+    const response = await request;
+    responseReceived = true;
+    return consumeAgentStream(response, runId, onEvent, startedAt, performance.now() - startedAt);
+  } catch (error) {
+    if (!responseReceived) {
+      logBrowserEvent({ event: "client.agent.loop_stream.failed", totalMs: performance.now() - startedAt, finalResultReceived: false });
+    }
+    throw error;
+  }
+};
+
+export const createBrowserAgentRun = async (taskId: string, goal: string, clientMessageId?: string) => {
+  const started = performance.now();
+  try {
+    const run = (await json<AgentResponse>("/api/agent/runs", post({ taskId, goal, ...(clientMessageId ? { clientMessageId } : {}) }))).run;
+    logBrowserEvent({ event: "client.agent.run_create.completed", durationMs: performance.now() - started });
+    return run;
+  } catch (error) {
+    logBrowserEvent({ event: "client.agent.run_create.failed", durationMs: performance.now() - started });
+    throw error;
+  }
+};
 
 export const loadBrowserAgentRun = async (runId: string) =>
   (await json<AgentResponse>(`/api/agent/runs/${runId}`)).run;
@@ -194,8 +234,8 @@ export async function runBrowserAgentLoopStream(
   clientMessageId?: string,
   interactionId?: string,
 ) {
-  return consumeAgentStream(
-    await fetch(`/api/agent/runs/${runId}/loop`, { ...post({ message, permissionMode, ...(clientMessageId ? { clientMessageId } : {}), ...(interactionId ? { interactionId } : {}) }), method: "PUT", signal }),
+  return consumeAgentFetch(
+    fetch(`/api/agent/runs/${runId}/loop`, { ...post({ message, permissionMode, ...(clientMessageId ? { clientMessageId } : {}), ...(interactionId ? { interactionId } : {}) }), method: "PUT", signal }),
     runId,
     onEvent,
   );
@@ -225,11 +265,7 @@ export async function recoverBrowserAgentLoop(
     if (page.hasMore) { attempt -= 1; continue; }
     if (page.checkpoint.status !== "running") return page;
     try {
-      const recovered = await consumeAgentStream(
-        await fetch(`/api/agent/runs/${runId}/loop/recover`, { method: "PUT", signal }),
-        runId,
-        onEvent,
-      );
+      const recovered = await consumeAgentFetch(fetch(`/api/agent/runs/${runId}/loop/recover`, { method: "PUT", signal }), runId, onEvent);
       return recovered;
     } catch (error) {
       if (signal?.aborted) throw error;
@@ -253,8 +289,8 @@ export const resumeBrowserAgentLoopStream = async (
   callId: string,
   onEvent: (event: AgentEvent) => void,
   signal?: AbortSignal,
-) => consumeAgentStream(
-  await fetch(`/api/agent/runs/${runId}/loop/resume`, { ...post({ approval, interactionId, callId }), method: "PUT", signal }),
+) => consumeAgentFetch(
+  fetch(`/api/agent/runs/${runId}/loop/resume`, { ...post({ approval, interactionId, callId }), method: "PUT", signal }),
   runId,
   onEvent,
 );

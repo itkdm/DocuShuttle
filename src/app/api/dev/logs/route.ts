@@ -4,7 +4,7 @@ import { logger } from "@/infrastructure/observability";
 export async function POST(request: Request) {
   if (process.env.NODE_ENV === "production") return NextResponse.json({ code: "NOT_FOUND" }, { status: 404 });
   const payload = await request.json().catch(() => ({})) as { events?: unknown[] };
-  const allowed = new Set(["client.fetch.completed", "client.fetch.failed", "client.sse.completed", "client.sse.failed"]);
+  const allowed = new Set(["client.fetch.completed", "client.fetch.failed", "client.sse.completed", "client.sse.failed", "client.agent.run_create.completed", "client.agent.run_create.failed", "client.agent.loop_stream.completed", "client.agent.loop_stream.failed"]);
   const events = Array.isArray(payload.events) ? payload.events : [];
   for (const event of events) {
     if (!event || typeof event !== "object") continue;

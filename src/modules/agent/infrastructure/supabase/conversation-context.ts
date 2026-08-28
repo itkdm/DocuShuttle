@@ -34,9 +34,10 @@ const toSemanticMessage = (row: MessageRow): AgentLoopMessage | undefined => {
  * event, tool, receipt, and interaction data never cross this boundary.
  */
 export class SupabaseAgentConversationContext implements AgentConversationContextPort {
-  constructor(private readonly client: SupabaseClient) {}
+  constructor(private readonly client: SupabaseClient, private readonly bootstrap?: AgentConversationContext) {}
 
   async loadPriorMessages(runId: string): Promise<AgentConversationContext> {
+    if (this.bootstrap) return this.bootstrap;
     const run = await this.client.from("agent_runs").select("state").eq("id", runId).single();
     if (run.error) throw new Error(`Unable to load run conversation: ${run.error.message}`);
     const conversationId = (run.data?.state as { conversationId?: unknown } | null)?.conversationId;

@@ -29,16 +29,17 @@ const eventPayload = (event: string, data: unknown) => {
 
 async function createRunner(runId: string) {
   const { client } = await requireSupabaseIdentity();
-  const run = await client.from("agent_runs").select("task_id").eq("id", runId).single();
-  if (run.error || !run.data) throw new Error("RUN_NOT_FOUND");
+  const bootstrapStore = new SupabaseAgentLoopStore(client);
+  const bootstrap = await bootstrapStore.loadBootstrap(runId);
   const kernel = new OoxmlPreservationKernel();
-  const taskId = run.data.task_id as string;
+  const taskId = bootstrap.taskId;
+  const loopStore = new SupabaseAgentLoopStore(client, bootstrap);
   const tools = [
     ...createDocumentTools(kernel, new SupabaseWorkingDocumentAccess(client, taskId, runId), ({ event, metadata }) => logger.info(event, { ...metadata, runId, taskId })),
     ...createSourceContextTools(taskId, new SupabaseSourceDocumentContext(client), kernel),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
-  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), new SupabaseAgentLoopStore(client), tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client));
+  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client, bootstrap.context));
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ runId: string }> }) {

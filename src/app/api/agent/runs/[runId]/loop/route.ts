@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { requireSupabaseUser } from "@/infrastructure/supabase/server";
+import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { AgentLoopRunner, type AgentPermissionMode } from "@/modules/agent/application/loop";
 import { isDurableAgentEvent } from "@/modules/agent/application/events";
 import { createDocumentTools } from "@/modules/agent/application/document-tools";
@@ -28,7 +28,7 @@ const eventPayload = (event: string, data: unknown) => {
 };
 
 async function createRunner(runId: string) {
-  const { client } = await requireSupabaseUser();
+  const { client } = await requireSupabaseIdentity();
   const run = await client.from("agent_runs").select("task_id").eq("id", runId).single();
   if (run.error || !run.data) throw new Error("RUN_NOT_FOUND");
   const kernel = new OoxmlPreservationKernel();
@@ -47,7 +47,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ runI
   return withLogContext({ requestId }, async () => {
     const started = performance.now();
   try {
-    const { client } = await requireSupabaseUser();
+    const { client } = await requireSupabaseIdentity();
     const checkpoint = await new SupabaseAgentLoopStore(client).load(runId);
     if (!checkpoint) return NextResponse.json({ code: "LOOP_NOT_FOUND" }, { status: 404 });
     const url = new URL(request.url);

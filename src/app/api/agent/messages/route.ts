@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { performance } from "node:perf_hooks";
 import { logger } from "@/infrastructure/observability";
-import { requireSupabaseUser } from "@/infrastructure/supabase/server";
+import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 
 const querySchema = z.object({
   taskId: z.uuid(),
@@ -22,7 +22,7 @@ export async function GET(request: Request) {
   const started = performance.now();
   try {
     const input = querySchema.parse(Object.fromEntries(new URL(request.url).searchParams));
-    const { client } = await requireSupabaseUser();
+    const { client } = await requireSupabaseIdentity();
     const conversation = await client.from("conversations").select("id").eq("task_id", input.taskId).maybeSingle();
     if (conversation.error) throw new Error(conversation.error.message);
     if (!conversation.data) return NextResponse.json({ messages: [], nextCursor: null });

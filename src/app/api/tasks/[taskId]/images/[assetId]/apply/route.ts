@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { logger } from "@/infrastructure/observability";
-import { requireSupabaseUser } from "@/infrastructure/supabase/server";
+import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { SupabaseStorageAdapter } from "@/modules/storage/adapters/supabase-storage";
 import { OoxmlPreservationKernel } from "@/modules/documents/infrastructure/ooxml/ooxml-preservation-kernel";
 import { ApplyImageCandidate, applyImageCandidateInputSchema, ApplyImageCandidateError } from "@/modules/generation/application/apply-image-candidate";
@@ -10,9 +10,9 @@ import { SupabaseImageCandidateSource, SupabaseUserDocumentVersionCommit, Supaba
 export async function POST(request: Request, { params }: { params: Promise<{ taskId: string; assetId: string }> }) {
   try {
     const { taskId, assetId } = await params;
-    const { client, user } = await requireSupabaseUser();
+    const { client, userId } = await requireSupabaseIdentity();
     const body = applyImageCandidateInputSchema.parse({ ...(await request.json()), taskId, assetId });
-    const result = await new ApplyImageCandidate(new SupabaseImageCandidateSource(client), new SupabaseWorkingDocumentSnapshot(client), new SupabaseUserDocumentVersionCommit(client), new SupabaseStorageAdapter(client), new OoxmlPreservationKernel()).execute({ ...body, ownerUserId: user.id });
+    const result = await new ApplyImageCandidate(new SupabaseImageCandidateSource(client), new SupabaseWorkingDocumentSnapshot(client), new SupabaseUserDocumentVersionCommit(client), new SupabaseStorageAdapter(client), new OoxmlPreservationKernel()).execute({ ...body, ownerUserId: userId });
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
     if (error instanceof ZodError || error instanceof ApplyImageCandidateError) return NextResponse.json({ code: "INVALID_IMAGE_APPLY", message: error instanceof Error ? error.message : "Invalid image apply request." }, { status: 409 });

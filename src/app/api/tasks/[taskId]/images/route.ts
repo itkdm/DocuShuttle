@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { logger } from "@/infrastructure/observability";
 
-import { requireSupabaseUser } from "@/infrastructure/supabase/server";
+import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { SupabaseStorageAdapter } from "@/modules/storage/adapters/supabase-storage";
 import { createAPIMartAdapterFromEnvironment } from "@/modules/generation/adapters/apimart";
 import { GenerateImageCandidates, generateImageCandidatesInputSchema, ImageGenerationInputError, RemoteImageFetcher } from "@/modules/generation/application/generate-image-candidates";
@@ -12,7 +12,7 @@ import { SupabaseTaskRepository } from "@/modules/tasks/adapters/supabase-task-r
 export async function POST(request: Request, { params }: { params: Promise<{ taskId: string }> }) {
   try {
     const { taskId } = await params;
-    const { client, user } = await requireSupabaseUser();
+    const { client, userId } = await requireSupabaseIdentity();
     const body = generateImageCandidatesInputSchema.parse({ ...(await request.json()), taskId });
     const result = await new GenerateImageCandidates(
       new SupabaseTaskRepository(client),
@@ -20,7 +20,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ tas
       new SupabaseStorageAdapter(client),
       new SupabaseGeneratedAssetStore(client),
       new RemoteImageFetcher(),
-    ).execute({ ...body, ownerUserId: user.id });
+    ).execute({ ...body, ownerUserId: userId });
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
     if (error instanceof ZodError || error instanceof ImageGenerationInputError) {

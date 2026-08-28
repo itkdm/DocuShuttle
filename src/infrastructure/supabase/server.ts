@@ -1,6 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { performance } from "node:perf_hooks";
 
+import { logger } from "@/infrastructure/observability";
 import { getSupabasePublicEnvironment } from "./environment";
 
 export const createSupabaseServerClient = async () => {
@@ -22,9 +24,12 @@ export const createSupabaseServerClient = async () => {
   });
 };
 
-export const requireSupabaseUser = async () => {
+export const requireSupabaseIdentity = async () => {
+  const started = performance.now();
   const client = await createSupabaseServerClient();
-  const { data, error } = await client.auth.getUser();
-  if (error || !data.user) throw new Error("AUTHENTICATION_REQUIRED");
-  return { client, user: data.user };
+  const { data, error } = await client.auth.getClaims();
+  const userId = data?.claims?.sub;
+  if (error || typeof userId !== "string" || userId.trim().length === 0) throw new Error("AUTHENTICATION_REQUIRED");
+  logger.info("server.auth.identity.completed", { durationMs: performance.now() - started, strategy: "claims" });
+  return { client, userId };
 };

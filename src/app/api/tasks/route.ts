@@ -3,7 +3,7 @@ import { z } from "zod";
 import { performance } from "node:perf_hooks";
 import { logger } from "@/infrastructure/observability";
 
-import { requireSupabaseUser } from "@/infrastructure/supabase/server";
+import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { SupabaseTaskRepository } from "@/modules/tasks/adapters/supabase-task-repository";
 import { CreateTask } from "@/modules/tasks/create-task";
 import { ListTasks } from "@/modules/tasks/list-tasks";
@@ -22,8 +22,8 @@ export async function GET(request: Request) {
   const started = performance.now();
   try {
     const query = listQuerySchema.parse(Object.fromEntries(new URL(request.url).searchParams));
-    const { client, user } = await requireSupabaseUser();
-    const tasks = await new ListTasks(new SupabaseTaskRepository(client)).execute(user.id, { limit: query.limit + 1, offset: query.offset });
+    const { client, userId } = await requireSupabaseIdentity();
+    const tasks = await new ListTasks(new SupabaseTaskRepository(client)).execute(userId, { limit: query.limit + 1, offset: query.offset });
     const hasMore = tasks.length > query.limit;
     logger.info("tasks.list.completed", { durationMs: performance.now() - started, taskCount: Math.min(tasks.length, query.limit), offset: query.offset, limit: query.limit, hasMore });
     return NextResponse.json({ tasks: tasks.slice(0, query.limit), nextOffset: hasMore ? query.offset + query.limit : null, hasMore });
@@ -39,9 +39,9 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const input = requestSchema.parse(await request.json());
-    const { client, user } = await requireSupabaseUser();
+    const { client, userId } = await requireSupabaseIdentity();
     const task = await new CreateTask(new SupabaseTaskRepository(client)).execute({
-      ownerUserId: user.id,
+      ownerUserId: userId,
       title: input.title,
       goal: input.goal,
     });

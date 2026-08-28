@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 
-import { requireSupabaseUser } from "@/infrastructure/supabase/server";
+import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { SupabaseStorageAdapter } from "@/modules/storage/adapters/supabase-storage";
 
 export async function POST(_request: Request, { params }: { params: Promise<{ taskId: string }> }) {
   try {
     const { taskId } = await params;
-    const { client } = await requireSupabaseUser();
+    const { client } = await requireSupabaseIdentity();
     const result = await client.rpc("record_document_export", { p_task_id: taskId }).single();
     if (result.error || !result.data) return NextResponse.json({ code: "EXPORT_FAILED" }, { status: 409 });
     const row = result.data as { export_id: string; version_id: string; version_number: number; revision: string; object_key: string };

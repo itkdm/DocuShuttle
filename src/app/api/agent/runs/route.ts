@@ -3,7 +3,7 @@ import { z } from "zod";
 import { performance } from "node:perf_hooks";
 import { logger } from "@/infrastructure/observability";
 
-import { requireSupabaseUser } from "@/infrastructure/supabase/server";
+import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { SupabaseAgentRunStore } from "@/modules/agent/infrastructure/supabase/runtime-persistence";
 import { AGENT_LEASE_MANAGED_STATUSES } from "@/modules/agent/application/loop";
 import { isDurableAgentEvent, type DurableAgentEvent } from "@/modules/agent/application/events";
@@ -15,7 +15,7 @@ export async function GET(request: Request) {
   const started = performance.now();
   try {
     const taskId = z.uuid().parse(new URL(request.url).searchParams.get("taskId"));
-    const { client } = await requireSupabaseUser();
+    const { client } = await requireSupabaseIdentity();
     const result = await client
       .from("agent_runs")
       .select("id, state, status, created_at, updated_at")
@@ -61,14 +61,14 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const input = schema.parse(await request.json());
-    const { client, user } = await requireSupabaseUser();
+    const { client, userId } = await requireSupabaseIdentity();
     // Do not allocate a new immutable run while the conversation has a
     // durable HITL boundary. Approval and ask_user answers must continue the
     // existing run/checkpoint; creating here would fork and lose context.
     const latest = await client.from("agent_runs")
       .select("id, state, status, lease_expires_at")
       .eq("task_id", input.taskId)
-      .eq("owner_user_id", user.id)
+      .eq("owner_user_id", userId)
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -87,7 +87,7 @@ export async function POST(request: Request) {
     }
     const run = await new SupabaseAgentRunStore(client).createForTask({
       taskId: input.taskId,
-      ownerUserId: user.id,
+      ownerUserId: userId,
       now: new Date().toISOString(),
       goal: input.goal,
       clientMessageId: input.clientMessageId,

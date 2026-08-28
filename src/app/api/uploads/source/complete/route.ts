@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { logger } from "@/infrastructure/observability";
 
-import { requireSupabaseUser } from "@/infrastructure/supabase/server";
+import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { OoxmlPreservationKernel } from "@/modules/documents";
 import { SupabaseStorageAdapter } from "@/modules/storage/adapters/supabase-storage";
 import { SupabaseTaskRepository } from "@/modules/tasks/adapters/supabase-task-repository";
@@ -20,12 +20,12 @@ const schema = z.object({
 export async function POST(request: Request) {
   try {
     const input = schema.parse(await request.json());
-    const { client, user } = await requireSupabaseUser();
+    const { client, userId } = await requireSupabaseIdentity();
     const result = await new CompleteSourceUpload(
       new SupabaseTaskRepository(client),
       new SupabaseStorageAdapter(client),
       new OoxmlPreservationKernel(),
-    ).execute({ ...input, ownerUserId: user.id });
+    ).execute({ ...input, ownerUserId: userId });
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });

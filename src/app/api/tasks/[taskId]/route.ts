@@ -3,7 +3,7 @@ import { z } from "zod";
 import { performance } from "node:perf_hooks";
 import { logger } from "@/infrastructure/observability";
 
-import { requireSupabaseUser } from "@/infrastructure/supabase/server";
+import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { SupabaseTaskRepository } from "@/modules/tasks/adapters/supabase-task-repository";
 import { GetTaskWorkspace } from "@/modules/tasks/get-task-workspace";
 
@@ -13,10 +13,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tas
   const started = performance.now();
   try {
     const { taskId } = paramsSchema.parse(await params);
-    const { client, user } = await requireSupabaseUser();
+    const { client, userId } = await requireSupabaseIdentity();
     const workspace = await new GetTaskWorkspace(new SupabaseTaskRepository(client)).execute({
       taskId,
-      ownerUserId: user.id,
+      ownerUserId: userId,
     });
     if (!workspace) {
       logger.warn("tasks.workspace.not_found", { taskId, durationMs: performance.now() - started });

@@ -1,16 +1,16 @@
 import { NextResponse } from "next/server";
 import { logger } from "@/infrastructure/observability";
-import { requireSupabaseUser } from "@/infrastructure/supabase/server";
+import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { SupabaseStorageAdapter } from "@/modules/storage/adapters/supabase-storage";
 import { OoxmlPreservationKernel } from "@/modules/documents/infrastructure/ooxml/ooxml-preservation-kernel";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ taskId: string }> }) {
   try {
     const { taskId } = await params;
-    const { client, user } = await requireSupabaseUser();
-    const document = await client.from("working_documents").select("id, current_version_id").eq("task_id", taskId).eq("owner_user_id", user.id).maybeSingle();
+    const { client, userId } = await requireSupabaseIdentity();
+    const document = await client.from("working_documents").select("id, current_version_id").eq("task_id", taskId).eq("owner_user_id", userId).maybeSingle();
     if (document.error || !document.data?.current_version_id) return NextResponse.json({ code: "DOCUMENT_NOT_FOUND" }, { status: 404 });
-    const version = await client.from("document_versions").select("object_key, sha256").eq("id", document.data.current_version_id).eq("owner_user_id", user.id).single();
+    const version = await client.from("document_versions").select("object_key, sha256").eq("id", document.data.current_version_id).eq("owner_user_id", userId).single();
     if (version.error || !version.data) return NextResponse.json({ code: "VERSION_NOT_FOUND" }, { status: 404 });
     const inspection = await new OoxmlPreservationKernel().inspect(await new SupabaseStorageAdapter(client).get(version.data.object_key as string));
     return NextResponse.json({ revision: version.data.sha256, counts: { paragraphs: inspection.paragraphs.length, tableCells: inspection.tableCells.length, images: inspection.images.length }, images: inspection.images.map(({ address, contentType, byteLength }) => ({ nodeId: address.nodeId, contentType, byteLength, path: address.path })) });

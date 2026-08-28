@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { logger } from "@/infrastructure/observability";
-import { requireSupabaseUser } from "@/infrastructure/supabase/server";
+import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { AgentLoopRunner } from "@/modules/agent/application/loop";
 import { createDocumentTools } from "@/modules/agent/application/document-tools";
 import { createDocumentVersionTools } from "@/modules/agent/application/document-version-tools";
@@ -16,7 +16,7 @@ import { OoxmlPreservationKernel } from "@/modules/documents";
 const frame = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 
 async function createRunner(runId: string) {
-  const { client } = await requireSupabaseUser();
+  const { client } = await requireSupabaseIdentity();
   const row = await client.from("agent_runs").select("task_id").eq("id", runId).single();
   if (row.error || !row.data) throw new Error("RUN_NOT_FOUND");
   const kernel = new OoxmlPreservationKernel();

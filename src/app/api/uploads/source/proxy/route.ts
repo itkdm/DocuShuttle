@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { logger } from "@/infrastructure/observability";
 
-import { requireSupabaseUser } from "@/infrastructure/supabase/server";
+import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { OoxmlPreservationKernel } from "@/modules/documents";
 import { sha256 } from "@/modules/documents/infrastructure/ooxml/hash";
 import { buildTaskObjectKey } from "@/modules/storage/object-key";
@@ -25,14 +25,14 @@ export async function POST(request: Request) {
     if (!(file instanceof File) || !file.name.toLowerCase().endsWith(".docx")) return NextResponse.json({ code: "DOCX_REQUIRED" }, { status: 400 });
     if (file.size < 1 || file.size > maxProxyBytes) return NextResponse.json({ code: "PROXY_UPLOAD_LIMIT" }, { status: 413 });
 
-    const { client, user } = await requireSupabaseUser();
+    const { client, userId } = await requireSupabaseIdentity();
     const bytes = new Uint8Array(await file.arrayBuffer());
     const checksum = await sha256(bytes);
-    const objectKey = buildTaskObjectKey({ userId: user.id, taskId: input.taskId, category: "sources", fileName: `${crypto.randomUUID()}.docx` });
+    const objectKey = buildTaskObjectKey({ userId, taskId: input.taskId, category: "sources", fileName: `${crypto.randomUUID()}.docx` });
     const storage = new SupabaseStorageAdapter(client);
     await storage.put(objectKey, bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     const result = await new CompleteSourceUpload(new SupabaseTaskRepository(client), storage, new OoxmlPreservationKernel()).execute({
-      ...input, ownerUserId: user.id, objectKey, expectedBytes: bytes.byteLength, expectedSha256: checksum,
+      ...input, ownerUserId: userId, objectKey, expectedBytes: bytes.byteLength, expectedSha256: checksum,
     });
     return NextResponse.json(result, { status: 201 });
   } catch (error) {

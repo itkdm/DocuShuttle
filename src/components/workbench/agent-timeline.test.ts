@@ -237,7 +237,7 @@ describe("Agent execution timeline", () => {
       ], "run-chronology"),
     });
     const assistant = projection.turns[0].assistant;
-    expect(assistant.activities.map((activity) => activity.type === "note" ? activity.text : activity.callId)).toEqual(["A", "call-1", "B", "call-2"]);
+    expect(assistant.activities.map((activity) => activity.type === "note" ? activity.text : activity.callId)).toEqual(["A", "call-1", "B", "call-2", "C"]);
     expect(assistant.activities.filter((activity) => activity.type === "tool" && activity.callId === "call-1")).toHaveLength(1);
     expect(assistant.finalContent).toBe("C-final");
     expect(assistant.streamingContent).toBeUndefined();
@@ -288,7 +288,7 @@ describe("Agent execution timeline", () => {
     expect(projection.turns).toHaveLength(2);
     expect(projection.turns[0].assistant.finalContent).toBe("你希望改成什么？");
     expect(projection.turns[0].assistant.streamingContent).toBeUndefined();
-    expect(projection.turns[1]).toMatchObject({ user: { content: "改成专业一点" }, assistant: { streamingContent: "正在修改" } });
+    expect(projection.turns[1]).toMatchObject({ user: { content: "改成专业一点" }, assistant: { streamingContent: undefined, activities: [{ type: "note", text: "正在修改" }] } });
     const withTool = projectAgentThread({ messages, historicalEvents: [], activeEvents: [...events, ...toEvents([
       { eventId: "tool-start", type: "tool.started", callId: "call-1", name: "apply_text_change", input: {}, runId: "run-1", timestamp: "2026-01-01T00:00:08Z" },
       { eventId: "tool-done", type: "tool.completed", callId: "call-1", name: "apply_text_change", output: {}, runId: "run-1", timestamp: "2026-01-01T00:00:09Z" },
@@ -368,5 +368,66 @@ describe("Agent execution timeline", () => {
       { type: "model.delta", text: "untrusted" },
       { type: "unknown.event", eventId: "e-3", timestamp: "2026-01-01" },
     ])).toEqual([{ type: "model.delta", text: "ok", eventId: "e-1", timestamp: "2026-01-01", runId: "run-1", sequence: 1 }]);
+  });
+
+  it("places the first commentary delta in execution immediately", () => {
+    const projection = projectAgentThread({
+      messages: [{ id: "u-live", role: "user", parts: [{ type: "text", text: "检查" }], run_id: "run-live", created_at: "2026-01-01", message_key: "u-live" }],
+      historicalEvents: [],
+      activeEvents: toEvents([{ type: "model.delta", text: "A", channel: "commentary" }], "run-live"),
+    });
+    expect(projection.turns[0].assistant.activities).toEqual([{ type: "note", id: "event-0", text: "A" }]);
+    expect(projection.turns[0].assistant.streamingContent).toBeUndefined();
+  });
+
+  it("coalesces continuous commentary and preserves note identity across tools", () => {
+    const events = toEvents([
+      { type: "model.delta", text: "A" },
+      { type: "model.delta", text: "B" },
+      { type: "tool.started", callId: "call-1", name: "inspect_document", input: {} },
+      { type: "tool.completed", callId: "call-1", name: "inspect_document", output: {} },
+      { type: "model.delta", text: "C" },
+      { type: "tool.started", callId: "call-2", name: "inspect_document", input: {} },
+    ]);
+    const projection = projectAgentThread({
+      messages: [{ id: "u-tools", role: "user", parts: [{ type: "text", text: "检查" }], run_id: "run-test", created_at: "2026-01-01", message_key: "u-tools" }],
+      historicalEvents: [],
+      activeEvents: events,
+    });
+    const activities = projection.turns[0].assistant.activities;
+    expect(activities.map((activity) => activity.type === "note" ? activity.text : activity.callId)).toEqual(["AB", "call-1", "C", "call-2"]);
+    expect(activities[2]).toMatchObject({ type: "note", id: "event-4", text: "C" });
+  });
+
+  it("removes only an identical active note when the assistant message arrives", () => {
+    const same = projectAgentThread({
+      messages: [{ id: "u-same", role: "user", parts: [{ type: "text", text: "检查" }], run_id: "run-same", created_at: "2026-01-01", message_key: "u-same" }],
+      historicalEvents: [],
+      activeEvents: toEvents([{ type: "model.delta", text: "答案" }, { type: "assistant.message", text: "答案" }], "run-same"),
+    });
+    expect(same.turns[0].assistant.activities).toEqual([]);
+    expect(same.turns[0].assistant.streamingContent).toBe("答案");
+
+    const different = projectAgentThread({
+      messages: [{ id: "u-different", role: "user", parts: [{ type: "text", text: "检查" }], run_id: "run-different", created_at: "2026-01-01", message_key: "u-different" }],
+      historicalEvents: [],
+      activeEvents: toEvents([{ type: "model.delta", text: "说明" }, { type: "assistant.message", text: "正式回答" }], "run-different"),
+    });
+    expect(different.turns[0].assistant.activities).toMatchObject([{ type: "note", text: "说明" }]);
+    expect(different.turns[0].assistant.streamingContent).toBe("正式回答");
+  });
+
+  it("routes final deltas to streaming content and reasoning summaries to notes", () => {
+    const projection = projectAgentThread({
+      messages: [{ id: "u-channels", role: "user", parts: [{ type: "text", text: "检查" }], run_id: "run-channels", created_at: "2026-01-01", message_key: "u-channels" }],
+      historicalEvents: [],
+      activeEvents: toEvents([
+        { type: "model.delta", text: "答", channel: "final" },
+        { type: "model.delta", text: "案", channel: "final" },
+        { type: "model.delta", text: "摘要", channel: "reasoning_summary" },
+      ], "run-channels"),
+    });
+    expect(projection.turns[0].assistant.streamingContent).toBe("答案");
+    expect(projection.turns[0].assistant.activities).toMatchObject([{ type: "note", text: "摘要" }]);
   });
 });

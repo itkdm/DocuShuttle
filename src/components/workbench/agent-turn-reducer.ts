@@ -7,7 +7,7 @@ export type AgentActivity =
 export type AgentTurnEventState = {
   readonly activities: readonly AgentActivity[];
   readonly streamingContent: string;
-  readonly textBuffer: string;
+  readonly activeNoteId?: string;
 };
 
 
@@ -29,19 +29,37 @@ const upsertTool = (activities: AgentActivity[], event: AgentEvent, state: Extra
   return activities.length - 1;
 };
 
-const flushTextBeforeTool = (activities: AgentActivity[], text: string, runId: string) => {
-  if (text) activities.push({ type: "note", id: `${runId}:note:${activities.filter((activity) => activity.type === "note").length}`, text });
+const modelDeltaChannel = (event: AgentEvent) => {
+  const channel = "channel" in event ? event.channel : undefined;
+  return channel === "final" ? "final" : "note";
+};
+
+const endActiveNote = (state: AgentTurnEventState): AgentTurnEventState => ({ ...state, activeNoteId: undefined });
+
+const appendLiveNote = (activities: AgentActivity[], state: AgentTurnEventState, event: AgentEvent, text: string, runId: string) => {
+  if (!text) return state;
+  if (state.activeNoteId) {
+    const index = activities.findIndex((activity) => activity.type === "note" && activity.id === state.activeNoteId);
+    const current = index >= 0 ? activities[index] : undefined;
+    if (current?.type === "note") {
+      activities[index] = { ...current, text: `${current.text}${text}` };
+      return { ...state, activities };
+    }
+  }
+  const id = event.eventId ?? `${runId}:note:${activities.filter((activity) => activity.type === "note").length}`;
+  activities.push({ type: "note", id, text });
+  return { ...state, activities, activeNoteId: id };
 };
 
 export function reduceAgentEvent(state: AgentTurnEventState, event: AgentEvent, runId: string): AgentTurnEventState {
   const activities = [...state.activities];
   if (event.type === "model.delta") {
     const text = event.text ?? "";
-    return { ...state, activities, textBuffer: `${state.textBuffer}${text}` };
+    if (modelDeltaChannel(event) === "final") return { ...state, activities, streamingContent: `${state.streamingContent}${text}`, activeNoteId: undefined };
+    return appendLiveNote(activities, state, event, text, runId);
   } else if (event.type === "tool.started" || event.type === "approval.required") {
-    flushTextBeforeTool(activities, state.textBuffer, runId);
     upsertTool(activities, event, event.type === "approval.required" ? "approval" : "running");
-    return { ...state, activities, textBuffer: "" };
+    return endActiveNote({ ...state, activities });
   } else if (event.type === "tool.completed" || event.type === "tool.failed" || event.type === "approval.resolved") {
     const callId = callIdOf(event);
     const index = toolIndexByCallId(activities, callId);
@@ -60,11 +78,17 @@ export function reduceAgentEvent(state: AgentTurnEventState, event: AgentEvent, 
       if (index >= 0) activities[index] = resolved; else activities.push(resolved);
     }
   } else if (event.type === "assistant.message") {
-    return { ...state, activities, streamingContent: event.text ?? "", textBuffer: "" };
+    const text = event.text ?? "";
+    if (state.activeNoteId) {
+      const index = activities.findIndex((activity) => activity.type === "note" && activity.id === state.activeNoteId);
+      const activeNote = index >= 0 ? activities[index] : undefined;
+      if (activeNote?.type === "note" && activeNote.text === text) activities.splice(index, 1);
+    }
+    return { ...state, activities, streamingContent: text, activeNoteId: undefined };
   }
   return { ...state, activities };
 }
 
 export function reduceAgentEvents(events: readonly AgentEvent[], runId: string): AgentTurnEventState {
-  return events.reduce<AgentTurnEventState>((state, event) => reduceAgentEvent(state, event, runId), { activities: [], streamingContent: "", textBuffer: "" });
+  return events.reduce<AgentTurnEventState>((state, event) => reduceAgentEvent(state, event, runId), { activities: [], streamingContent: "" });
 }

@@ -49,8 +49,7 @@ export function executionSummary(status: AgentThreadAssistant["status"], activit
 function assistantFor(runId: string, events: readonly AgentEvent[], message?: BrowserConversationMessage): AgentThreadAssistant {
   const finalContent = message && textPart(message);
   const reduced = reduceAgentEvents(events, runId);
-  const streamingContent = reduced.streamingContent || reduced.textBuffer;
-  return { messageId: message?.id, status: assistantStatus(events, finalContent), streamingContent: finalContent ? undefined : streamingContent || undefined, finalContent: finalContent || undefined, activities: reduced.activities };
+  return { messageId: message?.id, status: assistantStatus(events, finalContent), streamingContent: finalContent ? undefined : reduced.streamingContent || undefined, finalContent: finalContent || undefined, activities: reduced.activities };
 }
 
 function compareAnchors(a: AgentThreadTurn, b: AgentThreadTurn) {

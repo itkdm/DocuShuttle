@@ -1,6 +1,7 @@
 "use client";
 
 import type { TaskSummary, TaskWorkspace } from "./domain";
+import { createInFlightRequestCache } from "@/lib/in-flight-request";
 
 export type TaskPage = { tasks: TaskSummary[]; nextOffset: number | null; hasMore: boolean };
 
@@ -19,8 +20,11 @@ const json = async <T>(url: string): Promise<T> => {
   return body;
 };
 
+const workspaceRequests = createInFlightRequestCache<string, TaskWorkspace>();
+
 export const listBrowserTasks = async (offset = 0, limit = 20) =>
   json<TaskPage>(`/api/tasks?offset=${offset}&limit=${limit}`);
 
-export const loadBrowserTaskWorkspace = async (taskId: string) =>
-  (await json<{ workspace: TaskWorkspace }>(`/api/tasks/${taskId}`)).workspace;
+export const loadBrowserTaskWorkspace = (taskId: string) => workspaceRequests.load(taskId, async () =>
+  (await json<{ workspace: TaskWorkspace }>(`/api/tasks/${taskId}`)).workspace
+);

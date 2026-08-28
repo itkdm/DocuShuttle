@@ -5,6 +5,7 @@ import type { AgentRuntimePendingInteraction } from "./domain/model";
 import type { AgentPermissionMode } from "./application/loop";
 import { isAgentEvent, isDurableAgentEvent, type AgentEvent, type DurableAgentEvent } from "./application/events";
 import { SseParser } from "./browser/sse-parser";
+import { createInFlightRequestCache } from "@/lib/in-flight-request";
 
 type AgentResponse = { run: AgentRun };
 
@@ -150,10 +151,13 @@ export type BrowserConversationMessage = {
   delivery_status?: "pending" | "sent" | "failed";
 };
 
-export const loadBrowserConversationMessages = async (taskId: string, before?: string) =>
+const conversationRequests = createInFlightRequestCache<string, { conversationId: string | null; messages: ReadonlyArray<BrowserConversationMessage>; nextCursor: string | null }>();
+
+export const loadBrowserConversationMessages = (taskId: string, before?: string) => conversationRequests.load(`${taskId}:${before ?? "latest"}`, () =>
   json<{ conversationId: string | null; messages: ReadonlyArray<BrowserConversationMessage>; nextCursor: string | null }>(
     `/api/agent/messages?taskId=${encodeURIComponent(taskId)}&limit=30${before ? `&before=${encodeURIComponent(before)}` : ""}`,
-  );
+  )
+);
 
 export type BrowserAgentEvent = AgentEvent;
 

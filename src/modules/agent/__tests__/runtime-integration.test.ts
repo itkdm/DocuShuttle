@@ -197,6 +197,66 @@ describe("Agent runtime integration contracts", () => {
     expect(recovered.events.filter((event) => event.type === "tool.completed")).toHaveLength(1);
   });
 
+  it("reconciles a receipt after an ambiguous normal tool error", async () => {
+    const store = new DurableHarness();
+    let executions = 0;
+    const tool: AgentTool = {
+      name: "apply_change", description: "Apply", inputSchema: z.object({ text: z.string() }),
+      async execute(input, context) {
+        executions += 1;
+        store.receipts.set(context.idempotencyKey, { idempotencyKey: context.idempotencyKey, callId: context.callId, toolName: "apply_change", output: { applied: (input as { text: string }).text }, completedAt: new Date().toISOString() });
+        throw new Error("response lost after commit");
+      },
+    };
+    const decisions = [{ kind: "tool_calls" as const, calls: [{ id: "ambiguous-normal", name: "apply_change", input: { text: "一次" } }] }, { kind: "message" as const, text: "已完成" }];
+    const result = await runner({ decide: async () => decisions.shift()! }, store, [tool]).run("run-ambiguous-normal", "修改", undefined);
+    expect(result.checkpoint.status).toBe("completed");
+    expect(executions).toBe(1);
+    expect(store.events.filter((event) => event.type === "tool.completed")).toHaveLength(1);
+    expect(store.events.some((event) => event.type === "tool.failed")).toBe(false);
+  });
+
+  it("reconciles a receipt after an ambiguous approved tool error", async () => {
+    const store = new DurableHarness();
+    let executions = 0;
+    const tool: AgentTool = {
+      name: "apply_change", description: "Apply", inputSchema: z.object({ text: z.string() }), requiresApproval: true,
+      async execute(input, context) {
+        executions += 1;
+        store.receipts.set(context.idempotencyKey, { idempotencyKey: context.idempotencyKey, callId: context.callId, toolName: "apply_change", output: { applied: (input as { text: string }).text }, completedAt: new Date().toISOString() });
+        throw new Error("response lost after commit");
+      },
+    };
+    const paused = await runner({ decide: async () => ({ kind: "tool_calls", calls: [{ id: "ambiguous-approved", name: "apply_change", input: { text: "批准" } }] }) }, store, [tool]).run("run-ambiguous-approved", "修改");
+    const pending = paused.checkpoint.pendingInteraction;
+    if (!pending || pending.type !== "approval") throw new Error("approval checkpoint missing");
+    const result = await runner({ decide: async () => ({ kind: "message", text: "已完成" }) }, store, [tool]).resume("run-ambiguous-approved", "approved", pending.interactionId, pending.callId);
+    expect(result.checkpoint.status).toBe("completed");
+    expect(result.checkpoint.pendingResolution).toBeUndefined();
+    expect(executions).toBe(1);
+    expect(result.events.filter((event) => event.type === "tool.completed")).toHaveLength(1);
+    expect(result.events.some((event) => event.type === "tool.failed")).toBe(false);
+  });
+
+  it("reconciles a receipt after an ambiguous unfinished-tool recovery error", async () => {
+    const store = new DurableHarness();
+    let executions = 0;
+    const tool: AgentTool = {
+      name: "apply_change", description: "Apply", inputSchema: z.object({ text: z.string() }),
+      async execute(input, context) {
+        executions += 1;
+        store.receipts.set(context.idempotencyKey, { idempotencyKey: context.idempotencyKey, callId: context.callId, toolName: "apply_change", output: { applied: (input as { text: string }).text }, completedAt: new Date().toISOString() });
+        throw new Error("response lost after commit");
+      },
+    };
+    store.checkpoint = { status: "running", iterations: 1, toolCallCount: 1, permissionMode: "full", messages: [{ role: "assistant", content: "", toolCalls: [{ id: "ambiguous-recovery", name: "apply_change", input: { text: "恢复" } }] }] };
+    const result = await runner({ decide: async () => ({ kind: "message", text: "已恢复" }) }, store, [tool]).recover("run-ambiguous-recovery");
+    expect(result.checkpoint.status).toBe("completed");
+    expect(executions).toBe(1);
+    expect(store.events.filter((event) => event.type === "tool.completed")).toHaveLength(1);
+    expect(store.events.some((event) => event.type === "tool.failed")).toBe(false);
+  });
+
   it("keeps runtime correct when EventStore fails and preserves cross-run semantic context", async () => {
     const diagnostics: string[] = [];
     const store = new DurableHarness();

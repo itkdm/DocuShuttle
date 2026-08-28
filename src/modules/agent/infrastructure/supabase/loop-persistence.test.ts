@@ -78,21 +78,34 @@ describe("SupabaseAgentLoopStore interaction resolution contract", () => {
     });
   });
 
-  it("adopts the authoritative run version returned by the effect receipt RPC", async () => {
+  it("preserves the owned run version returned by the effect receipt RPC", async () => {
     const query = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn() };
     query.select.mockReturnValue(query);
     query.eq.mockReturnValue(query);
     query.maybeSingle.mockResolvedValue({ data: { state: { loopCheckpoint: { status: "running" } }, lock_version: 3 }, error: null });
     const receipt = { idempotencyKey: "run-effect:call-1", callId: "call-1", toolName: "apply_text_change", output: { revision: "rev-2" }, completedAt: "2026-08-28T00:00:00.000Z" };
     const rpc = vi.fn()
-      .mockResolvedValueOnce({ data: { receipt, lockVersion: 4 }, error: null })
-      .mockResolvedValueOnce({ data: { checkpoint: { status: "running" }, lockVersion: 5 }, error: null });
+      .mockResolvedValueOnce({ data: { receipt, lockVersion: 3 }, error: null })
+      .mockResolvedValueOnce({ data: { checkpoint: { status: "running" }, lockVersion: 4 }, error: null });
     const store = new SupabaseAgentLoopStore({ from: vi.fn().mockReturnValue(query), rpc } as unknown as SupabaseClient);
 
     await store.load("run-effect");
     await expect(store.saveEffectReceipt("run-effect", receipt)).resolves.toEqual(receipt);
     await store.save("run-effect", { messages: [], iterations: 1, toolCallCount: 1, status: "running" });
-    expect(rpc).toHaveBeenLastCalledWith("save_agent_loop_checkpoint", expect.objectContaining({ p_expected_lock_version: 4 }));
+    expect(rpc).toHaveBeenNthCalledWith(1, "save_effect_receipt", expect.objectContaining({ p_expected_lock_version: 3 }));
+    expect(rpc).toHaveBeenLastCalledWith("save_agent_loop_checkpoint", expect.objectContaining({ p_expected_lock_version: 3 }));
+  });
+
+  it("rejects an effect receipt response that changes the owned version", async () => {
+    const query = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn() };
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+    query.maybeSingle.mockResolvedValue({ data: { state: { loopCheckpoint: { status: "running" } }, lock_version: 3 }, error: null });
+    const rpc = vi.fn().mockResolvedValue({ data: { receipt: { ok: true }, lockVersion: 4 }, error: null });
+    const store = new SupabaseAgentLoopStore({ from: vi.fn().mockReturnValue(query), rpc } as unknown as SupabaseClient);
+
+    await store.load("run-effect-version-mismatch");
+    await expect(store.saveEffectReceipt("run-effect-version-mismatch", { idempotencyKey: "key", callId: "call", toolName: "tool", output: {}, completedAt: "2026-08-28T00:00:00.000Z" })).rejects.toThrow("Invalid effect receipt response");
   });
 
   it("rejects an effect receipt response without an authoritative version", async () => {

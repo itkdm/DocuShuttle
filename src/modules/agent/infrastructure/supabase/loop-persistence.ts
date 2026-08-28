@@ -145,16 +145,22 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
   }
 
   async saveEffectReceipt(runId: string, receipt: AgentEffectReceipt): Promise<AgentEffectReceipt> {
+    const expectedVersion = this.versions.get(runId);
+    if (expectedVersion === undefined) throw new ConcurrentRunUpdateError(runId);
     const result = await this.client.rpc("save_effect_receipt", {
       p_run_id: runId,
+      p_expected_lock_version: expectedVersion,
       p_receipt: { ...receipt, stepId: receipt.callId, effect: receipt.toolName },
     });
-    if (result.error) throw new Error(`Unable to save effect receipt: ${result.error.message}`);
+    if (result.error) {
+      if (result.error.message.includes("RUN_VERSION_CONFLICT")) throw new ConcurrentRunUpdateError(runId);
+      throw new Error(`Unable to save effect receipt: ${result.error.message}`);
+    }
     const payload = result.data as { receipt?: unknown; lockVersion?: unknown } | null;
-    if (!payload || !payload.receipt || typeof payload.lockVersion !== "number" || !Number.isInteger(payload.lockVersion) || payload.lockVersion < 0) {
+    if (!payload || !payload.receipt || payload.lockVersion !== expectedVersion) {
       throw new Error("Invalid effect receipt response");
     }
-    this.versions.set(runId, payload.lockVersion);
+    this.versions.set(runId, expectedVersion);
     return payload.receipt as AgentEffectReceipt;
   }
 

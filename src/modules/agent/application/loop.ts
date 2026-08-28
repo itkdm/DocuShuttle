@@ -206,6 +206,10 @@ export class AgentLoopRunner {
       .find((call) => !completed.has(call.id));
   }
 
+  private async reconcileEffectReceiptAfterToolError(runId: string, idempotencyKey: string): Promise<AgentEffectReceipt | undefined> {
+    return this.store.loadEffectReceipt?.(runId, idempotencyKey);
+  }
+
   private async recoverUnfinishedTool(runId: string, checkpoint: AgentLoopCheckpoint, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void): Promise<void> {
     const call = this.findUnresolvedToolCall(checkpoint);
     if (!call) return;
@@ -225,7 +229,9 @@ export class AgentLoopRunner {
         if (this.store.saveEffectReceipt) await this.store.saveEffectReceipt(runId, { idempotencyKey, callId: call.id, toolName: call.name, output, completedAt: new Date().toISOString() });
       } catch (error) {
         if (signal?.aborted) await this.throwForTransportInterruption(runId, signal);
-        failed = error instanceof Error ? error.message : "Tool execution failed";
+        const reconciledReceipt = await this.reconcileEffectReceiptAfterToolError(runId, idempotencyKey);
+        if (reconciledReceipt) output = reconciledReceipt.output;
+        else failed = error instanceof Error ? error.message : "Tool execution failed";
       }
     }
     checkpoint.messages.push({ role: "tool", content: failed ? JSON.stringify({ error: failed }) : serializeToolOutput(output), toolCallId: call.id, toolName: call.name });
@@ -546,11 +552,19 @@ export class AgentLoopRunner {
             await this.store.releaseLeaseForRecovery?.(runId);
             throw new Error(TRANSPORT_INTERRUPTED);
           }
-          const message = error instanceof Error ? error.message : "Tool execution failed";
-          checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: message }), toolCallId: call.id, toolName: call.name });
-          const toolFailedEvent = emit({ type: "tool.failed", callId: call.id, name: call.name, error: message, durationMs: Date.now() - toolStartedAt }, false);
-          await saveCheckpoint();
-          onEvent?.(toolFailedEvent);
+          const reconciledReceipt = await this.reconcileEffectReceiptAfterToolError(runId, idempotencyKey);
+          if (reconciledReceipt) {
+            checkpoint.messages.push({ role: "tool", content: serializeToolOutput(reconciledReceipt.output), toolCallId: call.id, toolName: call.name });
+            const completedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: summarizeTraceValue({ ...((reconciledReceipt.output && typeof reconciledReceipt.output === "object") ? reconciledReceipt.output : { value: reconciledReceipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
+            await saveCheckpoint();
+            onEvent?.(completedEvent);
+          } else {
+            const message = error instanceof Error ? error.message : "Tool execution failed";
+            checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: message }), toolCallId: call.id, toolName: call.name });
+            const toolFailedEvent = emit({ type: "tool.failed", callId: call.id, name: call.name, error: message, durationMs: Date.now() - toolStartedAt }, false);
+            await saveCheckpoint();
+            onEvent?.(toolFailedEvent);
+          }
         }
       }
       // A successful or failed tool execution already persisted the
@@ -665,12 +679,21 @@ export class AgentLoopRunner {
           await this.store.releaseLeaseForRecovery?.(runId);
           throw new Error(TRANSPORT_INTERRUPTED);
         }
-        const message = error instanceof Error ? error.message : "Tool execution failed";
-        checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: resolved.decision, error: message }), toolCallId: resolved.callId, toolName: resolved.toolName });
-        const failedEvent = emit({ type: "tool.failed", callId: resolved.callId, name: resolved.toolName, error: message, durationMs: Date.now() - toolStartedAt }, false);
-        checkpoint.pendingResolution = undefined;
-        await saveCheckpoint();
-        onEvent?.(failedEvent);
+        const reconciledReceipt = await this.reconcileEffectReceiptAfterToolError(runId, idempotencyKey);
+        if (reconciledReceipt) {
+          checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval: resolved.decision, output: reconciledReceipt.output }), toolCallId: resolved.callId, toolName: resolved.toolName });
+          const completedEvent = emit({ type: "tool.completed", callId: resolved.callId, name: resolved.toolName, output: summarizeTraceValue({ ...((reconciledReceipt.output && typeof reconciledReceipt.output === "object") ? reconciledReceipt.output : { value: reconciledReceipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
+          checkpoint.pendingResolution = undefined;
+          await saveCheckpoint();
+          onEvent?.(completedEvent);
+        } else {
+          const message = error instanceof Error ? error.message : "Tool execution failed";
+          checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: resolved.decision, error: message }), toolCallId: resolved.callId, toolName: resolved.toolName });
+          const failedEvent = emit({ type: "tool.failed", callId: resolved.callId, name: resolved.toolName, error: message, durationMs: Date.now() - toolStartedAt }, false);
+          checkpoint.pendingResolution = undefined;
+          await saveCheckpoint();
+          onEvent?.(failedEvent);
+        }
       }
       }
     } else {

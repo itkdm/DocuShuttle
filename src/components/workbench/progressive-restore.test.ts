@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { startProgressiveProjection } from "./progressive-restore";
+import { initialConversationLoading, startProgressiveProjection } from "./progressive-restore";
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -11,6 +11,11 @@ const deferred = <T>() => {
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 describe("progressive task restore", () => {
+  it("starts the conversation projection in loading state for a direct task route", () => {
+    expect(initialConversationLoading("task-1")).toBe(true);
+    expect(initialConversationLoading(undefined)).toBe(false);
+  });
+
   it("commits fast conversation while the document remains pending", async () => {
     const conversation = deferred<string[]>();
     const document = deferred<string>();

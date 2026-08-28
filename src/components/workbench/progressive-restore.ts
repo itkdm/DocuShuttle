@@ -5,6 +5,8 @@ export type ProgressiveProjection<T> = {
   onSettled?: () => void;
 };
 
+export const initialConversationLoading = (routeTaskId?: string) => Boolean(routeTaskId);
+
 /** Start one task projection without making it wait for sibling projections. */
 export function startProgressiveProjection<T>(projection: ProgressiveProjection<T>, isCurrent: () => boolean) {
   void projection.load()

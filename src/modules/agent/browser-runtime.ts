@@ -263,9 +263,11 @@ export async function loadCurrentTaskDocument(taskId: string, fileName: string) 
     version: { id: string; number: number; revision: string };
     downloadUrl: string;
   }>(`/api/tasks/${taskId}/document`);
+  const downloadStarted = performance.now();
   const response = await fetch(metadata.downloadUrl, { cache: "no-store" });
   if (!response.ok) throw new Error(`DOCUMENT_DOWNLOAD_${response.status}`);
   const bytes = await response.arrayBuffer();
+  logBrowserEvent({ event: "client.document.download.completed", durationMs: performance.now() - downloadStarted, bytesReceived: bytes.byteLength });
   return {
     ...metadata,
     file: new File([bytes], fileName, {

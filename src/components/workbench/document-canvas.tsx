@@ -20,13 +20,19 @@ function DocxRenderer({ bytes, onError }: { bytes: ArrayBuffer; onError: (messag
     body.replaceChildren();
     styles.replaceChildren();
     setRendering(true);
+    const renderStarted = performance.now();
     import("docx-preview")
       .then(({ renderAsync }) => renderAsync(bytes.slice(0), body, styles, {
         className: "paperduck-docx", inWrapper: true, breakPages: true,
         ignoreWidth: false, ignoreHeight: false, ignoreFonts: false,
         useBase64URL: true, renderHeaders: true, renderFooters: true,
       }))
-      .then(() => { if (active) setRendering(false); })
+      .then(() => {
+        if (active) {
+          setRendering(false);
+          if (process.env.NODE_ENV !== "production") void fetch("/api/dev/logs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ events: [{ event: "client.docx.render.completed", durationMs: performance.now() - renderStarted, bytes: bytes.byteLength }] }), keepalive: true }).catch(() => undefined);
+        }
+      })
       .catch((error: unknown) => {
         if (!active) return;
         const detail = error instanceof Error ? error.message : "未知渲染错误";

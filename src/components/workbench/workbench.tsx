@@ -24,7 +24,7 @@ import type { AgentRun } from "@/modules/agent";
 import type { AgentPermissionMode } from "@/modules/agent/application/loop";
 import type { DocumentLoadState, UploadAsset, VersionItem } from "./types";
 import { resolveAgentRuntimeView } from "./runtime-view-state";
-import { startProgressiveProjection } from "./progressive-restore";
+import { initialConversationLoading, startProgressiveProjection } from "./progressive-restore";
 
 const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
@@ -52,7 +52,7 @@ export function Workbench() {
   const [nextTaskOffset, setNextTaskOffset] = useState<number | null>(null);
   const [loadingMoreTasks, setLoadingMoreTasks] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
-  const [conversationLoading, setConversationLoading] = useState(false);
+  const [conversationLoading, setConversationLoading] = useState(() => initialConversationLoading(routeTaskId));
   const [run, setRun] = useState<AgentRun>();
   const [currentRevision, setCurrentRevision] = useState<string>();
   const [imageCandidates, setImageCandidates] = useState<BrowserImageCandidate[]>([]);
@@ -151,6 +151,21 @@ export function Workbench() {
     }
     if (loadedTaskIdRef.current === routeTaskId) return;
     const abort = new AbortController();
+    setConversationLoading(true);
+    setMessages([]);
+    setConversationCursor(null);
+    startProgressiveProjection({
+      load: () => loadBrowserConversationMessages(routeTaskId),
+      onSuccess: (durable) => {
+        setConversationCursor(durable.nextCursor);
+        setMessages(projectAgentThread({ messages: durable.messages, historicalEvents: [], activeEvents: [] }).turns.flatMap((turn) => [
+          { id: turn.user.id, role: "user" as const, text: turn.user.content, runId: turn.runId, status: turn.user.deliveryStatus },
+          ...(turn.assistant.finalContent ? [{ id: turn.assistant.messageId, role: "agent" as const, text: turn.assistant.finalContent, runId: turn.runId, status: "sent" as const }] : []),
+        ]));
+      },
+      onFailure: () => undefined,
+      onSettled: () => setConversationLoading(false),
+    }, () => !abort.signal.aborted);
     void (async () => {
       try {
         setDocumentLoad({ status: "loading", fileName: "正在打开任务" });
@@ -175,9 +190,6 @@ export function Workbench() {
         )));
         setTaskId(workspace.task.id);
         setWorkspaceReady(Boolean(workspace.workingDocumentId));
-        setMessages([]);
-        setConversationCursor(null);
-        setConversationLoading(true);
         setLoopResult(undefined);
         setActiveEvents([]);
         setHistoricalEvents([]);
@@ -187,14 +199,6 @@ export function Workbench() {
         // inspection request cannot hold back semantic conversation history.
         loadedTaskIdRef.current = workspace.task.id;
         const isCurrentProjection = () => !abort.signal.aborted && loadedTaskIdRef.current === workspace.task.id;
-        startProgressiveProjection({ load: () => loadBrowserConversationMessages(workspace.task.id), onSuccess: (durable) => {
-          setConversationCursor(durable.nextCursor);
-          setMessages(projectAgentThread({ messages: durable.messages, historicalEvents: [], activeEvents: [] }).turns.flatMap((turn) => [
-            { id: turn.user.id, role: "user" as const, text: turn.user.content, runId: turn.runId, status: turn.user.deliveryStatus },
-            ...(turn.assistant.finalContent ? [{ id: turn.assistant.messageId, role: "agent" as const, text: turn.assistant.finalContent, runId: turn.runId, status: "sent" as const }] : []),
-          ]));
-        }, onSettled: () => setConversationLoading(false) }, isCurrentProjection);
-
         if (workspace.workingDocumentId) {
           startProgressiveProjection({ load: () => loadCurrentTaskDocument(workspace.task.id, workspace.fileName), onSuccess: (document) => {
             setDocumentLoad({ status: "ready", document: { file: document.file, bytes: document.bytes } });
@@ -240,6 +244,8 @@ export function Workbench() {
       } catch (error) {
         if (abort.signal.aborted) return;
         loadedTaskIdRef.current = undefined;
+        setMessages([]);
+        setConversationCursor(null);
         setConversationLoading(false);
         setDocumentLoad({ status: "error", message: error instanceof Error ? error.message : "任务打开失败" });
         setNotice(error instanceof Error ? `无法打开任务：${error.message}` : "无法打开任务");

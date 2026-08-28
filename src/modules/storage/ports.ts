@@ -16,6 +16,7 @@ export interface PrivateObjectStoragePort {
   }): Promise<SignedUpload>;
   createSignedDownload(objectKey: string, expiresInSeconds: number): Promise<string>;
   put(objectKey: string, bytes: Uint8Array, mimeType: string): Promise<void>;
+  ensureObject?(objectKey: string, expectedBytes: Uint8Array, mimeType: string): Promise<{ created: boolean }>;
   get(objectKey: string): Promise<Uint8Array>;
   remove(objectKey: string): Promise<void>;
 }

@@ -6,6 +6,8 @@ import { measure } from "@/infrastructure/observability";
 
 export const PAPERDUCK_STORAGE_BUCKET = "paperduck-private";
 
+const isNotFound = (error: { statusCode?: string | number } | null) => error !== null && String(error.statusCode) === "404";
+
 const throwStorageError = (context: string, error: { message: string } | null) => {
   if (error) throw new Error(`${context}: ${error.message}`);
 };
@@ -46,6 +48,25 @@ export class SupabaseStorageAdapter implements PrivateObjectStoragePort {
       const result = await this.client.storage.from(this.bucket).upload(assertTaskObjectKey(objectKey), bytes, { contentType: mimeType, cacheControl: "no-store", upsert: false });
       throwStorageError("Unable to store object", result.error);
     });
+  }
+
+  async ensureObject(objectKey: string, expectedBytes: Uint8Array, mimeType: string): Promise<{ created: boolean }> {
+    const safeObjectKey = assertTaskObjectKey(objectKey);
+    const bucket = this.client.storage.from(this.bucket);
+    const existing = await bucket.download(safeObjectKey);
+    if (existing.error && !isNotFound(existing.error)) throw new Error("Unable to inspect existing object");
+    if (!existing.error && existing.data) {
+      const currentBytes = new Uint8Array(await existing.data.arrayBuffer());
+      if (currentBytes.length === expectedBytes.length && currentBytes.every((value, index) => value === expectedBytes[index])) return { created: false };
+      throw new Error("IDEMPOTENT_ARTIFACT_CONFLICT");
+    }
+    const created = await bucket.upload(safeObjectKey, expectedBytes, { contentType: mimeType, cacheControl: "no-store", upsert: false });
+    if (!created.error) return { created: true };
+    const afterRace = await bucket.download(safeObjectKey);
+    if (afterRace.error || !afterRace.data) throw new Error("Unable to ensure object after concurrent create");
+    const currentBytes = new Uint8Array(await afterRace.data.arrayBuffer());
+    if (currentBytes.length === expectedBytes.length && currentBytes.every((value, index) => value === expectedBytes[index])) return { created: false };
+    throw new Error("IDEMPOTENT_ARTIFACT_CONFLICT");
   }
 
   async get(objectKey: string): Promise<Uint8Array> {

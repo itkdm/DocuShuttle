@@ -57,4 +57,37 @@ describe("SupabaseStorageAdapter", () => {
     expect(bucket.download).toHaveBeenCalledWith(objectKey);
     expect(bucket.remove).toHaveBeenCalledWith([objectKey]);
   });
+
+  it("reuses identical immutable objects and rejects conflicting bytes", async () => {
+    const { client, bucket } = createClient();
+    const storage = new SupabaseStorageAdapter(client);
+    bucket.download
+      .mockResolvedValueOnce({ data: new Blob([new Uint8Array([1, 2, 3])]), error: null })
+      .mockResolvedValueOnce({ data: new Blob([new Uint8Array([9])]), error: null });
+
+    await expect(storage.ensureObject(objectKey, new Uint8Array([1, 2, 3]), "application/json")).resolves.toEqual({ created: false });
+    await expect(storage.ensureObject(objectKey, new Uint8Array([1, 2, 3]), "application/json")).rejects.toThrow("IDEMPOTENT_ARTIFACT_CONFLICT");
+    expect(bucket.upload).not.toHaveBeenCalled();
+  });
+
+  it("creates a missing object and resolves an upload race by comparing bytes", async () => {
+    const { client, bucket } = createClient();
+    const storage = new SupabaseStorageAdapter(client);
+    bucket.download
+      .mockResolvedValueOnce({ data: null, error: { message: "missing", statusCode: "404" } })
+      .mockResolvedValueOnce({ data: new Blob([new Uint8Array([1, 2, 3])]), error: null });
+    bucket.upload.mockResolvedValueOnce({ data: null, error: { message: "already exists", statusCode: "409" } });
+
+    await expect(storage.ensureObject(objectKey, new Uint8Array([1, 2, 3]), "application/json")).resolves.toEqual({ created: false });
+    expect(bucket.upload).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat an authorization or transport error as a missing object", async () => {
+    const { client, bucket } = createClient();
+    const storage = new SupabaseStorageAdapter(client);
+    bucket.download.mockResolvedValueOnce({ data: null, error: { message: "forbidden", statusCode: "403" } });
+
+    await expect(storage.ensureObject(objectKey, new Uint8Array([1]), "application/json")).rejects.toThrow("Unable to inspect existing object");
+    expect(bucket.upload).not.toHaveBeenCalled();
+  });
 });

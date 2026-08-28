@@ -6,6 +6,16 @@ import { blockingPackageErrors } from "@/modules/documents/infrastructure/ooxml/
 
 import type { AgentTool } from "./loop";
 
+export type DocumentEffectReceiptInput = {
+  idempotencyKey: string;
+  callId: string;
+  toolName: string;
+  output: unknown;
+  completedAt: string;
+  stepId: string;
+  effect: "apply";
+};
+
 export type WorkingDocumentAccessPort = {
   load(): Promise<{ bytes: Uint8Array; revision: string }>;
   commit(input: {
@@ -14,7 +24,8 @@ export type WorkingDocumentAccessPort = {
     bytes: Uint8Array;
     revision: string;
     changedEntries: readonly string[];
-  }): Promise<{ revision: string }>;
+    effectReceipt: DocumentEffectReceiptInput;
+  }): Promise<{ revision: string; lockVersion?: number }>;
 };
 
 export type DocumentEngineeringEvent = (event: { event: string; metadata: Record<string, unknown> }) => void;
@@ -56,6 +67,16 @@ const summarizeInspection = (inspection: DocumentInspection) => ({
   },
   diagnostics: inspection.diagnostics,
   validation: inspection.validation,
+});
+
+const createDocumentEffectReceipt = (context: { idempotencyKey: string; callId: string }, toolName: string, output: unknown) => ({
+  idempotencyKey: context.idempotencyKey,
+  callId: context.callId,
+  toolName,
+  output,
+  completedAt: new Date().toISOString(),
+  stepId: context.callId,
+  effect: "apply" as const,
 });
 
 async function planIfAvailable(
@@ -231,17 +252,18 @@ export function createDocumentTools(
       const mutation = await documents.mutate(current.bytes, { expectedRevision: input.expectedRevision, operations: [operation] });
       const validated = await documents.validate(mutation.bytes);
       if (blockingPackageErrors(validated.diagnostics).length > 0) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
-      const committed = await working.commit({ idempotencyKey: context.idempotencyKey, expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
-      invalidateInspection();
-      onEngineeringEvent?.({ event: "document.mutate.completed", metadata: { operationCount: 1, nodeCount: 1, revisionBefore: input.expectedRevision, revisionAfter: committed.revision, changedEntryCount: mutation.changedEntries.length, riskLevel: plan?.riskLevel, validationValid: mutation.validation?.valid } });
-      return {
+      const output = {
         nodeId: input.nodeId,
         previousRevision: input.expectedRevision,
-        revision: committed.revision,
+        revision: mutation.manifest.revision,
         changedEntries: mutation.changedEntries,
         riskLevel: plan?.riskLevel,
         validation: mutation.validation ? { valid: mutation.validation.valid, tiers: mutation.validation.tiers.map(({ tier, status }) => ({ tier, status })) } : undefined,
       };
+      const committed = await working.commit({ idempotencyKey: context.idempotencyKey, expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries, effectReceipt: createDocumentEffectReceipt(context, "apply_text_change", output) });
+      invalidateInspection();
+      onEngineeringEvent?.({ event: "document.mutate.completed", metadata: { operationCount: 1, nodeCount: 1, revisionBefore: input.expectedRevision, revisionAfter: committed.revision, changedEntryCount: mutation.changedEntries.length, riskLevel: plan?.riskLevel, validationValid: mutation.validation?.valid } });
+      return { ...output, revision: committed.revision };
     },
   };
 
@@ -268,18 +290,19 @@ export function createDocumentTools(
       const mutation = await documents.mutate(current.bytes, { expectedRevision: input.expectedRevision, operations });
       const validated = await documents.validate(mutation.bytes);
       if (blockingPackageErrors(validated.diagnostics).length > 0) throw new Error("DERIVED_DOCUMENT_VALIDATION_FAILED");
-      const committed = await working.commit({ idempotencyKey: context.idempotencyKey, expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries });
-      invalidateInspection();
-      onEngineeringEvent?.({ event: "document.mutate.completed", metadata: { operationCount: operations.length, nodeCount: seen.size, revisionBefore: input.expectedRevision, revisionAfter: committed.revision, changedEntryCount: mutation.changedEntries.length, riskLevel: plan?.riskLevel, validationValid: mutation.validation?.valid } });
-      return {
+      const output = {
         changedCount: input.changes.length,
         nodeIds: input.changes.map((change) => change.nodeId),
         previousRevision: input.expectedRevision,
-        revision: committed.revision,
+        revision: mutation.manifest.revision,
         changedEntries: mutation.changedEntries,
         riskLevel: plan?.riskLevel,
         validation: mutation.validation ? { valid: mutation.validation.valid, tiers: mutation.validation.tiers.map(({ tier, status }) => ({ tier, status })) } : undefined,
       };
+      const committed = await working.commit({ idempotencyKey: context.idempotencyKey, expectedRevision: input.expectedRevision, bytes: mutation.bytes, revision: mutation.manifest.revision, changedEntries: mutation.changedEntries, effectReceipt: createDocumentEffectReceipt(context, "apply_text_changes", output) });
+      invalidateInspection();
+      onEngineeringEvent?.({ event: "document.mutate.completed", metadata: { operationCount: operations.length, nodeCount: seen.size, revisionBefore: input.expectedRevision, revisionAfter: committed.revision, changedEntryCount: mutation.changedEntries.length, riskLevel: plan?.riskLevel, validationValid: mutation.validation?.valid } });
+      return { ...output, revision: committed.revision };
     },
   };
 

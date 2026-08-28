@@ -150,7 +150,12 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
       p_receipt: { ...receipt, stepId: receipt.callId, effect: receipt.toolName },
     });
     if (result.error) throw new Error(`Unable to save effect receipt: ${result.error.message}`);
-    return (result.data ?? receipt) as AgentEffectReceipt;
+    const payload = result.data as { receipt?: unknown; lockVersion?: unknown } | null;
+    if (!payload || !payload.receipt || typeof payload.lockVersion !== "number" || !Number.isInteger(payload.lockVersion) || payload.lockVersion < 0) {
+      throw new Error("Invalid effect receipt response");
+    }
+    this.versions.set(runId, payload.lockVersion);
+    return payload.receipt as AgentEffectReceipt;
   }
 
   async heartbeat(runId: string): Promise<boolean> {

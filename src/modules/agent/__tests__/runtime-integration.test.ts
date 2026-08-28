@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { AgentLoopRunner, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentLoopMessage, type AgentModelPort, type AgentTool } from "../application/loop";
+import { AgentLoopRunner, TRANSPORT_INTERRUPTED, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentLoopMessage, type AgentModelPort, type AgentTool } from "../application/loop";
 import type { AgentEvent } from "../application/events";
 import type { AgentConversationContextPort } from "../application/ports";
 import { resolveAgentRuntimeView } from "@/components/workbench/runtime-view-state";
@@ -137,6 +137,64 @@ describe("Agent runtime integration contracts", () => {
     const recovered = await runner({ decide: async () => ({ kind: "message", text: "恢复完成。" }) }, store, [tool]).recover("run-receipt");
     expect(store.executionCount).toBe(0);
     expect(recovered.checkpoint.messages.filter((message) => message.role === "tool" && message.toolCallId === "crash-1")).toHaveLength(1);
+  });
+
+  it("keeps a document effect, receipt and recovery materialization single-shot after a lost response", async () => {
+    const store = new DurableHarness();
+    let executionCount = 0;
+    let documentVersionCount = 0;
+    const tool: AgentTool = {
+      name: "apply_document",
+      description: "Apply a document effect.",
+      inputSchema: z.object({ text: z.string() }),
+      requiresApproval: true,
+      async execute(input, context) {
+        executionCount += 1;
+        const output = { changed: (input as { text: string }).text, revision: "revision-2" };
+        if (!store.receipts.has(context.idempotencyKey)) {
+          documentVersionCount += 1;
+          store.receipts.set(context.idempotencyKey, { idempotencyKey: context.idempotencyKey, callId: context.callId, toolName: "apply_document", output, completedAt: "2026-08-28T00:00:00.000Z" });
+        }
+        return output;
+      },
+    };
+    const first = await runner({ decide: async () => ({ kind: "tool_calls", calls: [{ id: "document-call", name: "apply_document", input: { text: "秦率博" } }] }) }, store, [tool]).run("run-document-effect", "修改姓名");
+    const pending = first.checkpoint.pendingInteraction;
+    if (!pending || pending.type !== "approval") throw new Error("approval checkpoint missing");
+    const completed = await runner({ decide: async () => ({ kind: "message", text: "已完成修改。" }) }, store, [tool]).resume("run-document-effect", "approved", pending.interactionId, pending.callId);
+
+    expect(executionCount).toBe(1);
+    expect(documentVersionCount).toBe(1);
+    expect(store.receipts.size).toBe(1);
+    expect(completed.checkpoint.status).toBe("completed");
+    expect(completed.events.filter((event) => event.type === "tool.completed")).toHaveLength(1);
+
+    const lostStore = new DurableHarness();
+    const abort = new AbortController();
+    let lostExecutionCount = 0;
+    let lostDocumentVersionCount = 0;
+    const lostTool: AgentTool = {
+      ...tool,
+      async execute(input, context) {
+        lostExecutionCount += 1;
+        const output = { changed: (input as { text: string }).text, revision: "revision-2" };
+        lostDocumentVersionCount += 1;
+        lostStore.receipts.set(context.idempotencyKey, { idempotencyKey: context.idempotencyKey, callId: context.callId, toolName: "apply_document", output, completedAt: "2026-08-28T00:00:00.000Z" });
+        abort.abort();
+        throw new Error("connection reset after commit");
+      },
+    };
+    const lostFirst = await runner({ decide: async () => ({ kind: "tool_calls", calls: [{ id: "lost-call", name: "apply_document", input: { text: "秦率博" } }] }) }, lostStore, [lostTool]).run("run-document-lost", "修改姓名");
+    const lostPending = lostFirst.checkpoint.pendingInteraction;
+    if (!lostPending || lostPending.type !== "approval") throw new Error("lost approval checkpoint missing");
+    await expect(runner({ decide: async () => ({ kind: "message", text: "不会到达。" }) }, lostStore, [lostTool]).resume("run-document-lost", "approved", lostPending.interactionId, lostPending.callId, abort.signal)).rejects.toThrow(TRANSPORT_INTERRUPTED);
+    const recovered = await runner({ decide: async () => ({ kind: "message", text: "已从 durable effect 恢复。" }) }, lostStore, [lostTool]).recover("run-document-lost");
+
+    expect(lostExecutionCount).toBe(1);
+    expect(lostDocumentVersionCount).toBe(1);
+    expect(lostStore.receipts.size).toBe(1);
+    expect(recovered.checkpoint.messages.filter((message) => message.role === "tool" && message.toolCallId === "lost-call")).toHaveLength(1);
+    expect(recovered.events.filter((event) => event.type === "tool.completed")).toHaveLength(1);
   });
 
   it("keeps runtime correct when EventStore fails and preserves cross-run semantic context", async () => {

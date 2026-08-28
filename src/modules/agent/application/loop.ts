@@ -404,6 +404,7 @@ export class AgentLoopRunner {
     checkpoint.finalText = undefined;
     const events: AgentEvent[] = [];
     const durableEvents: AgentEvent[] = [];
+    let publicCommentary = "";
     let eventPersistenceChain = Promise.resolve();
     const flushDurableEvents = () => {
       if (!durableEvents.length || !this.store.appendEvents) return eventPersistenceChain;
@@ -422,6 +423,9 @@ export class AgentLoopRunner {
     const saveCheckpoint = async () => {
       await this.store.save(runId, checkpoint);
       void flushDurableEvents();
+    };
+    const persistDurableEvent = (event: AgentEventPayload) => {
+      durableEvents.push(createAgentEvent(runId, event));
     };
     const emit = (event: AgentEventPayload, notify = true) => {
       const timestamped = createAgentEvent(runId, event);
@@ -465,6 +469,7 @@ export class AgentLoopRunner {
         throw new Error(TRANSPORT_INTERRUPTED);
       }
       const modelStartedAt = Date.now();
+      publicCommentary = "";
       let decision: AgentModelDecision;
       const modelController = new AbortController();
       let timeoutKind: AgentModelTimeoutKind | undefined;
@@ -482,7 +487,7 @@ export class AgentLoopRunner {
       const maxDurationTimeout = setTimeout(() => abortForTimeout("MODEL_MAX_DURATION_EXCEEDED"), this.modelMaxDurationMs);
       signal?.addEventListener("abort", abortModel, { once: true });
       try {
-        decision = await this.withLeaseHeartbeat(runId, () => this.model.decide({ messages: context.messages, tools: this.tools, signal: modelController.signal, onTextDelta: (text) => emit({ type: "model.delta", text, channel: "commentary" }), onStreamActivity: resetIdleTimeout }), { skipInitialBeat: true });
+        decision = await this.withLeaseHeartbeat(runId, () => this.model.decide({ messages: context.messages, tools: this.tools, signal: modelController.signal, onTextDelta: (text) => { publicCommentary += text; emit({ type: "model.delta", text, channel: "commentary" }); }, onStreamActivity: resetIdleTimeout }), { skipInitialBeat: true });
       } catch (error) {
         if (signal?.aborted) {
           const cancelled = await this.store.load(runId);
@@ -521,6 +526,7 @@ export class AgentLoopRunner {
       }
       emit({ type: "model.completed", durationMs: Date.now() - modelStartedAt });
       if (decision.kind === "message") {
+        if (publicCommentary && publicCommentary !== decision.text) persistDurableEvent({ type: "model.commentary", text: publicCommentary });
         checkpoint.messages.push({ role: "assistant", content: decision.text, ...(decision.reasoning ? { reasoning: decision.reasoning } : {}) });
         const messageEvent = emit({ type: "assistant.message", text: decision.text }, false) as AssistantMessageEvent;
         if (decision.finish !== false) {
@@ -536,6 +542,7 @@ export class AgentLoopRunner {
         continue;
       }
       if (decision.kind === "ask_user") {
+        if (publicCommentary) persistDurableEvent({ type: "model.commentary", text: publicCommentary });
         checkpoint.status = "awaiting_user";
         checkpoint.pendingInteraction = { interactionId: crypto.randomUUID(), type: "user_input", question: decision.text };
         checkpoint.messages.push({ role: "assistant", content: decision.text, ...(decision.reasoning ? { reasoning: decision.reasoning } : {}) });
@@ -543,6 +550,7 @@ export class AgentLoopRunner {
         await persistAssistantMessage(messageEvent);
         return { checkpoint, events };
       }
+      if (publicCommentary) persistDurableEvent({ type: "model.commentary", text: publicCommentary });
       for (const [index, call] of decision.calls.entries()) {
         checkpoint.toolCallCount += 1;
         if (checkpoint.toolCallCount > this.maxToolCalls) {

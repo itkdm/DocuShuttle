@@ -17,11 +17,13 @@ describe("isAgentEvent", () => {
   it("accepts event-specific payloads, including unknown JSON values", () => {
     expect(isAgentEvent({ ...identity, type: "tool.started", callId: "call-1", name: "inspect_document", input: null })).toBe(true);
     expect(isAgentEvent({ ...identity, type: "model.delta", text: "片段", channel: "final" })).toBe(true);
+    expect(isAgentEvent({ ...identity, type: "model.commentary", text: "正在检查文档" })).toBe(true);
     expect(isAgentEvent({ ...identity, type: "approval.resolved", interactionId: "interaction-1", callId: "call-1", name: "apply_change", decision: "rejected" })).toBe(true);
   });
 
   it("keeps model deltas live-only while retaining structural events", () => {
     expect(shouldPersistAgentEvent({ ...identity, type: "model.delta", text: "片段" })).toBe(false);
+    expect(shouldPersistAgentEvent({ ...identity, type: "model.commentary", text: "正在检查文档" })).toBe(true);
     expect(shouldPersistAgentEvent({ ...identity, type: "tool.started", callId: "call-1", name: "inspect_document", input: {} })).toBe(true);
     expect(shouldPersistAgentEvent({ ...identity, type: "turn.completed", text: "完成" })).toBe(true);
   });

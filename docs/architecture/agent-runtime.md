@@ -27,6 +27,11 @@ PaperDuck 使用模型驱动的、可恢复的 Tool Loop。模型每一轮都可
 Chain-of-Thought 写入用户界面。结构化执行事实写入独立的 `agent_run_events`，高频
 `model.delta` 只进入当前 Live Stream，用户语义消息单独写入 `messages`。
 
+公开执行说明不按 token 持久化：每次模型决策期间的 `model.delta` 只进入当前
+Live Stream；决策完成后，若公开 commentary 与正式 assistant message 不同，则合并为一条
+`model.commentary` durable snapshot，供刷新和 replay 使用。它不是语义 conversation message，
+也不包含 provider reasoning；若与最终回答严格相同，则只保留 `assistant.message`，避免重复展示。
+
 同一任务拥有一个稳定的 conversation/thread；每个用户 turn 创建一个独立、可审计的
 run，但新 run 会从该 conversation 的上一条模型 transcript 继续，并在下一次工具调用
 前重新读取和校验当前文档 revision。Timeline 只负责回放所有 run 的真实事件，不能把

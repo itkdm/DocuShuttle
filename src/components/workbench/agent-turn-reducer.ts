@@ -59,12 +59,31 @@ const appendLiveNote = (activities: AgentActivity[], state: AgentTurnEventState,
   return { ...state, activities, activeNoteId: id };
 };
 
+const appendDurableNote = (activities: AgentActivity[], state: AgentTurnEventState, event: AgentEvent, text: string, runId: string) => {
+  if (!text) return endActiveNote(state);
+  if (state.activeNoteId) {
+    const index = activities.findIndex((activity) => activity.type === "note" && activity.id === state.activeNoteId);
+    const current = index >= 0 ? activities[index] : undefined;
+    if (current?.type === "note") {
+      if (current.text === text) return endActiveNote({ ...state, activities });
+      if (text.startsWith(current.text)) {
+        activities[index] = { ...current, text };
+        return endActiveNote({ ...state, activities });
+      }
+    }
+  }
+  activities.push({ type: "note", id: event.eventId ?? `${runId}:note:${activities.filter((activity) => activity.type === "note").length}`, text });
+  return endActiveNote({ ...state, activities });
+};
+
 export function reduceAgentEvent(state: AgentTurnEventState, event: AgentEvent, runId: string): AgentTurnEventState {
   const activities = [...state.activities];
   if (event.type === "model.delta") {
     const text = event.text ?? "";
     if (modelDeltaChannel(event) === "final") return { ...state, activities, streamingContent: `${state.streamingContent}${text}`, activeNoteId: undefined };
     return appendLiveNote(activities, state, event, text, runId);
+  } else if (event.type === "model.commentary") {
+    return appendDurableNote(activities, state, event, event.text, runId);
   } else if (event.type === "tool.started" || event.type === "approval.required") {
     upsertTool(activities, event, event.type === "approval.required" ? "approval" : "running");
     return endActiveNote({ ...state, activities });

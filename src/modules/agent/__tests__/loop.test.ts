@@ -502,7 +502,45 @@ describe("AgentLoopRunner", () => {
     expect(result.checkpoint.status).toBe("completed");
     expect(liveEvents.filter((event) => event.type === "model.delta")).toHaveLength(100);
     expect(store.durableEvents.filter((event) => event.type === "model.delta")).toHaveLength(0);
+    const commentary = store.durableEvents.filter((event) => event.type === "model.commentary");
+    expect(commentary).toHaveLength(1);
+    expect(commentary[0]).toMatchObject({ type: "model.commentary", text: Array.from({ length: 100 }, (_, index) => `片段${index}`).join("") });
     expect(store.appendEventsCalls).toBeGreaterThan(0);
+  });
+
+  it("persists one public commentary snapshot per model decision without replaying it live", async () => {
+    const store = new MemoryStore();
+    const liveEvents: AgentEvent[] = [];
+    let decisionCount = 0;
+    const result = await new AgentLoopRunner({
+      decide: async ({ onTextDelta, messages }) => {
+        decisionCount += 1;
+        if (decisionCount === 1) {
+          onTextDelta?.("先读取文档。 ");
+          return { kind: "tool_calls", calls: [{ id: "commentary-tool-1", name: "inspect_document", input: { query: "summary" } }] };
+        }
+        if (messages.filter((message) => message.role === "tool").length === 1) {
+          onTextDelta?.("再确认关键区域。 ");
+          return { kind: "tool_calls", calls: [{ id: "commentary-tool-2", name: "inspect_document", input: { query: "headings" } }] };
+        }
+        return { kind: "message", text: "最终结论" };
+      },
+    }, store, [inspectTool]).runWithPermission("run-commentary-snapshots", "检查", "default", undefined, (event) => liveEvents.push(event));
+    expect(result.checkpoint.status).toBe("completed");
+    expect(liveEvents.filter((event) => event.type === "model.commentary")).toHaveLength(0);
+    expect(store.durableEvents.filter((event) => event.type === "model.commentary").map((event) => event.type === "model.commentary" ? event.text : "")).toEqual(["先读取文档。 ", "再确认关键区域。 "]);
+  });
+
+  it("does not persist commentary identical to the final answer", async () => {
+    const store = new MemoryStore();
+    await new AgentLoopRunner({
+      decide: async ({ onTextDelta }) => {
+        onTextDelta?.("最终答案");
+        return { kind: "message", text: "最终答案" };
+      },
+    }, store, []).run("run-commentary-final", "回答");
+    expect(store.durableEvents.filter((event) => event.type === "model.commentary")).toHaveLength(0);
+    expect(store.durableEvents.filter((event) => event.type === "assistant.message")).toHaveLength(1);
   });
 
   it("keeps runtime correctness when event persistence fails and records a diagnostic", async () => {

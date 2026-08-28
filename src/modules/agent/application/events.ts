@@ -3,6 +3,7 @@ export const AGENT_EVENT_TYPES = [
   "model.started",
   "model.completed",
   "model.delta",
+  "model.commentary",
   "assistant.message",
   "tool.started",
   "tool.completed",
@@ -22,6 +23,7 @@ export type AgentEventPayload =
   | { type: "model.started"; text: string }
   | { type: "model.completed"; durationMs: number }
   | { type: "model.delta"; text: string; channel?: "commentary" | "reasoning_summary" | "final" }
+  | { type: "model.commentary"; text: string }
   | { type: "assistant.message"; text: string }
   | { type: "tool.started"; callId: string; name: string; input: unknown }
   | { type: "tool.completed"; callId: string; name: string; output: unknown }
@@ -77,6 +79,8 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
     case "model.delta":
       return isString("text")
         && (!hasField("channel") || event.channel === "commentary" || event.channel === "reasoning_summary" || event.channel === "final");
+    case "model.commentary":
+      return isString("text");
     case "tool.started":
       return isString("callId") && isString("name") && hasUnknownValue("input");
     case "approval.required":

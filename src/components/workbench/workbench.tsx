@@ -12,7 +12,7 @@ import { TaskList } from "./task-list";
 import { formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
-import { applyBrowserImageCandidate, cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, generateBrowserImageCandidates, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, recoverBrowserAgentLoop, restoreBrowserDocumentVersion, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserImageCandidate, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, recoverBrowserAgentLoop, restoreBrowserDocumentVersion, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserImageNode } from "@/modules/agent/browser-runtime";
 import { useConversationStore } from "./conversation-store";
 import { listBrowserTasks, loadBrowserTaskWorkspace, type TaskPage } from "@/modules/tasks/browser-tasks";
 import type { TaskSummary } from "@/modules/tasks/domain";
@@ -52,12 +52,7 @@ export function Workbench() {
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [conversationLoading, setConversationLoading] = useState(() => initialConversationLoading(routeTaskId));
   const [run, setRun] = useState<AgentRun>();
-  const [currentRevision, setCurrentRevision] = useState<string>();
-  const [imageCandidates, setImageCandidates] = useState<BrowserImageCandidate[]>([]);
   const agentAbortRef = useRef<AbortController | undefined>(undefined);
-  const [imageTargetNodeId, setImageTargetNodeId] = useState("");
-  const [imagePrompt, setImagePrompt] = useState("");
-  const [imageBusy, setImageBusy] = useState(false);
   const [imageNodes, setImageNodes] = useState<BrowserImageNode[]>([]);
   const [paragraphCount, setParagraphCount] = useState(0);
   const [tableCellCount, setTableCellCount] = useState(0);
@@ -85,10 +80,6 @@ export function Workbench() {
     setWorkspaceReady(false);
     setConversationLoading(false);
     setRun(undefined);
-    setCurrentRevision(undefined);
-    setImageCandidates([]);
-    setImageTargetNodeId("");
-    setImagePrompt("");
     setImageNodes([]);
     setParagraphCount(0);
     setTableCellCount(0);
@@ -201,7 +192,6 @@ export function Workbench() {
         if (workspace.workingDocumentId) {
           startProgressiveProjection({ load: () => loadCurrentTaskDocument(workspace.task.id, workspace.fileName), onSuccess: (document) => {
             setDocumentLoad({ status: "ready", document: { file: document.file, bytes: document.bytes } });
-            setCurrentRevision(document.version.revision);
           }, onFailure: (error) => setDocumentLoad({ status: "error", message: error instanceof Error ? error.message : "文档打开失败" }) }, isCurrentProjection);
           startProgressiveProjection({ load: () => inspectBrowserTaskDocument(workspace.task.id), onSuccess: (inspection) => {
             setImageNodes(inspection.images);
@@ -321,7 +311,6 @@ export function Workbench() {
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
         const nextDocument = await loadCurrentTaskDocument(reconcileTaskId, fileName);
         setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } });
-        setCurrentRevision(nextDocument.version.revision);
         await refreshVersions(reconcileTaskId);
       }
       setNotice("连接恢复，已加载本轮最新文档结果");
@@ -386,7 +375,6 @@ export function Workbench() {
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
         const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
         setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } });
-        setCurrentRevision(nextDocument.version.revision);
         const inspection = await inspectBrowserTaskDocument(taskId);
         setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
         await refreshVersions(taskId);
@@ -442,7 +430,6 @@ export function Workbench() {
           const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
           const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
           setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } });
-          setCurrentRevision(nextDocument.version.revision);
           await refreshVersions(taskId);
         }
         setNotice("Agent 已完成写入并通过版本校验");
@@ -565,7 +552,7 @@ export function Workbench() {
         const restored = await restoreBrowserDocumentVersion(taskId, id);
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
         const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
-          setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } }); setCurrentRevision(nextDocument.version.revision); const inspection = await inspectBrowserTaskDocument(taskId); setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
+          setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } }); const inspection = await inspectBrowserTaskDocument(taskId); setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
         await refreshVersions(taskId);
         setVersionsOpen(false); setMobilePanel("none"); setNotice(`已创建恢复版本 v${restored.version.version_number}，完整历史已保留`);
       } catch (error) { setNotice(error instanceof Error ? error.message : "恢复版本失败"); }
@@ -587,20 +574,6 @@ export function Workbench() {
       setNotice(latest?.status === "cancelled" ? "任务已取消，最近有效版本未受影响" : "取消请求未确认，已保留服务端运行状态");
     }
   };
-  const generateImages = async () => {
-    if (!taskId || !imageTargetNodeId.trim() || !imagePrompt.trim()) return;
-    setImageBusy(true);
-    try { const result = await generateBrowserImageCandidates({ taskId, prompt: imagePrompt.trim(), targetNodeId: imageTargetNodeId.trim(), count: 3 }); setImageCandidates(result.candidates); setNotice(`已生成 ${result.candidates.length} 个图片候选，请选择后应用`); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "图片生成失败"); }
-    finally { setImageBusy(false); }
-  };
-  const applyImage = async (candidate: BrowserImageCandidate) => {
-    if (!taskId || !currentRevision) return;
-    setImageBusy(true);
-    try { const result = await applyBrowserImageCandidate({ taskId, assetId: candidate.id, targetNodeId: imageTargetNodeId.trim(), expectedRevision: currentRevision }); const nextDocument = await loadCurrentTaskDocument(taskId, documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx"); setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } }); setCurrentRevision(nextDocument.version.revision); setImageCandidates([]); await refreshVersions(taskId); setNotice(`图片已应用，创建新版本 v${result.versionNumber}`); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "图片应用失败，请刷新后重试"); }
-    finally { setImageBusy(false); }
-  };
   const pendingApproval = loopResult?.checkpoint.pendingInteraction?.type === "approval"
     ? loopResult.checkpoint.pendingInteraction
     : undefined;
@@ -618,7 +591,7 @@ export function Workbench() {
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
         {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} onLoadMoreTasks={loadMoreTasks} hasMoreTasks={nextTaskOffset !== null} loadingMoreTasks={loadingMoreTasks} loadingTasks={loadingTasks} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
         <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} onChoose={chooseWorkingDocument} /></div>
-        {rightOpen ? <AgentPanel runtimeView={runtimeView} run={run} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} imageCandidates={imageCandidates} imageNodes={imageNodes} imageTargetNodeId={imageTargetNodeId} imagePrompt={imagePrompt} onImageTargetNodeIdChange={setImageTargetNodeId} onImagePromptChange={setImagePrompt} onGenerateImages={generateImages} onApplyImage={applyImage} imageBusy={imageBusy} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} conversationLoading={conversationLoading} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
+        {rightOpen ? <AgentPanel taskId={taskId} runtimeView={runtimeView} run={run} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} conversationLoading={conversationLoading} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 
       <div className="mobile-dock" aria-label="移动端工作台导航"><button onClick={() => setMobilePanel("outline")} className={mobilePanel === "outline" ? "active" : ""}><FilePlus2 size={18} /><span>文档</span></button><button onClick={() => setMobilePanel("agent")} className={mobilePanel === "agent" ? "active" : ""}><Sparkles size={18} /><span>审批</span><i>1</i></button><button onClick={() => setMobilePanel("versions")} className={mobilePanel === "versions" ? "active" : ""}><History size={18} /><span>版本</span></button><button onClick={downloadCurrent}><Download size={18} /><span>下载</span></button></div>

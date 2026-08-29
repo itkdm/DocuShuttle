@@ -10,8 +10,6 @@ import { createInFlightRequestCache } from "@/lib/in-flight-request";
 type AgentResponse = { run: AgentRun };
 
 const userFacingError = (code: string | undefined, fallback: string) => ({
-  IMAGE_GENERATION_FAILED: "图片候选暂时生成失败，请稍后重试；如果持续失败，请检查图片服务配置。",
-  IMAGE_APPLY_FAILED: "图片候选应用失败，请刷新文档后重试。",
   AGENT_LOOP_FAILED: "这次请求没有完成，请稍后重试；已保留执行记录。",
   AGENT_LOOP_RESUME_FAILED: "这次操作没有恢复成功，请重新确认当前请求。",
   TURN_NOT_ALLOWED: "当前对话正在等待处理，请先完成待处理的确认或回答。",
@@ -329,32 +327,6 @@ export const createBrowserDocumentExport = async (taskId: string) =>
   json<{ export: { id: string; versionId: string; number: number; revision: string }; downloadUrl: string }>(
     `/api/tasks/${taskId}/export`, post(),
   );
-
-export type BrowserImageCandidate = {
-  id: string;
-  taskId: string;
-  targetNodeId?: string;
-  mimeType: string;
-  downloadUrl: string;
-  provider: string;
-  providerRequestId?: string;
-};
-
-export const generateBrowserImageCandidates = async (input: {
-  taskId: string;
-  prompt: string;
-  targetNodeId?: string;
-  count?: number;
-}) => json<{ candidates: BrowserImageCandidate[] }>(`/api/tasks/${input.taskId}/images`, post(input));
-
-export const applyBrowserImageCandidate = async (input: {
-  taskId: string;
-  assetId: string;
-  targetNodeId: string;
-  expectedRevision: string;
-}) => json<{ versionId: string; versionNumber: number; revision: string }>(
-  `/api/tasks/${input.taskId}/images/${input.assetId}/apply`, post(input),
-);
 
 export type BrowserImageNode = { nodeId: string; contentType?: string; byteLength: number; path: string };
 export const inspectBrowserTaskDocument = async (taskId: string) =>

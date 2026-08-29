@@ -1,0 +1,47 @@
+// @vitest-environment jsdom
+
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { AgentImageActivity } from "./agent-image-activity";
+import type { AgentActivity } from "./agent-thread-projection";
+
+const activity = (overrides: Partial<Extract<AgentActivity, { type: "tool" }>>) => ({
+  type: "tool" as const, id: "activity-1", callId: "call-1", name: "generate_image", state: "completed" as const, ...overrides,
+});
+
+describe("Agent image activity", () => {
+  afterEach(() => cleanup());
+
+  it("renders a generated asset through the authenticated same-origin preview", () => {
+    render(<AgentImageActivity taskId="task-1" activity={activity({ output: { assetId: "asset-1", purpose: "similar", referenceCount: 2 } })} deciding={false} />);
+    expect(screen.getByText("生成图片")).toBeTruthy();
+    expect(screen.getByText("已生成 · 保持参考图片风格 · 参考 2 张图片")).toBeTruthy();
+    expect(screen.getByAltText("生成结果").getAttribute("src")).toContain("/api/tasks/task-1/images/asset-1");
+    expect(screen.queryByText(/候选|应用此/)).toBeNull();
+  });
+
+  it("keeps inspect summaries human-readable and hides generation hints from the main view", () => {
+    render(<AgentImageActivity taskId="task-1" activity={activity({ name: "inspect_image", output: { source: "asset", assetId: "asset-1", analysis: { summary: "深色终端截图", type: "终端截图", style: "深色" , generationHints: "internal prompt" }, } })} deciding={false} />);
+    expect(screen.getByText("深色终端截图")).toBeTruthy();
+    expect(screen.getByText("终端截图 · 深色")).toBeTruthy();
+    expect(screen.queryByText("internal prompt")).toBeNull();
+    expect(screen.getByText("工具详情")).toBeTruthy();
+  });
+
+  it("renders replace approval with before/after previews and existing decisions", () => {
+    const onApproval = () => undefined;
+    render(<AgentImageActivity taskId="task-1" activity={activity({ name: "replace_document_image", state: "approval", input: { targetNodeId: "node-1", assetId: "asset-1", expectedRevision: "rev-1" } })} onApproval={onApproval} deciding={false} />);
+    expect(screen.getByText("替换文档图片")).toBeTruthy();
+    expect(screen.getByText("等待你的确认")).toBeTruthy();
+    expect(screen.getByText("批准并执行")).toBeTruthy();
+    expect(screen.getByText("拒绝")).toBeTruthy();
+    expect(screen.getByAltText("当前文档图片").getAttribute("src")).toContain("/api/tasks/task-1/document/images/node-1?revision=rev-1");
+    expect(screen.getByAltText("生成替换图片").getAttribute("src")).toContain("/api/tasks/task-1/images/asset-1");
+  });
+
+  it("falls back safely for malformed historical payloads", () => {
+    expect(() => render(<AgentImageActivity taskId="task-1" activity={activity({ name: "inspect_image", output: "not-an-object" })} deciding={false} />)).not.toThrow();
+    expect(screen.getByText("分析图片")).toBeTruthy();
+  });
+});

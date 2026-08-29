@@ -172,7 +172,7 @@ button:focus-visible, textarea:focus-visible, label:has(input:focus-visible) { o
 .user-bubble p { margin: 0; font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .thread-message.user[data-status="pending"] .user-bubble { opacity: .72; }
 .thread-message.user[data-status="failed"] .user-bubble { border: 1px solid #e4b9b2; color: var(--red); }
-.assistant-turn { padding: 0 2px; color: var(--ink); }
+.assistant-turn { min-width: 0; padding: 0 2px; color: var(--ink); }
 .assistant-byline { display: flex; align-items: center; gap: 7px; min-height: 24px; color: #34372f; }
 .assistant-byline strong { font-size: 13px; }
 .assistant-byline small { margin-left: 3px; color: #8c8d84; font-size: 11px; }
@@ -246,11 +246,11 @@ button:focus-visible, textarea:focus-visible, label:has(input:focus-visible) { o
 .agent-activity[open] > summary::after { transform: rotate(180deg); }
 .agent-activity-icon { display: grid; place-items: center; width: 19px; height: 19px; border-radius: 50%; color: #657b68; background: #e8f1e9; }
 .agent-activity > summary small { color: #92958b; font-size: 10px; }
-.agent-activity-body { padding: 1px 11px 8px; border-top: 1px solid #e8e7df; }
+.agent-activity-body { min-width: 0; padding: 1px 11px 8px; border-top: 1px solid #e8e7df; }
 .agent-activity-body .timeline-tool { border: 0; border-bottom: 1px solid #ecebe4; border-radius: 0; background: transparent; box-shadow: none; }
 .agent-activity-body .timeline-tool:last-child { border-bottom: 0; }
 .agent-activity-body .timeline-thought { padding-left: 0 !important; }
-.agent-turn { display: grid; gap: 10px; margin: 12px 0 18px; }
+.agent-turn { display: grid; min-width: 0; gap: 10px; margin: 12px 0 18px; }
 .agent-turn > .assistant-turn { margin-top: 0; }
 .agent-activity-body .agent-tool-item { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 35px; padding: 7px 0; border-bottom: 1px solid #ecebe4; font-size: 12px; }
 .agent-tool-item:last-child { border-bottom: 0; }

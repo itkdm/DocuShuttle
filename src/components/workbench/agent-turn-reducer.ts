@@ -93,7 +93,7 @@ export function reduceAgentEvent(state: AgentTurnEventState, event: AgentEvent, 
     const current = index >= 0 && activities[index].type === "tool" ? activities[index] as Extract<AgentActivity, { type: "tool" }> : undefined;
     if (event.type === "tool.completed" || event.type === "client_tool.resolved") {
       const target = current ?? { type: "tool" as const, id: `${runId}:tool:${callId}`, callId, name: event.name, state: "running" as const };
-      const completed = { ...target, name: event.name, state: "completed" as const, ...(event.type === "tool.completed" ? { output: event.output, durationMs: typeof event.output === "object" && event.output && "durationMs" in event.output ? Number(event.output.durationMs) : undefined } : {}) };
+      const completed = { ...target, name: event.name, state: "completed" as const, ...(event.type === "tool.completed" ? { output: event.output, durationMs: typeof event.output === "object" && event.output && "durationMs" in event.output ? Number(event.output.durationMs) : undefined } : { output: event }) };
       if (index >= 0) activities[index] = completed; else activities.push(completed);
     } else if (event.type === "tool.failed") {
       const target = current ?? { type: "tool" as const, id: `${runId}:tool:${callId}`, callId, name: event.name, state: "running" as const };

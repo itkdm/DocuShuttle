@@ -49,4 +49,10 @@ describe("Agent image activity", () => {
     expect(() => render(<AgentImageActivity taskId="task-1" activity={activity({ name: "inspect_image", output: "not-an-object" })} deciding={false} />)).not.toThrow();
     expect(screen.getByText("分析图片")).toBeTruthy();
   });
+
+  it("renders a captured document screenshot from a replayed client tool result", () => {
+    render(<AgentImageActivity taskId="task-1" activity={activity({ name: "capture_document_view", output: { assetId: "preview-1", mimeType: "image/png", width: 794, height: 6490, revision: "rev-1" } })} deciding={false} />);
+    expect(screen.getByText("查看文档截图")).toBeTruthy();
+    expect(screen.getByAltText("文档页面截图").getAttribute("src")).toContain("/api/tasks/task-1/images/preview-1");
+  });
 });

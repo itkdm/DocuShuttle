@@ -42,7 +42,7 @@ function TextMutationPreview({ activity }: { activity: Extract<AgentActivity, { 
 
 function Activity({ activity, taskId, onApproval, deciding }: { activity: AgentActivity; taskId?: string; onApproval?: (choice: "approved" | "rejected", callId?: string) => void | Promise<void>; deciding: boolean }) {
   if (activity.type === "note") return <div className="agent-activity-note">{renderAgentMarkdown(activity.text)}</div>;
-  if (activity.name === "inspect_image" || activity.name === "generate_image" || activity.name === "replace_document_image") return <AgentImageActivity activity={activity} taskId={taskId} onApproval={onApproval} deciding={deciding} />;
+  if (activity.name === "inspect_image" || activity.name === "generate_image" || activity.name === "replace_document_image" || activity.name === "capture_document_view") return <AgentImageActivity activity={activity} taskId={taskId} onApproval={onApproval} deciding={deciding} />;
   const icon = activity.state === "running" ? <LoaderCircle size={13} className="event-spinner" /> : activity.state === "failed" ? <AlertCircle size={13} /> : activity.state === "approval" ? <Shield size={13} /> : <Check size={13} />;
   const detail = activity.state === "approval" ? "等待你的确认" : activity.state === "failed" ? activity.error ?? "未完成" : activity.state === "running" ? "处理中" : "已完成";
   const row = <ToolActivityRow name={toolLabel(activity.name)} detail={`${detail}${activity.durationMs !== undefined ? ` · ${activity.durationMs}ms` : ""}`} icon={icon} className={activity.state} />;

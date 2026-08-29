@@ -45,3 +45,14 @@ describe("agent turn durable commentary", () => {
     expect(state.streamingContent).toBe("请选择目标表格。");
   });
 });
+
+describe("agent turn client tool replay", () => {
+  it("keeps the captured asset metadata for historical screenshot rendering", () => {
+    const state = reduceAgentEvents([{
+      runId: "run-1", eventId: "client-resolved", timestamp: "2026-01-01T00:00:00.000Z",
+      type: "client_tool.resolved", interactionId: "interaction-1", callId: "call-1", name: "capture_document_view",
+      assetId: "preview-1", mimeType: "image/png", sha256: "a".repeat(64), width: 794, height: 6490, revision: "rev-1",
+    }], "run-1");
+    expect(state.activities[0]).toMatchObject({ type: "tool", name: "capture_document_view", state: "completed", output: { assetId: "preview-1", revision: "rev-1" } });
+  });
+});

@@ -30,7 +30,7 @@ function ActivityIcon({ activity }: { activity: Extract<AgentActivity, { type: "
   return <Check size={13} />;
 }
 
-export function AgentImageActivity({ activity, taskId, onApproval, deciding }: { activity: Extract<AgentActivity, { type: "tool" }>; taskId?: string; onApproval?: (choice: "approved" | "rejected") => void | Promise<void>; deciding: boolean }) {
+export function AgentImageActivity({ activity, taskId, onApproval, deciding }: { activity: Extract<AgentActivity, { type: "tool" }>; taskId?: string; onApproval?: (choice: "approved" | "rejected", callId?: string) => void | Promise<void>; deciding: boolean }) {
   const input = asRecord(activity.input);
   const output = asRecord(activity.output);
   const isInspect = activity.name === "inspect_image";
@@ -54,7 +54,7 @@ export function AgentImageActivity({ activity, taskId, onApproval, deciding }: {
       {isGenerate && activity.state === "running" && <p className="agent-image-muted"><ImageIcon size={13} />正在生成图片…</p>}
       {isGenerate && activity.state === "completed" && <div className="agent-image-summary">{imageUrl && <ImagePreview src={imageUrl} alt="生成结果" />}</div>}
       {isReplace && <div className="agent-image-summary">{activity.state === "approval" ? <div className="agent-image-compare">{workingUrl && <div><small>当前图片</small><ImagePreview src={workingUrl} alt="当前文档图片" /></div>}{imageUrl && <><span className="agent-image-compare-separator" aria-hidden="true">↓</span><div><small>替换为</small><ImagePreview src={imageUrl} alt="生成替换图片" /></div></>}</div> : imageUrl && <ImagePreview src={imageUrl} alt="最终替换图片" />}</div>}
-      {isReplace && activity.state === "approval" && onApproval && <div className="agent-approval-actions"><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并替换</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div>}
+      {isReplace && activity.state === "approval" && onApproval && <div className="agent-approval-actions"><button className="primary-small" onClick={() => void onApproval("approved", activity.callId)} disabled={deciding}>批准并替换</button><button onClick={() => void onApproval("rejected", activity.callId)} disabled={deciding}>拒绝</button></div>}
   </>;
   return <ToolActivityDisclosure state={activity.state} autoOpenOnComplete={isGenerate} initiallyOpen={activity.state === "approval"} summary={row}>{content}</ToolActivityDisclosure>;
 }

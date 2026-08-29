@@ -17,7 +17,7 @@ interface AgentPanelProps {
   run?: AgentRun;
   activeEvents?: ReadonlyArray<AgentEvent>;
   historicalEvents?: ReadonlyArray<AgentEvent>;
-  onLoopApproval?: (choice: "approved" | "rejected") => void | Promise<void>;
+  onLoopApproval?: (choice: "approved" | "rejected", callId?: string) => void | Promise<void>;
   messages?: ReadonlyArray<ConversationMessage>;
   permissionMode: AgentPermissionMode;
   onPermissionModeChange: (mode: AgentPermissionMode) => void;
@@ -25,6 +25,7 @@ interface AgentPanelProps {
   hasEarlierMessages?: boolean;
   loadingEarlierMessages?: boolean;
   conversationLoading?: boolean;
+  approvalSubmitting?: boolean;
 }
 
 interface CustomSelectOption { value: string; label: string; }
@@ -60,9 +61,8 @@ function CustomSelect({ value, options, onChange, disabled, icon }: { value: str
   );
 }
 
-export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspaceReady, taskId, run, messages = [], activeEvents = [], historicalEvents = [], onLoopApproval, permissionMode, onPermissionModeChange, onLoadEarlier, hasEarlierMessages = false, loadingEarlierMessages = false, conversationLoading = false }: AgentPanelProps) {
+export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspaceReady, taskId, run, messages = [], activeEvents = [], historicalEvents = [], onLoopApproval, permissionMode, onPermissionModeChange, onLoadEarlier, hasEarlierMessages = false, loadingEarlierMessages = false, conversationLoading = false, approvalSubmitting = false }: AgentPanelProps) {
   const [prompt, setPrompt] = useState("");
-  const [deciding, setDeciding] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -114,11 +114,7 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
     stickToBottomRef.current = atBottom;
     setShowScrollToBottom(!atBottom);
   };
-  const handleLoopApproval = async (choice: "approved" | "rejected") => {
-    if (!onLoopApproval) return;
-    setDeciding(true);
-    try { await onLoopApproval(choice); } finally { setDeciding(false); }
-  };
+  const handleLoopApproval = (choice: "approved" | "rejected", callId?: string) => onLoopApproval?.(choice, callId);
   const submit = () => { if (inputBlocked || !workspaceReady) return; const value = prompt.trim(); if (!value) return; stickToBottomRef.current = true; setShowScrollToBottom(false); onRun(value); setPrompt(""); };
   return (
     <aside className="agent-panel" aria-label="纸上鸭 Agent">
@@ -127,9 +123,9 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
         <button className="icon-button" onClick={onCollapse} aria-label="收起 Agent 面板"><PanelRightClose size={17} /></button>
       </div>
       <div className="agent-content" ref={contentRef} onScroll={handleContentScroll}>
-        <AgentThread taskId={taskId} turns={turns} conversationLoading={conversationLoading} hasEarlierMessages={hasEarlierMessages} onLoadEarlier={() => { prependHeightRef.current = contentRef.current?.scrollHeight ?? null; onLoadEarlier?.(); }} loadingEarlierMessages={loadingEarlierMessages} onApproval={onLoopApproval} deciding={deciding} />
+        <AgentThread taskId={taskId} turns={turns} conversationLoading={conversationLoading} hasEarlierMessages={hasEarlierMessages} onLoadEarlier={() => { prependHeightRef.current = contentRef.current?.scrollHeight ?? null; onLoadEarlier?.(); }} loadingEarlierMessages={loadingEarlierMessages} onApproval={handleLoopApproval} deciding={approvalSubmitting} />
         {turns.length === 0 && !conversationLoading && <div className="assistant-turn assistant-empty"><div className="assistant-byline"><span className="agent-avatar">鸭</span><strong>纸上鸭</strong><small>准备就绪</small></div><p>我可以帮你理解、修改和导出当前 Word 文档。直接告诉我目标；默认模式会在写入前请你确认。</p></div>}
-          {pendingInteraction?.type === "approval" && !timelineEvents.some((event) => event.type === "approval.required" && event.interactionId === pendingInteraction.interactionId) && <div className="scope-card"><span className="scope-kicker">需要你的确认</span><strong>准备执行：{pendingInteraction.toolName}</strong><p>Agent 已生成明确的修改参数。批准后会写入文档并生成新版本。</p><div className="scope-actions"><button className="primary-small" onClick={() => void handleLoopApproval("approved")} disabled={deciding}>{deciding ? "执行中…" : <><Check size={14} /> 批准并执行</>}</button><button onClick={() => void handleLoopApproval("rejected")} disabled={deciding}>{deciding ? "处理中…" : "拒绝"}</button></div></div>}
+          {pendingInteraction?.type === "approval" && !timelineEvents.some((event) => event.type === "approval.required" && event.interactionId === pendingInteraction.interactionId) && <div className="scope-card"><span className="scope-kicker">需要你的确认</span><strong>准备执行：{pendingInteraction.toolName}</strong><p>Agent 已生成明确的修改参数。批准后会写入文档并生成新版本。</p><div className="scope-actions"><button className="primary-small" onClick={() => void handleLoopApproval("approved", pendingInteraction.callId)} disabled={approvalSubmitting}>{approvalSubmitting ? "执行中…" : <><Check size={14} /> 批准并执行</>}</button><button onClick={() => void handleLoopApproval("rejected", pendingInteraction.callId)} disabled={approvalSubmitting}>{approvalSubmitting ? "处理中…" : "拒绝"}</button></div></div>}
         {showScrollToBottom && <button type="button" className="scroll-to-bottom" onClick={() => { const element = contentRef.current; if (!element) return; stickToBottomRef.current = true; setShowScrollToBottom(false); scrollToBottom(element, "smooth"); }} aria-label="回到底部">↓ 回到底部</button>}
       </div>
       <div className="agent-composer">

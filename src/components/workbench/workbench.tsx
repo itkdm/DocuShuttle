@@ -23,6 +23,7 @@ import type { AgentPermissionMode } from "@/modules/agent/application/loop";
 import type { DocumentLoadState, UploadAsset, VersionItem } from "./types";
 import { resolveAgentRuntimeView } from "./runtime-view-state";
 import { initialConversationLoading, shouldHoldConversationRestore, startProgressiveProjection } from "./progressive-restore";
+import { createApprovalSubmissionGate } from "./approval-submission-gate";
 
 const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
@@ -63,6 +64,8 @@ export function Workbench() {
   const [conversationCursor, setConversationCursor] = useState<string | null>(null);
   const [loadingEarlierMessages, setLoadingEarlierMessages] = useState(false);
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>("default");
+  const [approvalSubmittingKey, setApprovalSubmittingKey] = useState<string>();
+  const approvalSubmissionGateRef = useRef(createApprovalSubmissionGate());
   const taskListRequestRef = useRef<Promise<TaskPage> | undefined>(undefined);
   const runtimeView = resolveAgentRuntimeView({ run, checkpoint: loopResult?.checkpoint });
   const conversationRestoring = shouldHoldConversationRestore({
@@ -433,10 +436,14 @@ export function Workbench() {
     }
   };
 
-  const decideLoop = async (choice: "approved" | "rejected") => {
+  const decideLoop = async (choice: "approved" | "rejected", expectedCallId?: string) => {
     if (!run) return;
     const pending = loopResult?.checkpoint.pendingInteraction;
     if (!pending || pending.type !== "approval") return;
+    if (expectedCallId && pending.callId !== expectedCallId) return;
+    const submissionKey = `${run.id}:${pending.interactionId}:${pending.callId}`;
+    if (!approvalSubmissionGateRef.current.claim(submissionKey)) return;
+    setApprovalSubmittingKey(submissionKey);
     setNotice(choice === "approved" ? "正在执行批准的操作…" : "已拒绝，正在继续后续处理…");
     const abortController = new AbortController();
     agentAbortRef.current = abortController;
@@ -471,6 +478,8 @@ export function Workbench() {
         setNotice(error instanceof Error ? error.message : "Agent 恢复失败");
       }
     } finally {
+      approvalSubmissionGateRef.current.release(submissionKey);
+      setApprovalSubmittingKey((current) => current === submissionKey ? undefined : current);
       if (agentAbortRef.current === abortController) agentAbortRef.current = undefined;
     }
   };
@@ -600,6 +609,8 @@ export function Workbench() {
   const pendingApproval = loopResult?.checkpoint.pendingInteraction?.type === "approval"
     ? loopResult.checkpoint.pendingInteraction
     : undefined;
+  const approvalKey = run && pendingApproval ? `${run.id}:${pendingApproval.interactionId}:${pendingApproval.callId}` : undefined;
+  const approvalSubmitting = Boolean(approvalKey && approvalSubmittingKey === approvalKey);
   return (
     <main className="workbench-app">
       <a className="skip-link" href="#document-canvas">跳到文档</a>
@@ -614,13 +625,13 @@ export function Workbench() {
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
         {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} onLoadMoreTasks={loadMoreTasks} hasMoreTasks={nextTaskOffset !== null} loadingMoreTasks={loadingMoreTasks} loadingTasks={loadingTasks} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
         <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} onChoose={chooseWorkingDocument} /></div>
-        {rightOpen ? <AgentPanel taskId={taskId} runtimeView={runtimeView} run={run} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} conversationLoading={conversationRestoring} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
+        {rightOpen ? <AgentPanel taskId={taskId} runtimeView={runtimeView} run={run} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} conversationLoading={conversationRestoring} approvalSubmitting={approvalSubmitting} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 
       <div className="mobile-dock" aria-label="移动端工作台导航"><button onClick={() => setMobilePanel("outline")} className={mobilePanel === "outline" ? "active" : ""}><FilePlus2 size={18} /><span>文档</span></button><button onClick={() => setMobilePanel("agent")} className={mobilePanel === "agent" ? "active" : ""}><Sparkles size={18} /><span>审批</span><i>1</i></button><button onClick={() => setMobilePanel("versions")} className={mobilePanel === "versions" ? "active" : ""}><History size={18} /><span>版本</span></button><button onClick={downloadCurrent}><Download size={18} /><span>下载</span></button></div>
 
       {mobilePanel !== "none" && <div className="mobile-sheet" role="dialog" aria-modal="true" aria-label={mobilePanel === "agent" ? "移动审批" : mobilePanel === "outline" ? "源文档" : "版本历史"}><div className="sheet-handle" /><button className="sheet-close" onClick={() => setMobilePanel("none")} aria-label="关闭"><X size={18} /></button>
-        {mobilePanel === "agent" && <div className="mobile-approval"><span className="eyebrow">Agent 工作区</span><h2>{pendingApproval ? "确认文档操作" : "Agent 工作区"}</h2><p>{pendingApproval ? `Agent 已生成明确的修改参数：${pendingApproval.toolName}` : "审批、运行状态和对话会显示在 Agent 面板中。"}</p><div>{pendingApproval ? <><button className="mobile-approve" onClick={() => { void decideLoop("approved"); setMobilePanel("none"); }}><Check size={16} /> 批准并执行</button><button onClick={() => { void decideLoop("rejected"); setMobilePanel("none"); }}>拒绝</button></> : null}</div></div>}
+        {mobilePanel === "agent" && <div className="mobile-approval"><span className="eyebrow">Agent 工作区</span><h2>{pendingApproval ? "确认文档操作" : "Agent 工作区"}</h2><p>{pendingApproval ? `Agent 已生成明确的修改参数：${pendingApproval.toolName}` : "审批、运行状态和对话会显示在 Agent 面板中。"}</p><div>{pendingApproval ? <><button className="mobile-approve" onClick={() => { void decideLoop("approved", pendingApproval.callId); setMobilePanel("none"); }} disabled={approvalSubmitting}><Check size={16} /> {approvalSubmitting ? "执行中…" : "批准并执行"}</button><button onClick={() => { void decideLoop("rejected", pendingApproval.callId); setMobilePanel("none"); }} disabled={approvalSubmitting}>{approvalSubmitting ? "处理中…" : "拒绝"}</button></> : null}</div></div>}
         {mobilePanel === "outline" && <div className="mobile-sources"><span className="eyebrow">任务输入</span><h2>源文档</h2>{assets.length ? assets.map((asset) => <div key={asset.kind}><FilePlus2 size={17} /><span><strong>{asset.kind === "template" ? "空白模板" : "完成示例"}</strong><small>{asset.name} · {asset.size}</small></span><Check size={15} /></div>) : <p>先选择空白模板或完成示例，再开始一个任务。</p>}<TaskList tasks={tasks} activeTaskId={taskId} onSelectTask={(id) => { openTask(id); setMobilePanel("none"); }} onCreateTask={() => { startNewTask(); setMobilePanel("none"); }} onLoadMore={loadMoreTasks} hasMore={nextTaskOffset !== null} loadingMore={loadingMoreTasks} loading={loadingTasks} /></div>}
           {mobilePanel === "versions" && <div className="mobile-versions"><span className="eyebrow">不会覆盖历史</span><h2>版本</h2>{versions.slice(0, 4).map((version) => <button key={version.id} onClick={() => { if (!version.current) void restoreVersion(version.id); }}><span>{version.id}</span><div><strong>{version.label}</strong><small>{version.time} · {version.actor}</small></div>{!version.current && <RotateCcw size={14} />}</button>)}</div>}
       </div>}

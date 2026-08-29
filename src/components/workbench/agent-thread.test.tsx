@@ -47,6 +47,15 @@ describe("Agent thread tool rows", () => {
     expect(screen.queryByText("工具详情")).toBeNull();
   });
 
+  it("disables both approval choices while a submission is pending", () => {
+    render(<AgentThread
+      turns={[{ id: "turn-approval", runId: "run-approval", anchor: "2026-01-01", user: { id: "user-approval", content: "修改", deliveryStatus: "sent" }, assistant: { status: "awaiting_approval", activities: [{ type: "tool", id: "tool-approval", callId: "call-approval", name: "apply_text_change", state: "approval", input: { expectedText: "旧", replacement: "新" } }] } }]}
+      conversationLoading={false} hasEarlierMessages={false} loadingEarlierMessages={false} onApproval={() => undefined} deciding
+    />);
+    expect((screen.getByRole("button", { name: "批准并执行" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "拒绝" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("shows all text mutation previews inside a bounded approval body", () => {
     renderActivity({ type: "tool", id: "tool-4", callId: "call-4", name: "apply_text_changes", state: "approval", input: { changes: [{ expectedText: "第一处旧内容", replacement: "第一处新内容", nodeId: "node-1" }, { expectedText: "第二处旧内容", replacement: "第二处新内容", expectedRevision: "rev-2" }] } });
     expect(screen.getByText("将修改 2 处")).toBeTruthy();

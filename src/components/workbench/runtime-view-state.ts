@@ -26,9 +26,9 @@ export function resolveAgentRuntimeView(input: { run?: AgentRun; checkpoint?: Pi
     isAwaitingApproval,
     isAwaitingUser,
     isTerminal,
-    canCancel: isRunning,
+    canCancel: isRunning || runtimeStatus === "awaiting_client",
     canSend: runtimeStatus === "idle" || isAwaitingUser || isTerminal,
-    permissionLocked: isRunning || isAwaitingApproval || isAwaitingUser,
+    permissionLocked: isRunning || isAwaitingApproval || isAwaitingUser || runtimeStatus === "awaiting_client",
     pendingInteraction,
   };
 }

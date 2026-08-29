@@ -12,7 +12,7 @@ import { TaskList } from "./task-list";
 import { formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
-import { cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, recoverBrowserAgentLoop, restoreBrowserDocumentVersion, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, recoverBrowserAgentLoop, restoreBrowserDocumentVersion, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, resumeBrowserClientTool, uploadBrowserDocumentPreview, type BrowserImageNode } from "@/modules/agent/browser-runtime";
 import { useConversationStore } from "./conversation-store";
 import { listBrowserTasks, loadBrowserTaskWorkspace, type TaskPage } from "@/modules/tasks/browser-tasks";
 import type { TaskSummary } from "@/modules/tasks/domain";
@@ -26,6 +26,7 @@ import { initialConversationLoading, shouldHoldConversationRestore, startProgres
 import { createApprovalSubmissionGate } from "./approval-submission-gate";
 import { shouldPreserveSubmittedUserReply } from "./user-input-recovery";
 import type { AgentImageAttachment } from "@/modules/agent/application/message-parts";
+import type { DocumentSurfacePort } from "@/modules/documents";
 
 const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
@@ -33,6 +34,12 @@ const initialVersions: VersionItem[] = [
 ];
 const isDocumentMutationTool = (name?: string) => name === "apply_text_change" || name === "apply_text_changes" || name === "replace_document_image";
 const messageImages = (parts: readonly { type?: string; assetId?: unknown; mimeType?: unknown }[]): AgentImageAttachment[] => parts.filter((part): part is { type: "image"; assetId: string; mimeType: AgentImageAttachment["mimeType"] } => part.type === "image" && typeof part.assetId === "string" && ["image/png", "image/jpeg", "image/webp"].includes(String(part.mimeType))).map((part) => ({ assetId: part.assetId, mimeType: part.mimeType }));
+type ClientToolInput = { target: "visible" | "page"; expectedRevision: string; pageNumber?: number };
+const isClientToolInput = (value: unknown): value is ClientToolInput => {
+  if (!value || typeof value !== "object") return false;
+  const input = value as Record<string, unknown>;
+  return (input.target === "visible" || input.target === "page") && typeof input.expectedRevision === "string" && input.expectedRevision.length > 0 && (input.target !== "page" || (typeof input.pageNumber === "number" && Number.isInteger(input.pageNumber) && input.pageNumber > 0));
+};
 export function Workbench() {
   const pathname = usePathname();
   const router = useRouter();
@@ -60,6 +67,10 @@ export function Workbench() {
   const historicalTimelineReadyRef = useRef(!routeTaskId);
   const [run, setRun] = useState<AgentRun>();
   const agentAbortRef = useRef<AbortController | undefined>(undefined);
+  const surfaceRef = useRef<DocumentSurfacePort | undefined>(undefined);
+  const clientToolSubmissionRef = useRef<string | undefined>(undefined);
+  const [surfaceReadyVersion, setSurfaceReadyVersion] = useState(0);
+  const handleSurfaceReady = useCallback(() => setSurfaceReadyVersion((version) => version + 1), []);
   const [imageNodes, setImageNodes] = useState<BrowserImageNode[]>([]);
   const [paragraphCount, setParagraphCount] = useState(0);
   const [tableCellCount, setTableCellCount] = useState(0);
@@ -214,7 +225,7 @@ export function Workbench() {
         const isCurrentProjection = () => !abort.signal.aborted && loadedTaskIdRef.current === workspace.task.id;
         if (workspace.workingDocumentId) {
           startProgressiveProjection({ load: () => loadCurrentTaskDocument(workspace.task.id, workspace.fileName), onSuccess: (document) => {
-            setDocumentLoad({ status: "ready", document: { file: document.file, bytes: document.bytes } });
+            setDocumentLoad({ status: "ready", document: { file: document.file, bytes: document.bytes, revision: document.version.revision } });
           }, onFailure: (error) => setDocumentLoad({ status: "error", message: error instanceof Error ? error.message : "文档打开失败" }) }, isCurrentProjection);
           startProgressiveProjection({ load: () => inspectBrowserTaskDocument(workspace.task.id), onSuccess: (inspection) => {
             setImageNodes(inspection.images);
@@ -266,9 +277,7 @@ export function Workbench() {
       }
     })();
     return () => abort.abort();
-  // Recovery helper intentionally closes over the current workbench state;
-  // this bootstrap effect is keyed by the task identity, not each render.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeTaskId, resetWorkspace, setMessages, setActiveEvents, setLoopResult, setHistoricalEvents]);
 
   // Load completed runs independently from the document bootstrap. A large
@@ -341,7 +350,7 @@ export function Workbench() {
       if (canReconcileDocument && reconcileTaskId) {
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
         const nextDocument = await loadCurrentTaskDocument(reconcileTaskId, fileName);
-        setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } });
+        setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
         const inspection = await inspectBrowserTaskDocument(reconcileTaskId);
         setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
         await refreshVersions(reconcileTaskId);
@@ -354,6 +363,63 @@ export function Workbench() {
     }
     return recovered;
   }
+
+  useEffect(() => {
+    const pending = loopResult?.checkpoint.pendingInteraction;
+    if (!pending || pending.type !== "client_tool" || !run || !taskId || run.taskId !== taskId || !workspaceReady) return;
+    const key = `${run.id}:${pending.interactionId}:${pending.callId}`;
+    if (clientToolSubmissionRef.current === key) return;
+    const input = isClientToolInput(pending.input) ? pending.input : undefined;
+    const surface = surfaceRef.current;
+    if (!input || !surface) return;
+    const state = surface.getState();
+    if (!state.ready || state.dirty || state.renderedRevision !== input.expectedRevision) {
+      setNotice(state.dirty ? "文档有未保存变化，暂时无法捕获视觉结果" : "文档版本已变化，请重新发起视觉检查");
+      return;
+    }
+    clientToolSubmissionRef.current = key;
+    const currentTaskId = taskId;
+    const currentRunId = run.id;
+    const currentInteractionId = pending.interactionId;
+    const currentCallId = pending.callId;
+    const abort = new AbortController();
+    agentAbortRef.current = abort;
+    void (async () => {
+      try {
+        const captured = input.target === "page" ? await surface.capturePage(input.pageNumber!) : await surface.captureVisible();
+        const pageCapture = "captures" in captured ? captured.captures[0] : captured;
+        if (!pageCapture) throw new Error("DOCUMENT_VIEW_CAPTURE_EMPTY");
+        const asset = await uploadBrowserDocumentPreview(currentTaskId, { ...pageCapture, revision: input.expectedRevision });
+        if (abort.signal.aborted) return;
+        const result = await resumeBrowserClientTool(currentRunId, currentInteractionId, currentCallId, asset);
+        applyRuntimeResult(currentRunId, result);
+        if (result.checkpoint.status === "completed") {
+          const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
+          const nextDocument = await loadCurrentTaskDocument(currentTaskId, fileName);
+          setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
+          await refreshVersions(currentTaskId);
+          setNotice("Agent 已完成视觉检查");
+        } else if (result.checkpoint.pendingInteraction) {
+          setNotice(result.checkpoint.pendingInteraction.type === "user_input" ? "Agent 正在等待你的回答" : "Agent 正在继续处理");
+        }
+      } catch {
+        clientToolSubmissionRef.current = undefined;
+        if (!abort.signal.aborted) {
+          try {
+            await recoverAndReconcileRun(currentRunId, abort.signal, currentTaskId, true);
+          } catch (recoveryError) {
+            setNotice(recoveryError instanceof Error ? `文档视觉检查未完成：${recoveryError.message}` : "文档视觉检查未完成");
+          }
+        }
+      } finally {
+        if (agentAbortRef.current === abort) agentAbortRef.current = undefined;
+      }
+    })();
+    return () => abort.abort();
+    // recoverAndReconcileRun is intentionally local so all recovery entry
+    // points share the latest workspace state without making this effect loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applyRuntimeResult, documentLoad, loopResult, run, surfaceReadyVersion, taskId, workspaceReady]);
 
   const runAgent = async (prompt: string, attachments: readonly AgentImageAttachment[] = [], lifecycle?: { accepted: () => void; failed: () => void }) => {
     if (!workspaceReady || !taskId) {
@@ -415,7 +481,7 @@ export function Workbench() {
         // while the central document still renders the previous bytes.
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
         const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
-        setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } });
+        setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
         const inspection = await inspectBrowserTaskDocument(taskId);
         setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
         await refreshVersions(taskId);
@@ -480,7 +546,7 @@ export function Workbench() {
         if (taskId) {
           const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
           const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
-          setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } });
+          setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
           await refreshVersions(taskId);
         }
         setNotice("Agent 已完成写入并通过版本校验");
@@ -553,7 +619,8 @@ export function Workbench() {
       const createsWorkingDocument = isWorkingDocumentUpload(kind, persisted);
       const hadWorkingDocument = Boolean(sourceState.workingDocumentId);
       if (createsWorkingDocument && !hadWorkingDocument) {
-        setDocumentLoad({ status: "ready", document: { file, bytes } });
+        const persistedDocument = await loadCurrentTaskDocument(persisted.taskId, file.name);
+        setDocumentLoad({ status: "ready", document: { file: persistedDocument.file, bytes: persistedDocument.bytes, revision: persistedDocument.version.revision } });
         setVersions([{ id: persisted.versionId ?? "initial", label: isTemplate ? "原始模板" : "完成示例", time: "刚刚", actor: "你", versionNumber: 0, current: true }]);
         setWorkspaceReady(true);
         await refreshVersions(persisted.taskId);
@@ -605,7 +672,7 @@ export function Workbench() {
         const restored = await restoreBrowserDocumentVersion(taskId, id);
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
         const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
-          setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } }); const inspection = await inspectBrowserTaskDocument(taskId); setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
+          setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } }); const inspection = await inspectBrowserTaskDocument(taskId); setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
         await refreshVersions(taskId);
         setVersionsOpen(false); setMobilePanel("none"); setNotice(`已创建恢复版本 v${restored.version.version_number}，完整历史已保留`);
       } catch (error) { setNotice(error instanceof Error ? error.message : "恢复版本失败"); }
@@ -645,7 +712,7 @@ export function Workbench() {
 
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
         {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} onLoadMoreTasks={loadMoreTasks} hasMoreTasks={nextTaskOffset !== null} loadingMoreTasks={loadingMoreTasks} loadingTasks={loadingTasks} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
-        <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} onChoose={chooseWorkingDocument} /></div>
+        <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}-${documentLoad.document.revision ?? ""}` : documentLoad.status} loadState={documentLoad} onChoose={chooseWorkingDocument} surfaceRef={surfaceRef} onSurfaceReady={handleSurfaceReady} /></div>
         {rightOpen ? <AgentPanel taskId={taskId} runtimeView={runtimeView} run={run} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} conversationLoading={conversationRestoring} approvalSubmitting={approvalSubmitting} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 

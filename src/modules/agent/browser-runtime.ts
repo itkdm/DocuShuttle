@@ -1,6 +1,7 @@
 "use client";
 
 import type { AgentRun } from "./domain/model";
+import type { AgentClientToolResult } from "./domain/model";
 import type { AgentPermissionMode } from "./application/loop";
 import type { PublicAgentLoopResult } from "./application/public-runtime";
 import { isAgentEvent, isDurableAgentEvent, type AgentEvent, type DurableAgentEvent } from "./application/events";
@@ -280,6 +281,19 @@ export async function recoverBrowserAgentLoop(
 
 export const resumeBrowserAgentLoop = async (runId: string, approval: "approved" | "rejected", interactionId: string, callId: string) =>
   json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop/resume`, post({ approval, interactionId, callId }));
+
+export const resumeBrowserClientTool = async (runId: string, interactionId: string, callId: string, result: AgentClientToolResult) =>
+  json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop/resume`, post({ interactionId, callId, result }));
+
+export const uploadBrowserDocumentPreview = async (taskId: string, capture: { blob: Blob; width: number; height: number; revision: string; pageNumber?: number }) => {
+  const form = new FormData();
+  form.set("file", capture.blob, "document-preview.png");
+  form.set("width", String(capture.width));
+  form.set("height", String(capture.height));
+  form.set("revision", capture.revision);
+  if (capture.pageNumber !== undefined) form.set("pageNumber", String(capture.pageNumber));
+  return json<{ assetId: string; mimeType: "image/png"; sha256: string; width: number; height: number; revision: string; pageNumber?: number }>(`/api/tasks/${taskId}/document/previews`, { method: "POST", body: form });
+};
 
 export const resumeBrowserAgentLoopStream = async (
   runId: string,

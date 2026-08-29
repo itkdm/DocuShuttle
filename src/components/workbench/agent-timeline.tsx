@@ -112,7 +112,7 @@ export function isTimelineActive(events: readonly AgentEvent[], items: readonly 
   const last = events.at(-1)?.type;
   // A local turn.started is rendered before the request reaches the server.
   // Keep the run affordance visible during that short create/stream gap too.
-  return last === "turn.started" || last === "model.started" || last === "model.delta" || last === "tool.started";
+  return last === "turn.started" || last === "model.started" || last === "model.delta" || last === "tool.started" || last === "client_tool.required";
 }
 
 export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
@@ -163,6 +163,16 @@ export function buildTimeline(events: readonly AgentEvent[]): TimelineItem[] {
       const index = toolIndex.get(callId);
       if (index === undefined) { toolIndex.set(callId, items.length); items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "approval", input: event.input }); }
       else { const item = items[index]; if (item.kind === "tool") item.state = "approval"; }
+    } else if (event.type === "client_tool.required" && eventName(event)) {
+      const callId = eventCallId(event) ?? id;
+      const index = toolIndex.get(callId);
+      if (index === undefined) { toolIndex.set(callId, items.length); items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "running" }); }
+      else { const item = items[index]; if (item.kind === "tool") item.state = "running"; }
+    } else if (event.type === "client_tool.resolved" && eventName(event)) {
+      const callId = eventCallId(event) ?? id;
+      const index = toolIndex.get(callId);
+      if (index === undefined) items.push({ kind: "tool", id: callId, name: eventName(event)!, state: "completed" });
+      else { const item = items[index]; if (item.kind === "tool") item.state = "completed"; }
     } else if (event.type === "approval.resolved" && eventName(event)) {
       const callId = eventCallId(event) ?? id;
       const decision = (event as unknown as Record<string, unknown>).decision;

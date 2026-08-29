@@ -6,7 +6,7 @@ export type { AgentActivity } from "./agent-turn-reducer";
 
 export type AgentThreadAssistant = {
   messageId?: string;
-  status: "running" | "awaiting_approval" | "awaiting_user" | "completed" | "failed" | "cancelled";
+  status: "running" | "awaiting_approval" | "awaiting_user" | "awaiting_client" | "completed" | "failed" | "cancelled";
   streamingContent?: string;
   finalContent?: string;
   activities: readonly AgentActivity[];
@@ -30,12 +30,17 @@ function assistantStatus(events: readonly AgentEvent[], finalContent?: string): 
   const ordered = [...events].sort((a, b) => eventTime(a) - eventTime(b));
   if (ordered.some((event) => event.type === "turn.cancelled")) return "cancelled";
   if (ordered.some((event) => event.type === "turn.failed")) return "failed";
+  if (ordered.some((event) => event.type === "turn.completed" || event.type === "assistant.message") || finalContent) return "completed";
   const approvalRequired = ordered.findLast((event) => event.type === "approval.required");
   if (approvalRequired) {
     const resolved = ordered.findLast((event) => event.type === "approval.resolved" && event.interactionId === approvalRequired.interactionId) as Extract<AgentEvent, { type: "approval.resolved" }> | undefined;
     if (!resolved) return "awaiting_approval";
   }
-  if (ordered.some((event) => event.type === "turn.completed" || event.type === "assistant.message") || finalContent) return "completed";
+  const clientRequired = ordered.findLast((event) => event.type === "client_tool.required");
+  if (clientRequired) {
+    const resolved = ordered.some((event) => event.type === "client_tool.resolved" && event.interactionId === clientRequired.interactionId && event.callId === clientRequired.callId);
+    if (!resolved) return "awaiting_client";
+  }
   return events.length ? "running" : "completed";
 }
 
@@ -43,6 +48,7 @@ export function executionSummary(status: AgentThreadAssistant["status"], activit
   if (status === "running") return "正在处理";
   if (status === "awaiting_approval") return "等待确认";
   if (status === "awaiting_user") return "等待你的回答";
+  if (status === "awaiting_client") return "正在查看文档";
   if (status === "failed") return "执行未完成";
   if (status === "cancelled") return "已取消";
   return `已完成 ${activities.filter((activity) => activity.type === "tool" && activity.state === "completed").length} 个步骤`;

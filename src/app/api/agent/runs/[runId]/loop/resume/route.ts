@@ -24,8 +24,21 @@ import { SupabaseDocumentVersionAccess } from "@/modules/agent/infrastructure/su
 import { SupabaseSourceDocumentContext } from "@/modules/agent/infrastructure/supabase/source-context";
 import { SupabaseAgentConversationContext } from "@/modules/agent/infrastructure/supabase/conversation-context";
 import { OoxmlPreservationKernel } from "@/modules/documents";
+import { createClientDocumentTools } from "@/modules/agent/application/client-tools";
 
-const schema = z.object({ approval: z.enum(["approved", "rejected"]), interactionId: z.uuid(), callId: z.string().trim().min(1).max(200) });
+const clientToolResultSchema = z.object({
+  assetId: z.uuid(),
+  mimeType: z.literal("image/png"),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  pageNumber: z.number().int().positive().optional(),
+  width: z.number().int().positive().max(10_000),
+  height: z.number().int().positive().max(10_000),
+  revision: z.string().min(1).max(200),
+});
+const schema = z.union([
+  z.object({ approval: z.enum(["approved", "rejected"]), interactionId: z.uuid(), callId: z.string().trim().min(1).max(200) }),
+  z.object({ interactionId: z.uuid(), callId: z.string().trim().min(1).max(200), result: clientToolResultSchema }),
+]);
 const eventPayload = (event: string, data: unknown) => {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 };
@@ -50,6 +63,7 @@ async function createRunner(runId: string) {
     ...createImageInspectionTools(taskId, kernel, working, sources, createImageVisionFromEnvironment(), assets, storage, owner, inspectionSession),
     ...createImageGenerationTools((context) => new AgentImageGenerationService(createImageGenerationProviderFromEnvironment(), new SupabaseImageGenerationJobStore(client), assets, storage, resolver, new RemoteImageFetcher(), owner, taskId, context.runId, context.callId, context.idempotencyKey)),
     ...createImageReplacementTools(kernel, working, assets, storage, owner, taskId, inspectionSession),
+    ...createClientDocumentTools(),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
   return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client));
@@ -58,7 +72,9 @@ async function createRunner(runId: string) {
 async function runResume(request: Request, runId: string, stream: boolean) {
   const input = schema.parse(await request.json());
   const runner = await createRunner(runId);
-  if (!stream) return NextResponse.json(projectAgentLoopResultForClient(await runner.resume(runId, input.approval, input.interactionId, input.callId, request.signal)));
+  if (!stream) return NextResponse.json(projectAgentLoopResultForClient("result" in input
+    ? await runner.resumeClientTool(runId, input.interactionId, input.callId, input.result, request.signal)
+    : await runner.resume(runId, input.approval, input.interactionId, input.callId, request.signal)));
   const encoder = new TextEncoder();
   const responseStream = new ReadableStream({
     async start(controller) {
@@ -67,7 +83,9 @@ async function runResume(request: Request, runId: string, stream: boolean) {
       request.signal.addEventListener("abort", () => { open = false; }, { once: true });
       const send = (event: string, data: unknown) => { if (!open) return; try { controller.enqueue(encoder.encode(eventPayload(event, data))); } catch { open = false; } };
       try {
-        const result = await runner.resume(runId, input.approval, input.interactionId, input.callId, request.signal, (event) => send("event", event));
+        const result = "result" in input
+          ? await runner.resumeClientTool(runId, input.interactionId, input.callId, input.result, request.signal, (event) => send("event", event))
+          : await runner.resume(runId, input.approval, input.interactionId, input.callId, request.signal, (event) => send("event", event));
         send("result", projectAgentLoopResultForClient(result));
       } catch (error) {
         if (open) send("error", { code: error instanceof Error ? error.message : "AGENT_LOOP_RESUME_FAILED" });
@@ -87,7 +105,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
     if (error instanceof Error && error.message === "No pending agent approval") {
       return NextResponse.json({ code: "APPROVAL_NOT_PENDING" }, { status: 409 });
     }
-    if (error instanceof Error && ["APPROVAL_ALREADY_CLAIMED", "APPROVAL_INTERACTION_MISMATCH", "APPROVAL_RESOLUTION_MISMATCH", "RUN_CANCELLED"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
+    if (error instanceof Error && error.message === "No pending client tool") {
+      return NextResponse.json({ code: "CLIENT_TOOL_NOT_PENDING" }, { status: 409 });
+    }
+    if (error instanceof Error && ["APPROVAL_ALREADY_CLAIMED", "APPROVAL_INTERACTION_MISMATCH", "APPROVAL_RESOLUTION_MISMATCH", "CLIENT_TOOL_ALREADY_CLAIMED", "CLIENT_TOOL_INTERACTION_MISMATCH", "CLIENT_TOOL_REVISION_MISMATCH", "RUN_CANCELLED"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
     logger.error("http.request.failed", { route: "/api/agent/runs/:runId/loop/resume", error });
     return NextResponse.json({ code: "AGENT_LOOP_RESUME_FAILED" }, { status: 500 });
   }
@@ -101,7 +122,8 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
     if (error instanceof z.ZodError) return NextResponse.json({ code: "INVALID_REQUEST", issues: error.issues }, { status: 400 });
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
     if (error instanceof Error && error.message === "No pending agent approval") return NextResponse.json({ code: "APPROVAL_NOT_PENDING" }, { status: 409 });
-    if (error instanceof Error && ["APPROVAL_ALREADY_CLAIMED", "APPROVAL_INTERACTION_MISMATCH", "APPROVAL_RESOLUTION_MISMATCH", "RUN_CANCELLED"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
+    if (error instanceof Error && error.message === "No pending client tool") return NextResponse.json({ code: "CLIENT_TOOL_NOT_PENDING" }, { status: 409 });
+    if (error instanceof Error && ["APPROVAL_ALREADY_CLAIMED", "APPROVAL_INTERACTION_MISMATCH", "APPROVAL_RESOLUTION_MISMATCH", "CLIENT_TOOL_ALREADY_CLAIMED", "CLIENT_TOOL_INTERACTION_MISMATCH", "CLIENT_TOOL_REVISION_MISMATCH", "RUN_CANCELLED"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
     logger.error("http.request.failed", { route: "/api/agent/runs/:runId/loop/resume", error });
     return NextResponse.json({ code: error instanceof Error ? error.message : "AGENT_LOOP_RESUME_FAILED" }, { status: 500 });
   }

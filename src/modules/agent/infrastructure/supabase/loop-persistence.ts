@@ -4,6 +4,7 @@ import { AGENT_LEASE_MANAGED_STATUSES, normalizeAgentLoopCheckpoint, type AgentE
 import type { AgentConversationContext } from "../../application/ports";
 import { createAgentEvent, type AgentEvent } from "../../application/events";
 import { ConcurrentRunUpdateError } from "../../domain/errors";
+import type { AgentClientToolResult } from "../../domain/model";
 import { logger, measure } from "@/infrastructure/observability";
 import type { AgentImageAttachment } from "../../application/message-parts";
 import { describeAgentImages, imagePartsFromMessageParts, textFromAgentMessageParts, normalizeAgentMessageParts } from "../../application/message-parts";
@@ -239,6 +240,27 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
 
   async resolvePendingUserInput(runId: string, interactionId: string, message: { id: string; text: string; images?: readonly AgentImageAttachment[] }): Promise<AgentLoopCheckpoint | undefined> {
     return this.resolvePendingInteraction(runId, interactionId, "user_input", message);
+  }
+
+  async resolvePendingClientTool(runId: string, interactionId: string, callId: string, resultValue: AgentClientToolResult): Promise<AgentLoopCheckpoint | undefined> {
+    return measure("agent.client_tool.resolve", { runId, interactionId, interactionType: "client_tool", operation: "rpc", rpc: "resolve_agent_loop_interaction" }, async () => {
+      const result = await this.client.rpc("resolve_agent_loop_interaction", {
+        p_run_id: runId,
+        p_interaction_id: interactionId,
+        p_interaction_type: "client_tool",
+        p_call_id: callId,
+        p_resolution: { interactionId, type: "client_tool", callId, result: resultValue },
+      });
+      if (result.error) {
+        if (result.error.message.includes("INTERACTION_ALREADY_CLAIMED")) return undefined;
+        if (result.error.message.includes("INTERACTION_MISMATCH")) throw new Error("CLIENT_TOOL_INTERACTION_MISMATCH");
+        throw new Error(`Unable to claim client tool interaction: ${result.error.message}`);
+      }
+      const payload = result.data as { checkpoint?: unknown; lockVersion?: unknown } | null;
+      if (!payload || typeof payload.lockVersion !== "number" || !Number.isInteger(payload.lockVersion) || payload.lockVersion < 0 || !payload.checkpoint) throw new Error("Invalid client tool resolution response");
+      this.versions.set(runId, payload.lockVersion);
+      return normalizeAgentLoopCheckpoint(payload.checkpoint);
+    });
   }
 
   private async resolvePendingInteraction(runId: string, interactionId: string, interactionType: "approval" | "user_input", resolution: { callId: string; decision: "approved" | "rejected" } | { id: string; text: string; images?: readonly AgentImageAttachment[] }): Promise<AgentLoopCheckpoint | undefined> {

@@ -27,6 +27,7 @@ import { OoxmlPreservationKernel } from "@/modules/documents";
 import { logger, withLogContext } from "@/infrastructure/observability";
 import { agentImageAttachmentSchema, type AgentImageAttachment } from "@/modules/agent/application/message-parts";
 import { SupabaseImageAssetStore } from "@/modules/uploads/supabase-image-asset-store";
+import { createClientDocumentTools } from "@/modules/agent/application/client-tools";
 
 const schema = z.object({
   message: z.string().max(8_000),
@@ -60,6 +61,7 @@ async function createRunner(runId: string) {
     ...createImageInspectionTools(taskId, kernel, working, sources, createImageVisionFromEnvironment(), assets, storage, owner, inspectionSession),
     ...createImageGenerationTools((context) => new AgentImageGenerationService(createImageGenerationProviderFromEnvironment(), new SupabaseImageGenerationJobStore(client), assets, storage, resolver, new RemoteImageFetcher(), owner, taskId, context.runId, context.callId, context.idempotencyKey)),
     ...createImageReplacementTools(kernel, working, assets, storage, owner, taskId, inspectionSession),
+    ...createClientDocumentTools(),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
   return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client, bootstrap.context));

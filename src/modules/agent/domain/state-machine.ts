@@ -3,7 +3,8 @@ import type { AgentRunStatus } from "./model";
 
 const transitions: Readonly<Record<AgentRunStatus, readonly AgentRunStatus[]>> = {
   queued: ["running", "cancelled", "failed"],
-  running: ["awaiting_approval", "awaiting_user", "completed", "failed", "cancelled"],
+  running: ["awaiting_approval", "awaiting_user", "awaiting_client", "completed", "failed", "cancelled"],
+  awaiting_client: ["running", "failed", "cancelled"],
   awaiting_approval: ["running", "failed", "cancelled"],
   awaiting_user: ["running", "failed", "cancelled"],
   completed: [],

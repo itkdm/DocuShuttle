@@ -4,6 +4,7 @@ export * from "./application/loop";
 export * from "./application/context-compaction";
 export * from "./application/document-tools";
 export * from "./application/document-version-tools";
+export * from "./application/client-tools";
 export * from "./application/source-context-tools";
 export * from "./infrastructure/openai-compatible-model";
 export * from "./infrastructure/supabase/document-version-access";

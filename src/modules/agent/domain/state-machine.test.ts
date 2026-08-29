@@ -10,6 +10,7 @@ describe("Agent runtime lifecycle", () => {
       "running",
       "awaiting_approval",
       "awaiting_user",
+      "awaiting_client",
       "completed",
       "failed",
       "cancelled",
@@ -23,6 +24,7 @@ describe("Agent runtime lifecycle", () => {
     expect(canTransition("running", "completed")).toBe(true);
     expect(canTransition("running", "awaiting_approval")).toBe(true);
     expect(canTransition("running", "awaiting_user")).toBe(true);
+    expect(canTransition("running", "awaiting_client")).toBe(true);
     expect(canTransition("completed", "running")).toBe(false);
   });
 
@@ -30,5 +32,6 @@ describe("Agent runtime lifecycle", () => {
     expect(isTerminalStatus("completed")).toBe(true);
     expect(isTerminalStatus("awaiting_approval")).toBe(false);
     expect(isTerminalStatus("awaiting_user")).toBe(false);
+    expect(isTerminalStatus("awaiting_client")).toBe(false);
   });
 });

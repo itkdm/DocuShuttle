@@ -10,6 +10,8 @@ export const AGENT_EVENT_TYPES = [
   "tool.failed",
   "approval.required",
   "approval.resolved",
+  "client_tool.required",
+  "client_tool.resolved",
   "turn.completed",
   "turn.failed",
   "turn.cancelled",
@@ -30,6 +32,8 @@ export type AgentEventPayload =
   | { type: "tool.failed"; callId: string; name: string; error: string; durationMs?: number }
   | { type: "approval.required"; interactionId: string; callId: string; name: string; input: unknown }
   | { type: "approval.resolved"; interactionId: string; callId: string; name: string; decision: "approved" | "rejected" }
+  | { type: "client_tool.required"; interactionId: string; callId: string; name: string; target: "visible" | "page"; pageNumber?: number }
+  | { type: "client_tool.resolved"; interactionId: string; callId: string; name: string; assetId: string; mimeType: "image/png"; sha256: string; pageNumber?: number; width: number; height: number; revision: string }
   | { type: "turn.completed"; text: string }
   | { type: "turn.failed"; error: string }
   | { type: "turn.cancelled"; text: string };
@@ -92,6 +96,15 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
         && (!hasField("durationMs") || isNumber("durationMs"));
     case "approval.resolved":
       return isString("interactionId") && isString("callId") && isString("name") && (event.decision === "approved" || event.decision === "rejected");
+    case "client_tool.required":
+      return isString("interactionId") && isString("callId") && isString("name")
+        && (event.target === "visible" || event.target === "page")
+        && (!hasField("pageNumber") || (isNumber("pageNumber") && Number.isInteger(event.pageNumber as number) && (event.pageNumber as number) > 0));
+    case "client_tool.resolved":
+      return isString("interactionId") && isString("callId") && isString("name")
+        && isString("assetId") && event.mimeType === "image/png" && isString("sha256")
+        && isNumber("width") && isNumber("height") && isString("revision")
+        && (!hasField("pageNumber") || (isNumber("pageNumber") && Number.isInteger(event.pageNumber as number) && (event.pageNumber as number) > 0));
     case "turn.completed":
       return isString("text");
     case "turn.failed":

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { compactAgentMessages, DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY, type AgentContextCompactionPolicy } from "./context-compaction";
 import { createAgentEvent, shouldPersistAgentEvent, type AgentEvent, type AgentEventPayload } from "./events";
 import type { AgentConversationContextPort } from "./ports";
-import type { AgentInteractionResolution, AgentRuntimePendingInteraction } from "../domain/model";
+import type { AgentClientToolResult, AgentInteractionResolution, AgentRuntimePendingInteraction } from "../domain/model";
 import type { AgentImageAttachment } from "./message-parts";
 import { describeAgentImages } from "./message-parts";
 
@@ -31,6 +31,8 @@ export type AgentTool<TSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
   description: string;
   inputSchema: TSchema;
   requiresApproval?: boolean;
+  /** Client-only tools pause the durable run until the browser returns a safe result. */
+  clientExecution?: boolean;
   execute(input: z.infer<TSchema>, context: AgentToolContext): Promise<unknown>;
 };
 
@@ -62,7 +64,7 @@ export type AgentLoopCheckpoint = {
   toolCallCount: number;
   pendingInteraction?: AgentRuntimePendingInteraction;
   pendingResolution?: AgentInteractionResolution;
-  status: "running" | "awaiting_approval" | "awaiting_user" | "completed" | "failed" | "cancelled";
+  status: "running" | "awaiting_approval" | "awaiting_user" | "awaiting_client" | "completed" | "failed" | "cancelled";
   finalText?: string;
   permissionMode?: AgentPermissionMode;
 };
@@ -94,6 +96,7 @@ export type AgentLoopStore = {
   releaseLeaseForRecovery?(runId: string): Promise<void>;
   resolvePendingApproval?(runId: string, interactionId: string, callId: string, decision: "approved" | "rejected"): Promise<AgentLoopCheckpoint | undefined>;
   resolvePendingUserInput?(runId: string, interactionId: string, message: { id: string; text: string; images?: readonly AgentImageAttachment[] }): Promise<AgentLoopCheckpoint | undefined>;
+  resolvePendingClientTool?(runId: string, interactionId: string, callId: string, result: AgentClientToolResult): Promise<AgentLoopCheckpoint | undefined>;
   markCancelled?(runId: string): Promise<void>;
 };
 
@@ -335,6 +338,9 @@ export class AgentLoopRunner {
     }
     if (latest?.pendingResolution?.type === "user_input") {
       return this.runWithPermission(runId, latest.pendingResolution.text, latest.permissionMode ?? "default", signal, onEvent, latest.pendingResolution.messageId, latest.pendingResolution.interactionId);
+    }
+    if (latest?.pendingResolution?.type === "client_tool") {
+      return this.resumeClientTool(runId, latest.pendingResolution.interactionId, latest.pendingResolution.callId, latest.pendingResolution.result, signal, onEvent);
     }
     if (latest) await this.recoverUnfinishedTool(runId, latest, signal, onEvent);
     return this.runWithPermission(runId, "", current.permissionMode ?? "default", signal, onEvent);
@@ -628,6 +634,29 @@ export class AgentLoopRunner {
           onEvent?.(approvalEvent);
           return { checkpoint, events };
         }
+        if (tool.clientExecution) {
+          const interactionId = crypto.randomUUID();
+          const clientInput = call.input as { target?: unknown; pageNumber?: unknown };
+          checkpoint.pendingInteraction = {
+            interactionId,
+            type: "client_tool",
+            callId: call.id,
+            toolName: call.name,
+            input,
+          };
+          checkpoint.status = "awaiting_client";
+          const requiredEvent = emit({
+            type: "client_tool.required",
+            interactionId,
+            callId: call.id,
+            name: call.name,
+            target: clientInput.target === "page" ? "page" : "visible",
+            ...(typeof clientInput.pageNumber === "number" ? { pageNumber: clientInput.pageNumber } : {}),
+          }, false);
+          await saveCheckpoint();
+          onEvent?.(requiredEvent);
+          return { checkpoint, events };
+        }
         const idempotencyKey = `${runId}:${call.id}`;
         const existingReceipt = await this.store.loadEffectReceipt?.(runId, idempotencyKey);
         if (existingReceipt) {
@@ -811,6 +840,39 @@ export class AgentLoopRunner {
       await saveCheckpoint();
       onEvent?.(rejectedEvent);
     }
+    const continuation = await this.runWithPermission(runId, "", checkpoint.permissionMode ?? "default", signal, onEvent);
+    return { checkpoint: continuation.checkpoint, events: [...events, ...continuation.events] };
+  }
+
+  async resumeClientTool(runId: string, interactionId: string, callId: string, result: AgentClientToolResult, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void): Promise<AgentLoopResult> {
+    const current = await this.store.load(runId);
+    if (current?.status === "cancelled") throw new Error("RUN_CANCELLED");
+    const pending = current?.pendingInteraction?.type === "client_tool" ? current.pendingInteraction : undefined;
+    const existingResolution = current?.pendingResolution?.type === "client_tool" ? current.pendingResolution : undefined;
+    if (!pending && !existingResolution) throw new Error("No pending client tool");
+    const resolved = existingResolution ?? {
+      interactionId,
+      type: "client_tool" as const,
+      callId,
+      toolName: pending!.toolName,
+      result,
+    };
+    if (resolved.interactionId !== interactionId || resolved.callId !== callId) throw new Error("CLIENT_TOOL_INTERACTION_MISMATCH");
+    const checkpoint = existingResolution
+      ? current!
+      : this.store.resolvePendingClientTool
+        ? await this.store.resolvePendingClientTool(runId, interactionId, callId, result)
+        : undefined;
+    if (!checkpoint) throw new Error("CLIENT_TOOL_ALREADY_CLAIMED");
+    const actual = checkpoint.pendingResolution?.type === "client_tool" ? checkpoint.pendingResolution : resolved;
+    checkpoint.pendingInteraction = undefined;
+    checkpoint.status = "running";
+    checkpoint.messages.push({ role: "tool", content: serializeToolOutput(actual.result), toolCallId: actual.callId, toolName: actual.toolName });
+    const events: AgentEvent[] = [];
+    const required = existingResolution ? undefined : createAgentEvent(runId, { type: "client_tool.resolved", interactionId: actual.interactionId, callId: actual.callId, name: actual.toolName, ...actual.result });
+    if (required) { events.push(required); this.observe(runId, required, checkpoint.permissionMode); onEvent?.(required); }
+    checkpoint.pendingResolution = undefined;
+    await this.store.save(runId, checkpoint);
     const continuation = await this.runWithPermission(runId, "", checkpoint.permissionMode ?? "default", signal, onEvent);
     return { checkpoint: continuation.checkpoint, events: [...events, ...continuation.events] };
   }

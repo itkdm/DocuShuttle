@@ -60,8 +60,11 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const started = performance.now();
+  let requestedTaskId: string | undefined;
   try {
     const input = schema.parse(await request.json());
+    requestedTaskId = input.taskId;
+    logger.info("agent.run_create.started", { taskId: input.taskId, hasAttachments: input.attachments.length });
     const { client, userId } = await requireSupabaseIdentity();
     // The database RPC owns the active-run guard, stale lease reclaim, working
     // document/revision lookup, conversation identity, and atomic turn insert.
@@ -80,6 +83,7 @@ export async function POST(request: Request) {
     if (error instanceof Error && ["CONCURRENT_TURN", "TURN_NOT_ALLOWED"].includes(error.message)) {
       return NextResponse.json({ code: "TURN_NOT_ALLOWED", message: "当前对话已有一轮请求正在处理，请稍后继续。" }, { status: 409 });
     }
+    logger.error("agent.run_create.failed", { taskId: requestedTaskId, durationMs: performance.now() - started, error });
     return agentErrorResponse(error);
   }
 }

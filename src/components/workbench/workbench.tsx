@@ -354,7 +354,7 @@ export function Workbench() {
     return recovered;
   }
 
-  const runAgent = async (prompt: string, attachments: readonly AgentImageAttachment[] = []) => {
+  const runAgent = async (prompt: string, attachments: readonly AgentImageAttachment[] = [], lifecycle?: { accepted: () => void; failed: () => void }) => {
     if (!workspaceReady || !taskId) {
       setNotice("请先打开一份 DOCX，建立文档工作区");
       return;
@@ -381,6 +381,7 @@ export function Workbench() {
       activeRunForRecovery = activeRun;
       setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, runId: activeRun.id } : item));
       setRun(activeRun);
+      lifecycle?.accepted();
       const interactionId = loopResult?.checkpoint.pendingInteraction?.type === "user_input" ? loopResult.checkpoint.pendingInteraction.interactionId : undefined;
       const result = await runBrowserAgentLoopStream(activeRun.id, prompt, permissionMode, (event) => {
         setActiveEvents((items) => mergeTimelineEvents(items, [event]));
@@ -421,7 +422,7 @@ export function Workbench() {
       // A model/provider can fail after the loop has durably saved an approval
       // checkpoint. Recover that checkpoint so the user sees the real next
       // action instead of a misleading generic failure message.
-      const runToRecover = activeRunForRecovery ?? run;
+      const runToRecover = activeRunForRecovery;
       if (runToRecover) {
         try {
           const recovered = await recoverAndReconcileRun(runToRecover.id);
@@ -435,6 +436,7 @@ export function Workbench() {
           }
         } catch { /* preserve the original error below */ }
       }
+      if (!activeRunForRecovery) lifecycle?.failed();
       setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, status: "failed" } : item));
       setNotice(error instanceof Error ? `连接中断，恢复失败：${error.message}` : "连接中断，恢复失败，请刷新后重试。");
     } finally {

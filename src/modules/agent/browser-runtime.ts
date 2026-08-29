@@ -16,7 +16,7 @@ const userFacingError = (code: string | undefined, fallback: string) => ({
   TURN_NOT_ALLOWED: "当前对话正在等待处理，请先完成待处理的确认或回答。",
 }[code ?? ""] ?? fallback);
 
-type BrowserLog = { event: string; durationMs?: number; totalMs?: number; timeToHeadersMs?: number; firstEventMs?: number; firstSseEventMs?: number; firstModelDeltaMs?: number; chunkCount?: number; frameCount?: number; bytesReceived?: number; status?: number; route?: string; lastEventId?: string; finalResultReceived?: boolean };
+type BrowserLog = { event: string; durationMs?: number; totalMs?: number; timeToHeadersMs?: number; firstEventMs?: number; firstSseEventMs?: number; firstModelDeltaMs?: number; chunkCount?: number; frameCount?: number; bytesReceived?: number; status?: number; route?: string; taskId?: string; lastEventId?: string; finalResultReceived?: boolean };
 const browserLogQueue: BrowserLog[] = [];
 let browserLogFlushTimer: ReturnType<typeof setTimeout> | undefined;
 const flushBrowserLogs = () => {
@@ -150,12 +150,13 @@ const consumeAgentFetch = async (
 
 export const createBrowserAgentRun = async (taskId: string, goal: string, clientMessageId?: string, attachments: readonly AgentImageAttachment[] = []) => {
   const started = performance.now();
+  logBrowserEvent({ event: "client.agent.run_create.started", taskId });
   try {
     const run = (await json<AgentResponse>("/api/agent/runs", post({ taskId, goal, attachments, ...(clientMessageId ? { clientMessageId } : {}) }))).run;
     logBrowserEvent({ event: "client.agent.run_create.completed", durationMs: performance.now() - started });
     return run;
   } catch (error) {
-    logBrowserEvent({ event: "client.agent.run_create.failed", durationMs: performance.now() - started });
+    logBrowserEvent({ event: "client.agent.run_create.failed", taskId, durationMs: performance.now() - started });
     throw error;
   }
 };

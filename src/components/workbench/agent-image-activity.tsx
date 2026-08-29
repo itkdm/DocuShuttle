@@ -11,10 +11,6 @@ type RecordValue = Record<string, unknown>;
 
 export const asRecord = (value: unknown): RecordValue | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : undefined;
 const stringField = (record: RecordValue | undefined, key: string) => typeof record?.[key] === "string" ? record[key] as string : undefined;
-const numberField = (record: RecordValue | undefined, key: string) => typeof record?.[key] === "number" && Number.isFinite(record[key]) ? record[key] as number : undefined;
-const arrayField = (record: RecordValue | undefined, key: string) => Array.isArray(record?.[key]) ? record[key] as unknown[] : [];
-
-const purposeLabel = (purpose?: string) => ({ create: "已生成图片", similar: "已生成 · 保持参考图片风格", edit: "已生成 · 按参考图片编辑" }[purpose ?? ""] ?? "已生成图片");
 const toolLabel = (name: string) => ({ inspect_image: "分析图片", generate_image: "生成图片", replace_document_image: "替换文档图片" }[name] ?? name);
 
 export function ImagePreview({ src, alt }: { src: string; alt: string }) {
@@ -37,7 +33,6 @@ function ActivityIcon({ activity }: { activity: Extract<AgentActivity, { type: "
 export function AgentImageActivity({ activity, taskId, onApproval, deciding }: { activity: Extract<AgentActivity, { type: "tool" }>; taskId?: string; onApproval?: (choice: "approved" | "rejected") => void | Promise<void>; deciding: boolean }) {
   const input = asRecord(activity.input);
   const output = asRecord(activity.output);
-  const analysis = asRecord(output?.analysis);
   const isInspect = activity.name === "inspect_image";
   const isGenerate = activity.name === "generate_image";
   const isReplace = activity.name === "replace_document_image";
@@ -48,15 +43,12 @@ export function AgentImageActivity({ activity, taskId, onApproval, deciding }: {
   const imageUrl = taskId && assetId ? `/api/tasks/${encodeURIComponent(taskId)}/images/${encodeURIComponent(assetId)}` : undefined;
   const workingUrl = taskId && nodeId && (source === "working-document" || isReplace) ? `/api/tasks/${encodeURIComponent(taskId)}/document/images/${encodeURIComponent(nodeId)}${revision ? `?revision=${encodeURIComponent(revision)}` : ""}` : undefined;
   const detail = activity.state === "approval" ? "等待你的确认" : activity.state === "failed" ? activity.error ?? "未完成" : activity.state === "running" ? "处理中" : "已完成";
-  const referenceCount = numberField(output, "referenceCount") ?? arrayField(input, "references").length;
-  const type = stringField(analysis, "type");
-  const style = stringField(analysis, "style");
   return <ToolActivityDisclosure state={activity.state} autoOpenOnComplete={isGenerate} initiallyOpen={activity.state === "approval"} summary={<><span className={`agent-tool-item agent-image-activity ${activity.state}`}><span className="agent-tool-icon"><ActivityIcon activity={activity} /></span><span className="agent-tool-content"><span className="agent-tool-heading"><strong>{toolLabel(activity.name)}</strong><small>{detail}{activity.durationMs !== undefined && ` · ${activity.durationMs}ms`}</small></span></span></span></>}>
-      {isInspect && activity.state === "completed" && <div className="agent-image-summary">{imageUrl && <ImagePreview src={imageUrl} alt="已分析的生成图片" />}{!imageUrl && workingUrl && <ImagePreview src={workingUrl} alt="已分析的文档图片" />}{(type || style) && <small>{[type, style].filter(Boolean).join(" · ")}</small>}</div>}
+      {isInspect && activity.state === "completed" && <div className="agent-image-summary">{imageUrl && <ImagePreview src={imageUrl} alt="已分析的生成图片" />}{!imageUrl && workingUrl && <ImagePreview src={workingUrl} alt="已分析的文档图片" />}</div>}
       {isGenerate && activity.state === "running" && <p className="agent-image-muted"><ImageIcon size={13} />正在生成图片…</p>}
-      {isGenerate && activity.state === "completed" && <div className="agent-image-summary">{imageUrl && <ImagePreview src={imageUrl} alt="生成结果" />}<p>{purposeLabel(stringField(output, "purpose"))}{referenceCount > 0 && ` · 参考 ${referenceCount} 张图片`}</p></div>}
-      {isReplace && <div className="agent-image-summary">{activity.state === "approval" && <p>确认后会把当前图片替换为生成结果。</p>}{activity.state === "approval" ? <div className="agent-image-compare">{workingUrl && <div><small>当前图片</small><ImagePreview src={workingUrl} alt="当前文档图片" /></div>}{imageUrl && <div><small>生成图片</small><ImagePreview src={imageUrl} alt="生成替换图片" /></div>}</div> : imageUrl && <ImagePreview src={imageUrl} alt="最终替换图片" />}{activity.state === "completed" && <p>已写入当前 Word 文档</p>}</div>}
-      {isReplace && activity.state === "approval" && onApproval && <div className="agent-approval-actions"><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并执行</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div>}
+      {isGenerate && activity.state === "completed" && <div className="agent-image-summary">{imageUrl && <ImagePreview src={imageUrl} alt="生成结果" />}</div>}
+      {isReplace && <div className="agent-image-summary">{activity.state === "approval" ? <div className="agent-image-compare">{workingUrl && <div><small>当前图片</small><ImagePreview src={workingUrl} alt="当前文档图片" /></div>}{imageUrl && <><span className="agent-image-compare-separator" aria-hidden="true">↓</span><div><small>替换为</small><ImagePreview src={imageUrl} alt="生成替换图片" /></div></>}</div> : imageUrl && <ImagePreview src={imageUrl} alt="最终替换图片" />}</div>}
+      {isReplace && activity.state === "approval" && onApproval && <div className="agent-approval-actions"><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并替换</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div>}
       <ToolTechnicalDetails activity={activity} />
   </ToolActivityDisclosure>;
 }

@@ -20,15 +20,12 @@ export function ToolTechnicalDetails({ activity }: { activity: ToolActivity }) {
   const hasError = activity.errorDetails !== undefined || activity.error !== undefined;
   if (!hasInput && !hasOutput && !hasError) return null;
   return <details className="agent-tool-details">
-    <summary>技术详情</summary>
+    <summary>工具详情</summary>
     <div className="agent-tool-detail-content">
       <small><code>{activity.name}</code></small>
-      <details className="agent-tool-raw-details">
-        <summary>查看原始安全数据</summary>
-        {hasInput && <RawValue label="输入" value={activity.input} />}
-        {hasOutput && <RawValue label="输出" value={activity.output} />}
-        {hasError && <RawValue label="错误" value={activity.errorDetails ?? activity.error} />}
-      </details>
+      {hasInput && <RawValue label="输入" value={activity.input} />}
+      {hasOutput && <RawValue label="输出" value={activity.output} />}
+      {hasError && <RawValue label="错误" value={activity.errorDetails ?? activity.error} />}
     </div>
   </details>;
 }

@@ -31,6 +31,7 @@ const assetStore = () => ({
 }) as unknown as GeneratedAssetStorePort;
 
 const provider = (images: GeneratedImage[]): ImageGenerationPortType => ({
+  provider: "apimart",
   generate: vi.fn().mockResolvedValue(images),
 });
 

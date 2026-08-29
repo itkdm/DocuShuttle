@@ -56,7 +56,7 @@ async function createRunner(runId: string) {
     ...createSourceContextTools(taskId, sources, kernel),
     ...createImageInspectionTools(taskId, kernel, working, sources, createImageVisionFromEnvironment(), assets, storage, owner, inspectionSession),
     ...createImageGenerationTools((context) => new AgentImageGenerationService(createImageGenerationProviderFromEnvironment(), new SupabaseImageGenerationJobStore(client), assets, storage, resolver, new RemoteImageFetcher(), owner, taskId, context.runId, context.callId, context.idempotencyKey)),
-    ...createImageReplacementTools(kernel, working, assets, storage, owner, taskId),
+    ...createImageReplacementTools(kernel, working, assets, storage, owner, taskId, inspectionSession),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
   return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client, bootstrap.context));

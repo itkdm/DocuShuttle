@@ -108,7 +108,7 @@ export class GenerateImageCandidates {
           objectKey,
           mimeType: binary.mimeType,
           sha256: await sha256(binary.bytes),
-          provider: "apimart",
+          provider: this.images.provider ?? "unknown",
           providerRequestId: image.providerRequestId,
           prompt: input.prompt,
         });
@@ -118,7 +118,7 @@ export class GenerateImageCandidates {
           ...(input.targetNodeId ? { targetNodeId: input.targetNodeId } : {}),
           mimeType: binary.mimeType,
           downloadUrl: await this.storage.createSignedDownload(objectKey, this.signedUrlTtlSeconds),
-          provider: "apimart",
+          provider: this.images.provider ?? "unknown",
           ...(image.providerRequestId ? { providerRequestId: image.providerRequestId } : {}),
         });
       } catch (error) {

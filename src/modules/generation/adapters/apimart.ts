@@ -5,7 +5,7 @@ type SubmissionPayload = ErrorPayload & { data?: Array<{ task_id?: string }> };
 type TaskPayload = ErrorPayload & { data?: { id?: string; status?: "submitted" | "queued" | "processing" | "completed" | "failed"; result?: { images?: Array<{ url?: string[] }> } } };
 export type APIMartAdapterOptions = { apiKey: string; baseUrl: string; model: string; fetch?: typeof globalThis.fetch; pollIntervalMs?: number; maxPolls?: number; requestTimeoutMs?: number; delay?: (milliseconds: number, signal?: AbortSignal) => Promise<void> };
 const sizeToAspectRatio = { "1024x1024": "1:1", "1536x1024": "3:2", "1024x1536": "2:3" } as const;
-const wait = (milliseconds: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => { const timer = setTimeout(resolve, milliseconds); signal?.addEventListener("abort", () => { clearTimeout(timer); reject(signal.reason ?? new DOMException("Aborted", "AbortError")); }, { once: true }); });
+const wait = (milliseconds: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => { let settled = false; const cleanup = () => signal?.removeEventListener("abort", onAbort); const onAbort = () => { if (settled) return; settled = true; clearTimeout(timer); cleanup(); reject(signal?.reason ?? new DOMException("Aborted", "AbortError")); }; const timer = setTimeout(() => { if (settled) return; settled = true; cleanup(); resolve(); }, milliseconds); signal?.addEventListener("abort", onAbort, { once: true }); if (signal?.aborted) onAbort(); });
 export class APIMartImageGenerationAdapter implements ImageGenerationPort {
   readonly provider = "apimart";
   readonly capabilities = { textToImage: true, referenceImages: true, asyncJobs: true, maxReferenceImages: 16 } as const;

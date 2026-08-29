@@ -66,7 +66,7 @@ export const createAgentLanguageModel = (config: AgentModelEnvironmentConfig) =>
   const fetch = config.provider === "qwen" ? createQwenFetch(observedFetch) : observedFetch;
   if (config.provider === "deepseek") return createDeepSeek({ apiKey: config.apiKey, baseURL: config.baseUrl, fetch }).chat(config.model);
   if (config.provider === "openai") return createOpenAI({ apiKey: config.apiKey, baseURL: config.baseUrl, fetch }).chat(config.model);
-  return createOpenAICompatible({ apiKey: config.apiKey, baseURL: config.baseUrl, name: "paperduck-openai-compatible", fetch }).languageModel(config.model);
+  return createOpenAICompatible({ apiKey: config.apiKey, baseURL: config.baseUrl, name: "paperduck-openai-compatible", fetch, supportsStructuredOutputs: config.provider === "qwen" }).languageModel(config.model);
 };
 
 /** Qwen thinking is disabled at the wire boundary for every request. */

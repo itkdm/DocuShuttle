@@ -1,2 +1,2 @@
 export type ImageVisionAnalysis = { summary: string; type: "screenshot" | "terminal" | "diagram" | "chart" | "photo" | "illustration" | "logo" | "other"; visibleText: string[]; layout?: string; style?: string; importantElements: string[]; generationHints: string[] };
-export interface ImageVisionPort { analyze(input: { bytes: Uint8Array; mimeType: string; instruction?: string }): Promise<ImageVisionAnalysis>; }
+export interface ImageVisionPort { analyze(input: { bytes: Uint8Array; mimeType: string; instruction?: string; signal?: AbortSignal }): Promise<ImageVisionAnalysis>; }

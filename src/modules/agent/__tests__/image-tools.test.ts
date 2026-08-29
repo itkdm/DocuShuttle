@@ -14,7 +14,8 @@ const documents: DocumentEnginePort = {
 const working = { load: async () => ({ bytes: imageBytes, revision: "rev-1" }), commit: async () => ({ revision: "rev-2" }) };
 const sources = { list: async () => [], load: async () => ({ bytes: imageBytes, revision: "source-rev", descriptor: { sourceFileId: "file-1", role: "auxiliary" as const, originalName: "source.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", byteLength: imageBytes.byteLength, sha256: "sha", createdAt: "2026-08-29T00:00:00.000Z" } }) };
 const context = { runId: "run-1", callId: "call-1", idempotencyKey: "idem-1", attempt: 1 };
-const vision: ImageVisionPort = { analyze: async () => ({ summary: "表格截图", type: "screenshot", visibleText: ["表头"], importantElements: ["表格"], generationHints: [] }) };
+let capturedSignal: AbortSignal | undefined;
+const vision: ImageVisionPort = { analyze: async (input) => { capturedSignal = input.signal; return { summary: "表格截图", type: "screenshot", visibleText: ["表头"], importantElements: ["表格"], generationHints: [] }; } };
 
 describe("inspect_image tool", () => {
   it("reads working-document images and returns metadata plus structured analysis only", async () => {
@@ -35,5 +36,12 @@ describe("inspect_image tool", () => {
     const [tool] = createImageInspectionTools("task-2", documents, working, sourcePort, vision);
     await tool.execute({ source: "source-document", sourceFileId: "file-1", nodeId: "image-node" }, context);
     expect({ loadedTask, loadedFile }).toEqual({ loadedTask: "task-2", loadedFile: "file-1" });
+  });
+
+  it("passes the tool context abort signal to the vision port", async () => {
+    const controller = new AbortController();
+    const [tool] = createImageInspectionTools("task-1", documents, working, sources, vision);
+    await tool.execute({ source: "working-document", nodeId: "image-node" }, { ...context, signal: controller.signal });
+    expect(capturedSignal).toBe(controller.signal);
   });
 });

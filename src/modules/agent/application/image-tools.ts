@@ -13,11 +13,11 @@ const schema = z.discriminatedUnion("source", [
 export function createImageInspectionTools(taskId: string, documents: DocumentEnginePort, working: WorkingDocumentAccessPort, sources: SourceDocumentContextPort, vision?: ImageVisionPort): readonly AgentTool[] {
   const readImage = documents.readImage;
   if (!vision || !readImage) return [];
-  const inspectImage: AgentTool<typeof schema> = { name: "inspect_image", description: "Read and analyze one selected document image when the task depends on its visual content. Returns structured visual facts, never image bytes or URLs.", inputSchema: schema, async execute(input) {
+  const inspectImage: AgentTool<typeof schema> = { name: "inspect_image", description: "Read and analyze one selected document image when the task depends on its visual content. Returns structured visual facts, never image bytes or URLs.", inputSchema: schema, async execute(input, context) {
     const loaded = input.source === "working-document" ? { bytes: (await working.load()).bytes, sourceFileId: undefined } : await sources.load(taskId, input.sourceFileId);
     if (!loaded) throw new Error("SOURCE_DOCUMENT_NOT_FOUND");
     const image = await readImage.call(documents, loaded.bytes, input.nodeId);
-    const analysis = await vision.analyze({ bytes: image.bytes, mimeType: image.contentType, instruction: input.instruction });
+    const analysis = await vision.analyze({ bytes: image.bytes, mimeType: image.contentType, instruction: input.instruction, signal: context.signal });
     return { source: input.source, ...(input.source === "source-document" ? { sourceFileId: input.sourceFileId } : {}), nodeId: input.nodeId, revision: image.revision, mimeType: image.contentType, byteLength: image.byteLength, analysis };
   } };
   return [inspectImage];

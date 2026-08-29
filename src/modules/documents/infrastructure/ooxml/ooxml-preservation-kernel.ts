@@ -272,6 +272,18 @@ async function verifyMutationOutcomes(
 }
 
 export class OoxmlPreservationKernel implements DocumentEnginePort {
+  async readImage(bytes: Uint8Array, nodeId: string) {
+    const loaded = await loadPackage(bytes);
+    const indexed = await indexDocument(loaded);
+    const image = indexed.images.find((candidate) => candidate.address.nodeId === nodeId);
+    if (!image) throw new DocumentKernelError("IMAGE_NODE_NOT_FOUND", "Image node was not found.");
+    const media = loaded.entries.get(image.address.mediaEntry);
+    if (!media) throw new DocumentKernelError("IMAGE_MEDIA_ENTRY_MISSING", "Image media entry was not found.");
+    const contentType = image.contentType;
+    if (!contentType || !contentType.startsWith("image/")) throw new DocumentKernelError("UNSUPPORTED_IMAGE_TYPE", "The image content type is unsupported.");
+    return { nodeId, revision: loaded.manifest.revision, contentType, byteLength: media.byteLength, fingerprint: await sha256(media), bytes: Uint8Array.from(media) };
+  }
+
   async inspect(bytes: Uint8Array): Promise<DocumentInspection> {
     return measure("document.inspect", { inputBytes: bytes.length }, async (timer) => {
       const loaded = await loadPackage(bytes);

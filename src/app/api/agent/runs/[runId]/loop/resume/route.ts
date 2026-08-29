@@ -8,7 +8,9 @@ import { projectAgentLoopResultForClient } from "@/modules/agent/application/pub
 import { createDocumentTools } from "@/modules/agent/application/document-tools";
 import { createDocumentVersionTools } from "@/modules/agent/application/document-version-tools";
 import { createSourceContextTools } from "@/modules/agent/application/source-context-tools";
+import { createImageInspectionTools } from "@/modules/agent/application/image-tools";
 import { createOpenAICompatibleAgentModelFromEnvironment } from "@/modules/agent/infrastructure/openai-compatible-model";
+import { createImageVisionFromEnvironment } from "@/modules/agent/infrastructure/openai-compatible-vision";
 import { SupabaseAgentLoopStore } from "@/modules/agent/infrastructure/supabase/loop-persistence";
 import { SupabaseWorkingDocumentAccess } from "@/modules/agent/infrastructure/supabase/working-document-access";
 import { SupabaseDocumentVersionAccess } from "@/modules/agent/infrastructure/supabase/document-version-access";
@@ -28,9 +30,12 @@ async function createRunner(runId: string) {
   const kernel = new OoxmlPreservationKernel();
   const taskId = run.data.task_id as string;
   const loopStore = new SupabaseAgentLoopStore(client);
+  const working = new SupabaseWorkingDocumentAccess(client, taskId, runId, () => loopStore.getOwnedLockVersion(runId));
+  const sources = new SupabaseSourceDocumentContext(client);
   const tools = [
-    ...createDocumentTools(kernel, new SupabaseWorkingDocumentAccess(client, taskId, runId, () => loopStore.getOwnedLockVersion(runId)), ({ event, metadata }) => logger.info(event, { ...metadata, runId, taskId })),
-    ...createSourceContextTools(taskId, new SupabaseSourceDocumentContext(client), kernel),
+    ...createDocumentTools(kernel, working, ({ event, metadata }) => logger.info(event, { ...metadata, runId, taskId })),
+    ...createSourceContextTools(taskId, sources, kernel),
+    ...createImageInspectionTools(taskId, kernel, working, sources, createImageVisionFromEnvironment()),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
   return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client));

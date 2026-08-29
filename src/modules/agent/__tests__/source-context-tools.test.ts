@@ -44,6 +44,7 @@ describe("source context tools", () => {
       role: string;
       originalName: string;
       summary: { counts: { paragraphs: number } };
+      images?: ReadonlyArray<{ nodeId: string; contentType: string; byteLength: number }>;
       regions: ReadonlyArray<{ kind: string; nodeId: string; text: string }>;
     };
     expect(result.role).toBe("example");
@@ -51,6 +52,9 @@ describe("source context tools", () => {
     expect(result.summary.counts.paragraphs).toBeGreaterThan(0);
     expect(result.regions.reduce((sum, region) => sum + region.text.length, 0)).toBeLessThanOrEqual(8);
     expect(result.regions[0]).toEqual(expect.objectContaining({ kind: "paragraph", nodeId: expect.any(String) }));
+    expect(result).toHaveProperty("images.0.nodeId");
+    expect(result.images?.[0]).toEqual(expect.objectContaining({ contentType: "image/png", byteLength: expect.any(Number) }));
+    expect(result.images?.[0]).not.toHaveProperty("bytes");
   });
 
   it("returns a typed not-found tool error without touching another source", async () => {

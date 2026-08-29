@@ -97,6 +97,26 @@ describe("OoxmlPreservationKernel", () => {
     ]));
   });
 
+  it("reads an image by stable node id without mutating the DOCX", async () => {
+    const bytes = await createDocx();
+    const original = Uint8Array.from(bytes);
+    const kernel = new OoxmlPreservationKernel();
+    const inspection = await kernel.inspect(bytes);
+    const result = await kernel.readImage(bytes, inspection.images[0].address.nodeId);
+
+    expect(result).toMatchObject({
+      nodeId: inspection.images[0].address.nodeId,
+      revision: inspection.manifest.revision,
+      contentType: "image/png",
+      byteLength: originalImage.byteLength,
+      fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(result.bytes).toEqual(originalImage);
+    expect(bytes).toEqual(original);
+    result.bytes[0] = 0;
+    expect((await kernel.readImage(bytes, inspection.images[0].address.nodeId)).bytes).toEqual(originalImage);
+  });
+
   it("returns the exact original bytes for a no-op", async () => {
     const bytes = await createDocx();
     const kernel = new OoxmlPreservationKernel();

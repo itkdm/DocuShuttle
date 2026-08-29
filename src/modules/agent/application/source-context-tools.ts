@@ -140,6 +140,7 @@ export function createSourceContextTools(
         originalName: payload.descriptor.originalName,
         revision: inspection.manifest.revision,
         summary: inspectionSummary(inspection),
+        images: inspection.images.map(({ address, contentType, byteLength }) => ({ nodeId: address.nodeId, contentType, byteLength })),
         regions: compactInspection(inspection, input.maxCharacters),
       };
     },

@@ -127,6 +127,7 @@ export type AgentEngineeringEvent = {
 export type CurrentDocumentRevisionPort = () => Promise<string | undefined>;
 
 export const TRANSPORT_INTERRUPTED = "TRANSPORT_INTERRUPTED";
+const clientToolResolvedEventId = (interactionId: string, callId: string) => `client-tool-resolved:${interactionId}:${callId}`;
 export type AgentModelTimeoutKind = "MODEL_IDLE_TIMEOUT" | "MODEL_MAX_DURATION_EXCEEDED";
 
 export class AgentModelTimeoutError extends Error {
@@ -878,10 +879,17 @@ export class AgentLoopRunner {
     checkpoint.status = "running";
     checkpoint.messages.push({ role: "tool", content: serializeToolOutput(actual.result), toolCallId: actual.callId, toolName: actual.toolName });
     const events: AgentEvent[] = [];
-    const required = existingResolution ? undefined : createAgentEvent(runId, { type: "client_tool.resolved", interactionId: actual.interactionId, callId: actual.callId, name: actual.toolName, ...actual.result });
-    if (required) { events.push(required); this.observe(runId, required, checkpoint.permissionMode); onEvent?.(required); }
+    const resolvedEvent = { ...createAgentEvent(runId, { type: "client_tool.resolved", interactionId: actual.interactionId, callId: actual.callId, name: actual.toolName, ...actual.result }), eventId: clientToolResolvedEventId(actual.interactionId, actual.callId) };
+    events.push(resolvedEvent);
+    this.observe(runId, resolvedEvent, checkpoint.permissionMode);
     checkpoint.pendingResolution = undefined;
     await this.store.save(runId, checkpoint);
+    try {
+      await this.store.appendEvents?.(runId, [resolvedEvent]);
+    } catch {
+      this.onEngineeringEvent?.({ event: "agent.event.persist_failed", metadata: { runId, eventId: resolvedEvent.eventId, eventType: resolvedEvent.type } });
+    }
+    onEvent?.(resolvedEvent);
     const continuation = await this.runWithPermission(runId, "", checkpoint.permissionMode ?? "default", signal, onEvent);
     return { checkpoint: continuation.checkpoint, events: [...events, ...continuation.events] };
   }

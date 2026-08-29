@@ -29,7 +29,7 @@ class MemoryStore {
   async releaseLeaseForRecovery() {}
   async loadEffectReceipt(_runId: string, idempotencyKey: string) { return this.receipts.get(idempotencyKey); }
   async saveEffectReceipt(_runId: string, receipt: AgentEffectReceipt) { this.receipts.set(receipt.idempotencyKey, receipt); return receipt; }
-  async appendEvents(_runId: string, events: readonly AgentEvent[]) { this.appendEventsCalls += 1; if (this.failEventPersistence) throw new Error("simulated event persistence failure"); this.durableEvents.push(...events); }
+  async appendEvents(_runId: string, events: readonly AgentEvent[]) { this.appendEventsCalls += 1; if (this.failEventPersistence) throw new Error("simulated event persistence failure"); for (const event of events) if (!this.durableEvents.some((candidate) => candidate.eventId === event.eventId)) this.durableEvents.push(event); }
   async markCancelled() {
     if (!this.value) return;
     this.value = { ...this.value, status: "cancelled", pendingInteraction: undefined, pendingResolution: undefined };
@@ -124,6 +124,30 @@ describe("AgentLoopRunner", () => {
     expect(result.checkpoint.status).toBe("completed");
     expect(result.checkpoint.messages.filter((message) => message.role === "tool")).toHaveLength(1);
     expect(executions).toBe(0);
+    expect(store.durableEvents.filter((event) => event.type === "client_tool.resolved")).toHaveLength(1);
+  });
+
+  it("durably appends one stable client tool resolution across recovery retries", async () => {
+    const store = new MemoryStore();
+    const interactionId = "00000000-0000-4000-8000-000000000010";
+    const callId = "client-retry";
+    const result: AgentClientToolResult = { assetId: "asset-preview", mimeType: "image/png", sha256: "b".repeat(64), width: 800, height: 900, revision: "revision-1" };
+    const checkpoint = (): AgentLoopCheckpoint => ({ messages: [{ role: "user", content: "检查" }], iterations: 1, toolCallCount: 0, status: "running", permissionMode: "default", pendingResolution: { interactionId, type: "client_tool", callId, toolName: "capture_document_view", result } });
+    const model: AgentModelPort = { decide: async () => ({ kind: "message", text: "完成", finish: true }) };
+    const runner = () => new AgentLoopRunner(model, store, []);
+
+    store.seed(checkpoint());
+    await runner().resumeClientTool("run-client-retry", interactionId, callId, result);
+    const first = store.durableEvents.find((event) => event.type === "client_tool.resolved");
+    expect(first?.eventId).toBe(`client-tool-resolved:${interactionId}:${callId}`);
+
+    store.seed(checkpoint());
+    await runner().resumeClientTool("run-client-retry", interactionId, callId, result);
+    expect(store.durableEvents.filter((event) => event.type === "client_tool.resolved")).toHaveLength(1);
+    expect(store.durableEvents.filter((event) => event.type === "client_tool.resolved")[0]).toMatchObject({ interactionId, callId, name: "capture_document_view", assetId: result.assetId, mimeType: result.mimeType, sha256: result.sha256, width: result.width, height: result.height, revision: result.revision });
+    expect(JSON.stringify(first)).not.toContain("objectKey");
+    expect(JSON.stringify(first)).not.toContain("base64");
+    expect(JSON.stringify(first)).not.toContain("bytes");
   });
   it("accepts an image-only fresh user turn and exposes only safe image identity to the model", async () => {
     let modelInput = "";

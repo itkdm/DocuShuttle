@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { AgentThread } from "./agent-thread";
 import type { AgentActivity } from "./agent-thread-projection";
+import { shouldHoldConversationRestore } from "./progressive-restore";
 
 const renderActivity = (activity: AgentActivity) => render(<AgentThread
   turns={[{ id: "turn-1", runId: "run-1", anchor: "2026-01-01", user: { id: "user-1", content: "检查", deliveryStatus: "sent" }, assistant: { status: activity.type === "tool" && activity.state === "failed" ? "failed" : "completed", activities: [activity] } }]}
@@ -114,5 +115,24 @@ describe("Agent thread tool rows", () => {
     const details = () => document.querySelector(".agent-activity") as HTMLDetailsElement;
     view.rerender(<AgentThread turns={[turnFor("running")]} conversationLoading={false} hasEarlierMessages={false} loadingEarlierMessages={false} onApproval={() => undefined} deciding={false} />);
     expect(details().open).toBe(true);
+  });
+});
+
+describe("initial conversation restore", () => {
+  it("does not render partial turns while the restore barrier is active", () => {
+    render(<AgentThread turns={[turnFor("completed")]} conversationLoading hasEarlierMessages={false} loadingEarlierMessages={false} onApproval={() => undefined} deciding={false} />);
+    expect(screen.getByText("正在恢复这个任务的对话…")).toBeTruthy();
+    expect(screen.queryByText("检查")).toBeNull();
+  });
+
+  it("holds the presentation until both initial projections settle", () => {
+    expect(shouldHoldConversationRestore({ routeTaskId: "task-1", conversationLoading: true, historicalTimelineReady: true, liveRun: false })).toBe(true);
+    expect(shouldHoldConversationRestore({ routeTaskId: "task-1", conversationLoading: false, historicalTimelineReady: false, liveRun: false })).toBe(true);
+    expect(shouldHoldConversationRestore({ routeTaskId: "task-1", conversationLoading: false, historicalTimelineReady: true, liveRun: false })).toBe(false);
+  });
+
+  it("does not hold a live run or pagination behind initial restore", () => {
+    expect(shouldHoldConversationRestore({ routeTaskId: "task-1", conversationLoading: true, historicalTimelineReady: false, liveRun: true })).toBe(false);
+    expect(shouldHoldConversationRestore({ conversationLoading: false, historicalTimelineReady: false, liveRun: false })).toBe(false);
   });
 });

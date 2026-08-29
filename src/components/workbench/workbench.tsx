@@ -22,7 +22,7 @@ import type { AgentRun } from "@/modules/agent";
 import type { AgentPermissionMode } from "@/modules/agent/application/loop";
 import type { DocumentLoadState, UploadAsset, VersionItem } from "./types";
 import { resolveAgentRuntimeView } from "./runtime-view-state";
-import { initialConversationLoading, startProgressiveProjection } from "./progressive-restore";
+import { initialConversationLoading, shouldHoldConversationRestore, startProgressiveProjection } from "./progressive-restore";
 
 const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
@@ -52,6 +52,8 @@ export function Workbench() {
   const [loadingMoreTasks, setLoadingMoreTasks] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [conversationLoading, setConversationLoading] = useState(() => initialConversationLoading(routeTaskId));
+  const [historicalTimelineReady, setHistoricalTimelineReady] = useState(() => !routeTaskId);
+  const historicalTimelineReadyRef = useRef(!routeTaskId);
   const [run, setRun] = useState<AgentRun>();
   const agentAbortRef = useRef<AbortController | undefined>(undefined);
   const [imageNodes, setImageNodes] = useState<BrowserImageNode[]>([]);
@@ -63,6 +65,12 @@ export function Workbench() {
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>("default");
   const taskListRequestRef = useRef<Promise<TaskPage> | undefined>(undefined);
   const runtimeView = resolveAgentRuntimeView({ run, checkpoint: loopResult?.checkpoint });
+  const conversationRestoring = shouldHoldConversationRestore({
+    routeTaskId,
+    conversationLoading,
+    historicalTimelineReady,
+    liveRun: runtimeView.isRunning,
+  });
   const applyRuntimeResult = useCallback((runId: string, result: NonNullable<typeof loopResult>) => {
     setLoopResult(result);
     setActiveEvents((items) => mergeTimelineEvents(items, result.events));
@@ -80,6 +88,8 @@ export function Workbench() {
     setTaskId(undefined);
     setWorkspaceReady(false);
     setConversationLoading(false);
+    historicalTimelineReadyRef.current = true;
+    setHistoricalTimelineReady(true);
     setRun(undefined);
     setImageNodes([]);
     setParagraphCount(0);
@@ -142,6 +152,10 @@ export function Workbench() {
     if (loadedTaskIdRef.current === routeTaskId) return;
     const abort = new AbortController();
     setConversationLoading(true);
+    historicalTimelineReadyRef.current = false;
+    setHistoricalTimelineReady(false);
+    setTaskId(undefined);
+    setWorkspaceReady(false);
     setMessages([]);
     setConversationCursor(null);
     startProgressiveProjection({
@@ -237,6 +251,8 @@ export function Workbench() {
         setMessages([]);
         setConversationCursor(null);
         setConversationLoading(false);
+        historicalTimelineReadyRef.current = true;
+        setHistoricalTimelineReady(true);
         setDocumentLoad({ status: "error", message: error instanceof Error ? error.message : "任务打开失败" });
         setNotice(error instanceof Error ? `无法打开任务：${error.message}` : "无法打开任务");
       }
@@ -262,6 +278,10 @@ export function Workbench() {
       setHistoricalEvents(historicalEvents);
     }).catch(() => {
       if (!cancelled) setHistoricalEvents([]);
+    }).finally(() => {
+      if (cancelled || historicalTimelineReadyRef.current) return;
+      historicalTimelineReadyRef.current = true;
+      setHistoricalTimelineReady(true);
     });
     return () => { cancelled = true; };
   }, [taskId, run?.id, setHistoricalEvents]);
@@ -594,7 +614,7 @@ export function Workbench() {
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
         {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} onLoadMoreTasks={loadMoreTasks} hasMoreTasks={nextTaskOffset !== null} loadingMoreTasks={loadingMoreTasks} loadingTasks={loadingTasks} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
         <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}` : documentLoad.status} loadState={documentLoad} onChoose={chooseWorkingDocument} /></div>
-        {rightOpen ? <AgentPanel taskId={taskId} runtimeView={runtimeView} run={run} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} conversationLoading={conversationLoading} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
+        {rightOpen ? <AgentPanel taskId={taskId} runtimeView={runtimeView} run={run} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} conversationLoading={conversationRestoring} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 
       <div className="mobile-dock" aria-label="移动端工作台导航"><button onClick={() => setMobilePanel("outline")} className={mobilePanel === "outline" ? "active" : ""}><FilePlus2 size={18} /><span>文档</span></button><button onClick={() => setMobilePanel("agent")} className={mobilePanel === "agent" ? "active" : ""}><Sparkles size={18} /><span>审批</span><i>1</i></button><button onClick={() => setMobilePanel("versions")} className={mobilePanel === "versions" ? "active" : ""}><History size={18} /><span>版本</span></button><button onClick={downloadCurrent}><Download size={18} /><span>下载</span></button></div>

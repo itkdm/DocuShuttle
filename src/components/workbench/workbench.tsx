@@ -24,6 +24,7 @@ import type { DocumentLoadState, UploadAsset, VersionItem } from "./types";
 import { resolveAgentRuntimeView } from "./runtime-view-state";
 import { initialConversationLoading, shouldHoldConversationRestore, startProgressiveProjection } from "./progressive-restore";
 import { createApprovalSubmissionGate } from "./approval-submission-gate";
+import { shouldPreserveSubmittedUserReply } from "./user-input-recovery";
 import type { AgentImageAttachment } from "@/modules/agent/application/message-parts";
 
 const initialAssets: UploadAsset[] = [];
@@ -365,6 +366,7 @@ export function Workbench() {
     const abortController = new AbortController();
     agentAbortRef.current = abortController;
     let activeRunForRecovery: AgentRun | undefined;
+    const interactionId = loopResult?.checkpoint.pendingInteraction?.type === "user_input" ? loopResult.checkpoint.pendingInteraction.interactionId : undefined;
     let submissionAccepted = false;
     const acceptSubmission = () => {
       if (submissionAccepted) return;
@@ -388,7 +390,6 @@ export function Workbench() {
       setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, runId: activeRun.id } : item));
       setRun(activeRun);
       if (startsFreshRun) acceptSubmission();
-      const interactionId = loopResult?.checkpoint.pendingInteraction?.type === "user_input" ? loopResult.checkpoint.pendingInteraction.interactionId : undefined;
       const result = await runBrowserAgentLoopStream(activeRun.id, prompt, permissionMode, (event) => {
         setActiveEvents((items) => mergeTimelineEvents(items, [event]));
         if (event.type === "model.delta") setNotice("纸上鸭正在回复");
@@ -433,7 +434,7 @@ export function Workbench() {
       if (runToRecover) {
         try {
           const recovered = await recoverAndReconcileRun(runToRecover.id);
-          if (recovered.checkpoint.pendingInteraction?.type === "user_input") {
+          if (shouldPreserveSubmittedUserReply(interactionId, recovered.checkpoint.pendingInteraction)) {
             lifecycle?.failed();
           } else {
             acceptSubmission();

@@ -9,6 +9,13 @@ import { createDocumentTools } from "@/modules/agent/application/document-tools"
 import { createDocumentVersionTools } from "@/modules/agent/application/document-version-tools";
 import { createSourceContextTools } from "@/modules/agent/application/source-context-tools";
 import { createImageInspectionTools } from "@/modules/agent/application/image-tools";
+import { AgentImageGenerationService, createImageGenerationTools, imageReferenceResolver } from "@/modules/agent/application/image-generation";
+import { createImageReplacementTools } from "@/modules/agent/application/image-replacement";
+import { WorkingDocumentInspectionSession } from "@/modules/agent/application/document-inspection-session";
+import { createImageGenerationProviderFromEnvironment } from "@/modules/generation/adapters/factory";
+import { RemoteImageFetcher } from "@/modules/generation/application/generate-image-candidates";
+import { SupabaseGeneratedAssetStore, SupabaseImageGenerationJobStore } from "@/modules/generation/infrastructure/supabase-generated-asset-store";
+import { SupabaseStorageAdapter } from "@/modules/storage/adapters/supabase-storage";
 import { createOpenAICompatibleAgentModelFromEnvironment } from "@/modules/agent/infrastructure/openai-compatible-model";
 import { createImageVisionFromEnvironment } from "@/modules/agent/infrastructure/openai-compatible-vision";
 import { SupabaseAgentLoopStore } from "@/modules/agent/infrastructure/supabase/loop-persistence";
@@ -24,7 +31,7 @@ const eventPayload = (event: string, data: unknown) => {
 };
 
 async function createRunner(runId: string) {
-  const { client } = await requireSupabaseIdentity();
+  const { client, userId } = await requireSupabaseIdentity();
   const run = await client.from("agent_runs").select("task_id").eq("id", runId).single();
   if (run.error || !run.data) throw new Error("RUN_NOT_FOUND");
   const kernel = new OoxmlPreservationKernel();
@@ -32,10 +39,17 @@ async function createRunner(runId: string) {
   const loopStore = new SupabaseAgentLoopStore(client);
   const working = new SupabaseWorkingDocumentAccess(client, taskId, runId, () => loopStore.getOwnedLockVersion(runId));
   const sources = new SupabaseSourceDocumentContext(client);
+  const storage = new SupabaseStorageAdapter(client);
+  const assets = new SupabaseGeneratedAssetStore(client);
+  const owner = userId;
+  const resolver = imageReferenceResolver(kernel, working, sources, assets, storage, owner);
+  const inspectionSession = new WorkingDocumentInspectionSession(kernel, working, ({ event, metadata }) => logger.info(event, { ...metadata, runId, taskId }));
   const tools = [
-    ...createDocumentTools(kernel, working, ({ event, metadata }) => logger.info(event, { ...metadata, runId, taskId })),
+    ...createDocumentTools(kernel, working, ({ event, metadata }) => logger.info(event, { ...metadata, runId, taskId }), inspectionSession),
     ...createSourceContextTools(taskId, sources, kernel),
-    ...createImageInspectionTools(taskId, kernel, working, sources, createImageVisionFromEnvironment()),
+    ...createImageInspectionTools(taskId, kernel, working, sources, createImageVisionFromEnvironment(), assets, storage, owner, inspectionSession),
+    ...createImageGenerationTools((context) => new AgentImageGenerationService(createImageGenerationProviderFromEnvironment(), new SupabaseImageGenerationJobStore(client), assets, storage, resolver, new RemoteImageFetcher(), owner, taskId, context.runId, context.callId, context.idempotencyKey)),
+    ...createImageReplacementTools(kernel, working, assets, storage, owner, taskId),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
   return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client));

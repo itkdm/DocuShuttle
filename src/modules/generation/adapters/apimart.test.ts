@@ -36,4 +36,14 @@ describe("APIMartImageGenerationAdapter", () => {
     const adapter = new APIMartImageGenerationAdapter({ apiKey: "test", baseUrl: "https://example.test/", model: "gpt-image-2", fetch: fetchMock, requestTimeoutMs: 5 });
     await expect(adapter.generate({ prompt: "x", size: "1024x1024", quality: "standard", count: 1 })).rejects.toMatchObject({ retryable: true, status: 408 });
   });
+
+  it("encodes private reference bytes only at the provider boundary", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ data: [{ task_id: "ref-task" }] }), { status: 200 }));
+    const adapter = new APIMartImageGenerationAdapter({ apiKey: "test", baseUrl: "https://example.test/", model: "gpt-image-2", fetch: fetchMock });
+    await adapter.submit({ prompt: "make it similar", quality: "standard", referenceImages: [{ bytes: new Uint8Array([1, 2, 3]), mimeType: "image/png" }] });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.image_urls).toEqual(["data:image/png;base64,AQID"]);
+    expect(body).not.toHaveProperty("size");
+    expect(JSON.stringify(body)).not.toContain("https://");
+  });
 });

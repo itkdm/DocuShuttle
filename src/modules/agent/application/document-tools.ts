@@ -5,6 +5,7 @@ import type { DocumentInspection, MutationRequest, ParagraphAddress, TableCellAd
 import { blockingPackageErrors } from "@/modules/documents/infrastructure/ooxml/diagnostic-policy";
 
 import type { AgentTool } from "./loop";
+import { WorkingDocumentInspectionSession } from "./document-inspection-session";
 
 export type DocumentEffectReceiptInput = {
   idempotencyKey: string;
@@ -91,36 +92,22 @@ export function createDocumentTools(
   documents: DocumentEnginePort,
   working: WorkingDocumentAccessPort,
   onEngineeringEvent?: DocumentEngineeringEvent,
+  session?: WorkingDocumentInspectionSession,
 ): readonly AgentTool[] {
   // A single model turn may inspect the same revision through several tools.
   // Parsing a DOCX is relatively expensive, so memoize only within this tool
   // registry instance. The cache is revision-scoped and is invalidated after
   // every successful commit; it never crosses requests or document versions.
-  let cachedInspection: { bytes: Uint8Array; inspection: DocumentInspection; revision: string } | undefined;
+  const inspectionSession = session ?? new WorkingDocumentInspectionSession(documents, working, onEngineeringEvent);
   const inspectCurrent = async (): Promise<{ bytes: Uint8Array; inspection: DocumentInspection }> => {
     // A loop owns this registry for the duration of one model/tool turn. Once
     // a revision has been inspected, reuse the immutable bytes directly rather
     // than downloading the same working version again for every read tool.
     // Successful commits invalidate the cache below; optimistic commit
     // locking still rejects a concurrent writer with a revision conflict.
-    if (cachedInspection) {
-      onEngineeringEvent?.({ event: "document.inspect.completed", metadata: { cacheHit: true, revision: cachedInspection.revision, paragraphCount: cachedInspection.inspection.paragraphs.length, tableCellCount: cachedInspection.inspection.tableCells.length, imageCount: cachedInspection.inspection.images.length } });
-      return { bytes: cachedInspection.bytes, inspection: cachedInspection.inspection };
-    }
-    const started = performance.now();
-    const current = await working.load();
-    const inspection = await documents.inspect(current.bytes);
-    if (inspection.manifest.revision !== current.revision) {
-      throw new Error("WORKING_DOCUMENT_REVISION_MISMATCH");
-    }
-    if (blockingPackageErrors(inspection.diagnostics).length > 0) {
-      throw new Error("WORKING_DOCUMENT_INSPECTION_FAILED");
-    }
-    cachedInspection = { bytes: current.bytes, inspection, revision: current.revision };
-    onEngineeringEvent?.({ event: "document.inspect.completed", metadata: { cacheHit: false, revision: current.revision, durationMs: performance.now() - started, paragraphCount: inspection.paragraphs.length, tableCellCount: inspection.tableCells.length, imageCount: inspection.images.length } });
-    return { bytes: current.bytes, inspection };
+    return inspectionSession.inspect();
   };
-  const invalidateInspection = () => { cachedInspection = undefined; };
+  const invalidateInspection = () => inspectionSession.invalidate();
 
   const inspectDocument: AgentTool<typeof emptySchema> = {
     name: "inspect_document",

@@ -49,6 +49,7 @@ export type GeneratedImage = {
   remoteUrl?: string;
   revisedPrompt?: string;
   providerRequestId?: string;
+  provider?: string;
 };
 
 export const generatedRegionTextSchema = z.object({

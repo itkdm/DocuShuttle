@@ -4,7 +4,7 @@ import { logger } from "@/infrastructure/observability";
 
 import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { SupabaseStorageAdapter } from "@/modules/storage/adapters/supabase-storage";
-import { createAPIMartAdapterFromEnvironment } from "@/modules/generation/adapters/apimart";
+import { createImageGenerationProviderFromEnvironment } from "@/modules/generation/adapters/factory";
 import { GenerateImageCandidates, generateImageCandidatesInputSchema, ImageGenerationInputError, RemoteImageFetcher } from "@/modules/generation/application/generate-image-candidates";
 import { SupabaseGeneratedAssetStore } from "@/modules/generation/infrastructure/supabase-generated-asset-store";
 import { SupabaseTaskRepository } from "@/modules/tasks/adapters/supabase-task-repository";
@@ -16,7 +16,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ tas
     const body = generateImageCandidatesInputSchema.parse({ ...(await request.json()), taskId });
     const result = await new GenerateImageCandidates(
       new SupabaseTaskRepository(client),
-      createAPIMartAdapterFromEnvironment(),
+      createImageGenerationProviderFromEnvironment(),
       new SupabaseStorageAdapter(client),
       new SupabaseGeneratedAssetStore(client),
       new RemoteImageFetcher(),

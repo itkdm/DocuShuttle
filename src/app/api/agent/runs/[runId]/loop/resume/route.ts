@@ -66,7 +66,14 @@ async function createRunner(runId: string) {
     ...createClientDocumentTools(),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
-  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client));
+  const currentDocumentRevision = async () => {
+    const workingDocument = await client.from("working_documents").select("current_version_id").eq("task_id", taskId).eq("owner_user_id", userId).maybeSingle();
+    if (workingDocument.error || !workingDocument.data?.current_version_id) return undefined;
+    const version = await client.from("document_versions").select("sha256").eq("id", workingDocument.data.current_version_id).eq("owner_user_id", userId).maybeSingle();
+    if (version.error) throw new Error(version.error.message);
+    return version.data?.sha256 as string | undefined;
+  };
+  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client), 120_000, currentDocumentRevision);
 }
 
 async function runResume(request: Request, runId: string, stream: boolean) {
@@ -108,7 +115,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
     if (error instanceof Error && error.message === "No pending client tool") {
       return NextResponse.json({ code: "CLIENT_TOOL_NOT_PENDING" }, { status: 409 });
     }
-    if (error instanceof Error && ["APPROVAL_ALREADY_CLAIMED", "APPROVAL_INTERACTION_MISMATCH", "APPROVAL_RESOLUTION_MISMATCH", "CLIENT_TOOL_ALREADY_CLAIMED", "CLIENT_TOOL_INTERACTION_MISMATCH", "CLIENT_TOOL_REVISION_MISMATCH", "RUN_CANCELLED"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
+    if (error instanceof Error && ["APPROVAL_ALREADY_CLAIMED", "APPROVAL_INTERACTION_MISMATCH", "APPROVAL_RESOLUTION_MISMATCH", "CLIENT_TOOL_ALREADY_CLAIMED", "CLIENT_TOOL_INTERACTION_MISMATCH", "CLIENT_TOOL_REVISION_MISMATCH", "CLIENT_TOOL_ASSET_MISMATCH", "CLIENT_TOOL_RESULT_INVALID", "RUN_CANCELLED"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
     logger.error("http.request.failed", { route: "/api/agent/runs/:runId/loop/resume", error });
     return NextResponse.json({ code: "AGENT_LOOP_RESUME_FAILED" }, { status: 500 });
   }
@@ -123,7 +130,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
     if (error instanceof Error && error.message === "AUTHENTICATION_REQUIRED") return NextResponse.json({ code: error.message }, { status: 401 });
     if (error instanceof Error && error.message === "No pending agent approval") return NextResponse.json({ code: "APPROVAL_NOT_PENDING" }, { status: 409 });
     if (error instanceof Error && error.message === "No pending client tool") return NextResponse.json({ code: "CLIENT_TOOL_NOT_PENDING" }, { status: 409 });
-    if (error instanceof Error && ["APPROVAL_ALREADY_CLAIMED", "APPROVAL_INTERACTION_MISMATCH", "APPROVAL_RESOLUTION_MISMATCH", "CLIENT_TOOL_ALREADY_CLAIMED", "CLIENT_TOOL_INTERACTION_MISMATCH", "CLIENT_TOOL_REVISION_MISMATCH", "RUN_CANCELLED"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
+    if (error instanceof Error && ["APPROVAL_ALREADY_CLAIMED", "APPROVAL_INTERACTION_MISMATCH", "APPROVAL_RESOLUTION_MISMATCH", "CLIENT_TOOL_ALREADY_CLAIMED", "CLIENT_TOOL_INTERACTION_MISMATCH", "CLIENT_TOOL_REVISION_MISMATCH", "CLIENT_TOOL_ASSET_MISMATCH", "CLIENT_TOOL_RESULT_INVALID", "RUN_CANCELLED"].includes(error.message)) return NextResponse.json({ code: error.message }, { status: 409 });
     logger.error("http.request.failed", { route: "/api/agent/runs/:runId/loop/resume", error });
     return NextResponse.json({ code: error instanceof Error ? error.message : "AGENT_LOOP_RESUME_FAILED" }, { status: 500 });
   }

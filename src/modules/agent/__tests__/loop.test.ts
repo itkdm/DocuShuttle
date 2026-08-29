@@ -112,9 +112,10 @@ describe("AgentLoopRunner", () => {
       { kind: "message" as const, text: "页面布局看起来正常。" },
     ];
     const model = { decide: async () => modelDecisions.shift()! };
-    const first = await new AgentLoopRunner(model, store, [clientTool]).run("run-client-tool", "检查排版");
+    const first = await new AgentLoopRunner(model, store, [clientTool], 24, 48, 30_000, undefined, 30_000, undefined, undefined, 120_000, async () => "revision-1").run("run-client-tool", "检查排版");
     expect(first.checkpoint.status).toBe("awaiting_client");
     expect(first.checkpoint.pendingInteraction?.type).toBe("client_tool");
+    expect(first.checkpoint.pendingInteraction?.type === "client_tool" && first.checkpoint.pendingInteraction.expectedRevision).toBe("revision-1");
     expect(executions).toBe(0);
     const pending = first.checkpoint.pendingInteraction!;
     const result = await new AgentLoopRunner(model, store, [clientTool]).resumeClientTool("run-client-tool", pending.interactionId, pending.type === "client_tool" ? pending.callId : "", {

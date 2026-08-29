@@ -34,11 +34,11 @@ const initialVersions: VersionItem[] = [
 ];
 const isDocumentMutationTool = (name?: string) => name === "apply_text_change" || name === "apply_text_changes" || name === "replace_document_image";
 const messageImages = (parts: readonly { type?: string; assetId?: unknown; mimeType?: unknown }[]): AgentImageAttachment[] => parts.filter((part): part is { type: "image"; assetId: string; mimeType: AgentImageAttachment["mimeType"] } => part.type === "image" && typeof part.assetId === "string" && ["image/png", "image/jpeg", "image/webp"].includes(String(part.mimeType))).map((part) => ({ assetId: part.assetId, mimeType: part.mimeType }));
-type ClientToolInput = { target: "visible" | "page"; expectedRevision: string; pageNumber?: number };
+type ClientToolInput = { target: "visible" | "page"; pageNumber?: number };
 const isClientToolInput = (value: unknown): value is ClientToolInput => {
   if (!value || typeof value !== "object") return false;
   const input = value as Record<string, unknown>;
-  return (input.target === "visible" || input.target === "page") && typeof input.expectedRevision === "string" && input.expectedRevision.length > 0 && (input.target !== "page" || (typeof input.pageNumber === "number" && Number.isInteger(input.pageNumber) && input.pageNumber > 0));
+  return (input.target === "visible" || input.target === "page") && (input.target !== "page" || (typeof input.pageNumber === "number" && Number.isInteger(input.pageNumber) && input.pageNumber > 0));
 };
 export function Workbench() {
   const pathname = usePathname();
@@ -366,17 +366,25 @@ export function Workbench() {
 
   useEffect(() => {
     const pending = loopResult?.checkpoint.pendingInteraction;
-    if (!pending || pending.type !== "client_tool" || !run || !taskId || run.taskId !== taskId || !workspaceReady) return;
+    if (!pending || pending.type !== "client_tool" || !run || !taskId || run.taskId !== taskId || !workspaceReady) {
+      if (process.env.NODE_ENV !== "production" && pending?.type === "client_tool") console.debug("agent.client_tool.capture.skipped", { hasRun: Boolean(run), taskId, runTaskId: run?.taskId, workspaceReady, surfaceReadyVersion });
+      return;
+    }
     const key = `${run.id}:${pending.interactionId}:${pending.callId}`;
     if (clientToolSubmissionRef.current === key) return;
     const input = isClientToolInput(pending.input) ? pending.input : undefined;
     const surface = surfaceRef.current;
-    if (!input || !surface) return;
-    const state = surface.getState();
-    if (!state.ready || state.dirty || state.renderedRevision !== input.expectedRevision) {
-      setNotice(state.dirty ? "文档有未保存变化，暂时无法捕获视觉结果" : "文档版本已变化，请重新发起视觉检查");
+    if (!input || !surface) {
+      if (process.env.NODE_ENV !== "production") console.warn("agent.client_tool.capture.unavailable", { input: Boolean(input), surface: Boolean(surface), surfaceReadyVersion });
       return;
     }
+    const state = surface.getState();
+    if (!state.ready || state.dirty || !state.renderedRevision) {
+      if (process.env.NODE_ENV !== "production") console.warn("agent.client_tool.capture.not_ready", { state, surfaceReadyVersion });
+      setNotice(state.dirty ? "文档有未保存变化，暂时无法捕获视觉结果" : "文档尚未准备好，请稍后重试");
+      return;
+    }
+    if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.capture.start", { target: input.target, pageNumber: input.pageNumber, surfaceReadyVersion });
     clientToolSubmissionRef.current = key;
     const currentTaskId = taskId;
     const currentRunId = run.id;
@@ -389,9 +397,12 @@ export function Workbench() {
         const captured = input.target === "page" ? await surface.capturePage(input.pageNumber!) : await surface.captureVisible();
         const pageCapture = "captures" in captured ? captured.captures[0] : captured;
         if (!pageCapture) throw new Error("DOCUMENT_VIEW_CAPTURE_EMPTY");
-        const asset = await uploadBrowserDocumentPreview(currentTaskId, { ...pageCapture, revision: input.expectedRevision });
+        if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.capture.completed", { width: pageCapture.width, height: pageCapture.height, pageNumber: pageCapture.pageNumber });
+        const asset = await uploadBrowserDocumentPreview(currentTaskId, { runId: currentRunId, interactionId: currentInteractionId, callId: currentCallId }, pageCapture);
+        if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.upload.completed", { assetId: asset.assetId, width: asset.width, height: asset.height });
         if (abort.signal.aborted) return;
         const result = await resumeBrowserClientTool(currentRunId, currentInteractionId, currentCallId, asset);
+        if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.resume.completed", { status: result.checkpoint.status });
         applyRuntimeResult(currentRunId, result);
         if (result.checkpoint.status === "completed") {
           const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
@@ -402,7 +413,8 @@ export function Workbench() {
         } else if (result.checkpoint.pendingInteraction) {
           setNotice(result.checkpoint.pendingInteraction.type === "user_input" ? "Agent 正在等待你的回答" : "Agent 正在继续处理");
         }
-      } catch {
+      } catch (error) {
+        if (process.env.NODE_ENV !== "production") console.error("agent.client_tool.capture.failed", error);
         clientToolSubmissionRef.current = undefined;
         if (!abort.signal.aborted) {
           try {

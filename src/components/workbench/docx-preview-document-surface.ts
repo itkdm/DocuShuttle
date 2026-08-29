@@ -49,9 +49,9 @@ export class DocxPreviewDocumentSurface implements DocumentSurfacePort {
 
   async captureVisible(): Promise<DocumentVisibleCapture> {
     if (!this.state.ready || this.state.dirty) throw new Error(this.state.dirty ? "DOCUMENT_VIEW_DIRTY" : "DOCUMENT_VIEW_NOT_READY");
-    const viewport = this.root.querySelector(".paper-stage");
+    const viewport = this.root.matches(".paper-stage") ? this.root : this.root.querySelector(".paper-stage");
     if (!viewport) throw new Error("DOCUMENT_VIEW_NOT_READY");
-    const visible = this.pages().map((page, index) => ({ page, pageNumber: index + 1, area: this.visibleArea(page, viewport) })).filter((item) => item.area > 0).sort((a, b) => b.area - a.area).slice(0, 2);
+    const visible = this.pages().map((page, index) => ({ page, pageNumber: index + 1, area: this.visibleArea(page, viewport) })).filter((item) => item.area > 0).sort((a, b) => b.area - a.area).slice(0, 1);
     if (!visible.length) throw new Error("DOCUMENT_VIEW_PAGE_NOT_FOUND");
     const captures = [];
     for (const item of visible) captures.push(await this.capturePage(item.pageNumber));

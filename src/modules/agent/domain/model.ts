@@ -12,7 +12,7 @@ export type AgentRunStatus =
 export type AgentRuntimePendingInteraction =
   | { readonly interactionId: string; readonly type: "approval"; readonly callId: string; readonly toolName: string; readonly input: unknown }
   | { readonly interactionId: string; readonly type: "user_input"; readonly question: string }
-  | { readonly interactionId: string; readonly type: "client_tool"; readonly callId: string; readonly toolName: string; readonly input: unknown };
+  | { readonly interactionId: string; readonly type: "client_tool"; readonly callId: string; readonly toolName: string; readonly input: unknown; readonly expectedRevision: string };
 
 export type AgentClientToolResult = {
   readonly assetId: string;

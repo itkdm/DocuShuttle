@@ -64,7 +64,14 @@ async function createRunner(runId: string) {
     ...createClientDocumentTools(),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
-  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client, bootstrap.context));
+  const currentDocumentRevision = async () => {
+    const workingDocument = await client.from("working_documents").select("current_version_id").eq("task_id", taskId).eq("owner_user_id", userId).maybeSingle();
+    if (workingDocument.error || !workingDocument.data?.current_version_id) return undefined;
+    const version = await client.from("document_versions").select("sha256").eq("id", workingDocument.data.current_version_id).eq("owner_user_id", userId).maybeSingle();
+    if (version.error) throw new Error(version.error.message);
+    return version.data?.sha256 as string | undefined;
+  };
+  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client, bootstrap.context), 120_000, currentDocumentRevision);
 }
 
 async function validateUploadedImages(runId: string, attachments: readonly AgentImageAttachment[]) {

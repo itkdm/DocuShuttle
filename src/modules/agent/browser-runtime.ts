@@ -285,12 +285,14 @@ export const resumeBrowserAgentLoop = async (runId: string, approval: "approved"
 export const resumeBrowserClientTool = async (runId: string, interactionId: string, callId: string, result: AgentClientToolResult) =>
   json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop/resume`, post({ interactionId, callId, result }));
 
-export const uploadBrowserDocumentPreview = async (taskId: string, capture: { blob: Blob; width: number; height: number; revision: string; pageNumber?: number }) => {
+export const uploadBrowserDocumentPreview = async (taskId: string, identity: { runId: string; interactionId: string; callId: string }, capture: { blob: Blob; width: number; height: number; pageNumber?: number }) => {
   const form = new FormData();
   form.set("file", capture.blob, "document-preview.png");
   form.set("width", String(capture.width));
   form.set("height", String(capture.height));
-  form.set("revision", capture.revision);
+  form.set("runId", identity.runId);
+  form.set("interactionId", identity.interactionId);
+  form.set("callId", identity.callId);
   if (capture.pageNumber !== undefined) form.set("pageNumber", String(capture.pageNumber));
   return json<{ assetId: string; mimeType: "image/png"; sha256: string; width: number; height: number; revision: string; pageNumber?: number }>(`/api/tasks/${taskId}/document/previews`, { method: "POST", body: form });
 };

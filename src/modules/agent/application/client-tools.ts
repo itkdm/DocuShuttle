@@ -3,8 +3,8 @@ import { z } from "zod";
 import type { AgentTool } from "./loop";
 
 export const captureDocumentViewInputSchema = z.discriminatedUnion("target", [
-  z.object({ target: z.literal("visible"), expectedRevision: z.string().min(1).max(200) }),
-  z.object({ target: z.literal("page"), pageNumber: z.number().int().positive().max(10_000), expectedRevision: z.string().min(1).max(200) }),
+  z.object({ target: z.literal("visible") }).strict(),
+  z.object({ target: z.literal("page"), pageNumber: z.number().int().positive().max(10_000) }).strict(),
 ]);
 
 /** Client tool declarations are intentionally execution-free on the server. */

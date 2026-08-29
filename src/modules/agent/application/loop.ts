@@ -124,6 +124,8 @@ export type AgentEngineeringEvent = {
   metadata: Record<string, unknown>;
 };
 
+export type CurrentDocumentRevisionPort = () => Promise<string | undefined>;
+
 export const TRANSPORT_INTERRUPTED = "TRANSPORT_INTERRUPTED";
 export type AgentModelTimeoutKind = "MODEL_IDLE_TIMEOUT" | "MODEL_MAX_DURATION_EXCEEDED";
 
@@ -238,6 +240,7 @@ export class AgentLoopRunner {
     private readonly onEngineeringEvent?: (event: AgentEngineeringEvent) => void,
     private readonly conversationContext?: AgentConversationContextPort,
     private readonly modelMaxDurationMs = 120_000,
+    private readonly currentDocumentRevision?: CurrentDocumentRevisionPort,
   ) {}
 
   private observe(runId: string, event: AgentEvent, permissionMode?: AgentPermissionMode) {
@@ -635,6 +638,13 @@ export class AgentLoopRunner {
           return { checkpoint, events };
         }
         if (tool.clientExecution) {
+          const expectedRevision = await this.currentDocumentRevision?.();
+          if (!expectedRevision) {
+            checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: "DOCUMENT_REVISION_UNAVAILABLE" }), toolCallId: call.id, toolName: call.name });
+            emit({ type: "tool.failed", callId: call.id, name: call.name, error: "DOCUMENT_REVISION_UNAVAILABLE" });
+            await saveCheckpoint();
+            continue;
+          }
           const interactionId = crypto.randomUUID();
           const clientInput = call.input as { target?: unknown; pageNumber?: unknown };
           checkpoint.pendingInteraction = {
@@ -643,6 +653,7 @@ export class AgentLoopRunner {
             callId: call.id,
             toolName: call.name,
             input,
+            expectedRevision,
           };
           checkpoint.status = "awaiting_client";
           const requiredEvent = emit({

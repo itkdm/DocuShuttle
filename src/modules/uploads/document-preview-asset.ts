@@ -11,7 +11,8 @@ const sha256 = async (bytes: Uint8Array) => {
 };
 
 export interface DocumentPreviewAssetStore {
-  createPreview(input: { id: string; ownerUserId: string; taskId: string; objectKey: string; sha256: string; width: number; height: number }): Promise<void>;
+  findPreviewByRequest(input: { ownerUserId: string; taskId: string; providerRequestId: string }): Promise<{ assetId: string; sha256: string; mimeType: "image/png"; width: number; height: number; revision: string; pageNumber?: number } | undefined>;
+  createPreview(input: { id: string; ownerUserId: string; taskId: string; objectKey: string; sha256: string; width: number; height: number; revision: string; pageNumber?: number; providerRequestId: string }): Promise<void>;
 }
 
 export interface CurrentDocumentRevisionPort {
@@ -26,20 +27,28 @@ export class CreateDocumentPreviewAsset {
     private readonly assets: DocumentPreviewAssetStore,
   ) {}
 
-  async execute(input: { ownerUserId: string; taskId: string; bytes: Uint8Array; width: number; height: number; revision: string; pageNumber?: number }) {
+  async execute(input: { ownerUserId: string; taskId: string; runId: string; interactionId: string; callId: string; bytes: Uint8Array; width: number; height: number; revision: string; pageNumber?: number }) {
     if (!(await this.tasks.belongsToOwner(input.taskId, input.ownerUserId))) throw new Error("TASK_NOT_FOUND");
     if (input.bytes.byteLength < 1 || input.bytes.byteLength > MAX_DOCUMENT_PREVIEW_BYTES) throw new Error("PREVIEW_SIZE_OUT_OF_RANGE");
     if (!isPng(input.bytes)) throw new Error("PREVIEW_TYPE_UNSUPPORTED");
     if (!Number.isInteger(input.width) || input.width < 1 || input.width > 10_000 || !Number.isInteger(input.height) || input.height < 1 || input.height > 10_000) throw new Error("PREVIEW_DIMENSION_INVALID");
     if (!input.revision || input.revision !== await this.documents.getCurrentRevision(input.taskId, input.ownerUserId)) throw new Error("DOCUMENT_REVISION_MISMATCH");
+    const digest = await sha256(input.bytes);
+    const providerRequestId = `${input.runId}:${input.interactionId}:${input.callId}`;
+    const existing = await this.assets.findPreviewByRequest({ ownerUserId: input.ownerUserId, taskId: input.taskId, providerRequestId });
+    if (existing) {
+      if (existing.sha256 !== digest || existing.width !== input.width || existing.height !== input.height || existing.revision !== input.revision || existing.pageNumber !== input.pageNumber) throw new Error("PREVIEW_IDEMPOTENCY_CONFLICT");
+      return { assetId: existing.assetId, mimeType: "image/png" as const, sha256: existing.sha256, width: existing.width, height: existing.height, revision: existing.revision, ...(existing.pageNumber === undefined ? {} : { pageNumber: existing.pageNumber }) };
+    }
     const assetId = crypto.randomUUID();
     const objectKey = buildTaskObjectKey({ userId: input.ownerUserId, taskId: input.taskId, category: "assets", fileName: `${assetId}.png` });
-    const digest = await sha256(input.bytes);
     await this.storage.put(objectKey, input.bytes, "image/png");
     try {
-      await this.assets.createPreview({ id: assetId, ownerUserId: input.ownerUserId, taskId: input.taskId, objectKey, sha256: digest, width: input.width, height: input.height });
+      await this.assets.createPreview({ id: assetId, ownerUserId: input.ownerUserId, taskId: input.taskId, objectKey, sha256: digest, width: input.width, height: input.height, revision: input.revision, pageNumber: input.pageNumber, providerRequestId });
     } catch (error) {
       await this.storage.remove(objectKey).catch(() => undefined);
+      const raced = await this.assets.findPreviewByRequest({ ownerUserId: input.ownerUserId, taskId: input.taskId, providerRequestId });
+      if (raced && raced.sha256 === digest && raced.width === input.width && raced.height === input.height && raced.revision === input.revision && raced.pageNumber === input.pageNumber) return { assetId: raced.assetId, mimeType: "image/png" as const, sha256: raced.sha256, width: raced.width, height: raced.height, revision: raced.revision, ...(raced.pageNumber === undefined ? {} : { pageNumber: raced.pageNumber }) };
       throw error;
     }
     return { assetId, mimeType: "image/png" as const, sha256: digest, width: input.width, height: input.height, revision: input.revision, ...(input.pageNumber ? { pageNumber: input.pageNumber } : {}) };

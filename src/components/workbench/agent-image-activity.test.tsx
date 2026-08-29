@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AgentImageActivity } from "./agent-image-activity";
@@ -18,9 +18,7 @@ describe("Agent image activity", () => {
     expect(screen.getByText("生成图片")).toBeTruthy();
     expect(screen.queryByText(/保持参考图片风格|参考 2 张图片/)).toBeNull();
     expect(screen.getByAltText("生成结果").getAttribute("src")).toContain("/api/tasks/task-1/images/asset-1");
-    fireEvent.click(screen.getByText("工具详情"));
-    expect(screen.getByText(/"purpose":\s*"similar"/)).toBeTruthy();
-    expect(screen.getByText(/"referenceCount":\s*2/)).toBeTruthy();
+    expect(screen.queryByText("工具详情")).toBeNull();
     expect(screen.queryByText(/候选|应用此/)).toBeNull();
   });
 
@@ -29,12 +27,7 @@ describe("Agent image activity", () => {
     expect(screen.queryByText("终端截图 · 深色")).toBeNull();
     expect(screen.queryByText("深色终端截图")).toBeNull();
     expect(screen.queryByText("one")).toBeNull();
-    expect(screen.queryByText("internal prompt")).toBeNull();
-    expect(screen.getByText("工具详情")).toBeTruthy();
-    expect(screen.queryByText("技术详情")).toBeNull();
-    fireEvent.click(screen.getByText("工具详情"));
-    expect(screen.getByText(/"summary":\s*"深色终端截图"/)).toBeTruthy();
-    expect(screen.getByText(/"one"/)).toBeTruthy();
+    expect(screen.queryByText("工具详情")).toBeNull();
   });
 
   it("renders replace approval with before/after previews and existing decisions", () => {
@@ -47,6 +40,7 @@ describe("Agent image activity", () => {
     expect(screen.getByText("当前图片")).toBeTruthy();
     expect(screen.getByText("替换为")).toBeTruthy();
     expect(screen.queryByText("确认后会把当前图片替换为生成结果。")).toBeNull();
+    expect(screen.queryByText("工具详情")).toBeNull();
     expect(screen.getByAltText("当前文档图片").getAttribute("src")).toContain("/api/tasks/task-1/document/images/node-1?revision=rev-1");
     expect(screen.getByAltText("生成替换图片").getAttribute("src")).toContain("/api/tasks/task-1/images/asset-1");
   });

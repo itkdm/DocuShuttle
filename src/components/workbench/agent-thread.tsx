@@ -4,7 +4,7 @@ import { renderAgentMarkdown } from "./agent-markdown";
 import { executionSummary, type AgentActivity, type AgentThreadTurn } from "./agent-thread-projection";
 import { AgentImageActivity } from "./agent-image-activity";
 import { ToolActivityDisclosure } from "./tool-activity-disclosure";
-import { ToolTechnicalDetails } from "./tool-technical-details";
+import { ToolActivityRow } from "./tool-activity-row";
 
 const toolLabel = (name: string) => ({ inspect_document: "查找文档区域", list_document_regions: "查找文档区域", read_document_region: "读取目标内容", apply_text_change: "修改当前文档", apply_text_changes: "批量修改文档", inspect_node_capabilities: "检查节点能力" }[name] ?? "执行文档操作");
 
@@ -13,7 +13,9 @@ function Activity({ activity, taskId, onApproval, deciding }: { activity: AgentA
   if (activity.name === "inspect_image" || activity.name === "generate_image" || activity.name === "replace_document_image") return <AgentImageActivity activity={activity} taskId={taskId} onApproval={onApproval} deciding={deciding} />;
   const icon = activity.state === "running" ? <LoaderCircle size={13} className="event-spinner" /> : activity.state === "failed" ? <AlertCircle size={13} /> : activity.state === "approval" ? <Shield size={13} /> : <Check size={13} />;
   const detail = activity.state === "approval" ? "等待你的确认" : activity.state === "failed" ? activity.error ?? "未完成" : activity.state === "running" ? "处理中" : "已完成";
-  return <ToolActivityDisclosure state={activity.state} summary={<><span className={`agent-tool-item ${activity.state}`}><span className="agent-tool-icon">{icon}</span><span className="agent-tool-content"><span className="agent-tool-heading"><strong>{toolLabel(activity.name)}</strong><small>{detail}{activity.durationMs !== undefined && ` · ${activity.durationMs}ms`}</small></span></span></span></>}><div className="agent-tool-detail-content">{activity.state === "approval" && onApproval && <div className="agent-approval-actions"><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并执行</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div>}<ToolTechnicalDetails activity={activity} /></div></ToolActivityDisclosure>;
+  const row = <ToolActivityRow name={toolLabel(activity.name)} detail={`${detail}${activity.durationMs !== undefined ? ` · ${activity.durationMs}ms` : ""}`} icon={icon} className={activity.state} />;
+  if (activity.state !== "approval" || !onApproval) return row;
+  return <ToolActivityDisclosure state={activity.state} initiallyOpen summary={row}><div className="agent-tool-body-content"><div className="agent-approval-actions"><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并执行</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div></div></ToolActivityDisclosure>;
 }
 
 function Turn({ turn, taskId, onApproval, deciding }: { turn: AgentThreadTurn; taskId?: string; onApproval?: (choice: "approved" | "rejected") => void | Promise<void>; deciding: boolean }) {

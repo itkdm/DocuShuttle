@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 
 import type { AgentActivity } from "./agent-thread-projection";
 import { ToolActivityDisclosure } from "./tool-activity-disclosure";
-import { ToolTechnicalDetails } from "./tool-technical-details";
+import { ToolActivityRow } from "./tool-activity-row";
 
 type RecordValue = Record<string, unknown>;
 
@@ -43,12 +43,18 @@ export function AgentImageActivity({ activity, taskId, onApproval, deciding }: {
   const imageUrl = taskId && assetId ? `/api/tasks/${encodeURIComponent(taskId)}/images/${encodeURIComponent(assetId)}` : undefined;
   const workingUrl = taskId && nodeId && (source === "working-document" || isReplace) ? `/api/tasks/${encodeURIComponent(taskId)}/document/images/${encodeURIComponent(nodeId)}${revision ? `?revision=${encodeURIComponent(revision)}` : ""}` : undefined;
   const detail = activity.state === "approval" ? "等待你的确认" : activity.state === "failed" ? activity.error ?? "未完成" : activity.state === "running" ? "处理中" : "已完成";
-  return <ToolActivityDisclosure state={activity.state} autoOpenOnComplete={isGenerate} initiallyOpen={activity.state === "approval"} summary={<><span className={`agent-tool-item agent-image-activity ${activity.state}`}><span className="agent-tool-icon"><ActivityIcon activity={activity} /></span><span className="agent-tool-content"><span className="agent-tool-heading"><strong>{toolLabel(activity.name)}</strong><small>{detail}{activity.durationMs !== undefined && ` · ${activity.durationMs}ms`}</small></span></span></span></>}>
+  const hasRichBody = (isInspect && activity.state === "completed" && Boolean(imageUrl || workingUrl))
+    || (isGenerate && (activity.state === "running" || (activity.state === "completed" && Boolean(imageUrl))))
+    || (isReplace && activity.state === "approval" && Boolean(workingUrl || imageUrl || onApproval))
+    || (isReplace && activity.state === "completed" && Boolean(imageUrl));
+  const row = <ToolActivityRow name={toolLabel(activity.name)} detail={`${detail}${activity.durationMs !== undefined ? ` · ${activity.durationMs}ms` : ""}`} icon={<ActivityIcon activity={activity} />} className={`agent-image-activity ${activity.state}`} />;
+  if (!hasRichBody) return row;
+  const content = <>
       {isInspect && activity.state === "completed" && <div className="agent-image-summary">{imageUrl && <ImagePreview src={imageUrl} alt="已分析的生成图片" />}{!imageUrl && workingUrl && <ImagePreview src={workingUrl} alt="已分析的文档图片" />}</div>}
       {isGenerate && activity.state === "running" && <p className="agent-image-muted"><ImageIcon size={13} />正在生成图片…</p>}
       {isGenerate && activity.state === "completed" && <div className="agent-image-summary">{imageUrl && <ImagePreview src={imageUrl} alt="生成结果" />}</div>}
       {isReplace && <div className="agent-image-summary">{activity.state === "approval" ? <div className="agent-image-compare">{workingUrl && <div><small>当前图片</small><ImagePreview src={workingUrl} alt="当前文档图片" /></div>}{imageUrl && <><span className="agent-image-compare-separator" aria-hidden="true">↓</span><div><small>替换为</small><ImagePreview src={imageUrl} alt="生成替换图片" /></div></>}</div> : imageUrl && <ImagePreview src={imageUrl} alt="最终替换图片" />}</div>}
       {isReplace && activity.state === "approval" && onApproval && <div className="agent-approval-actions"><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并替换</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div>}
-      <ToolTechnicalDetails activity={activity} />
-  </ToolActivityDisclosure>;
+  </>;
+  return <ToolActivityDisclosure state={activity.state} autoOpenOnComplete={isGenerate} initiallyOpen={activity.state === "approval"} summary={row}>{content}</ToolActivityDisclosure>;
 }

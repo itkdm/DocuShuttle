@@ -6,6 +6,8 @@ import type { AgentInteractionResolution, AgentRuntimePendingInteraction } from 
 import type { AgentImageAttachment } from "./message-parts";
 import { describeAgentImages } from "./message-parts";
 
+const sameImageAttachments = (left: readonly AgentImageAttachment[], right: readonly AgentImageAttachment[]) => left.length === right.length && left.every((image, index) => image.assetId === right[index]?.assetId && image.mimeType === right[index]?.mimeType);
+
 export type AgentLoopMessage = {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
@@ -357,14 +359,18 @@ export class AgentLoopRunner {
       }
     }
     let turnText = userText;
-    const modelAttachmentDescription = describeAgentImages(userAttachments);
     const existingUserResolution = checkpoint.pendingResolution?.type === "user_input" ? checkpoint.pendingResolution : undefined;
+    let effectiveAttachments = userAttachments;
     if (existingUserResolution) {
       if (!interactionId || interactionId !== existingUserResolution.interactionId) throw new Error("USER_INPUT_INTERACTION_MISMATCH");
       if (userText.trim() && userText !== existingUserResolution.text) throw new Error("USER_INPUT_RESOLUTION_MISMATCH");
+      if (userAttachments.length && !sameImageAttachments(userAttachments, existingUserResolution.images ?? [])) throw new Error("USER_INPUT_RESOLUTION_MISMATCH");
       turnText = existingUserResolution.text;
+      effectiveAttachments = existingUserResolution.images ?? [];
     }
-    if (turnText.trim() && interactionId && !checkpoint.pendingInteraction && !existingUserResolution) throw new Error("USER_INPUT_ALREADY_CLAIMED");
+    const hasUserInput = turnText.trim().length > 0 || effectiveAttachments.length > 0;
+    const modelAttachmentDescription = describeAgentImages(effectiveAttachments);
+    if (hasUserInput && interactionId && !checkpoint.pendingInteraction && !existingUserResolution) throw new Error("USER_INPUT_ALREADY_CLAIMED");
     // Older checkpoints may contain an unbounded region listing or tool
     // payload. Compact those messages before sending them back to a provider;
     // this keeps continuation requests reliable without changing the durable
@@ -375,16 +381,16 @@ export class AgentLoopRunner {
     // A pending side effect is a hard interaction boundary. Check it before
     // changing permission, counters, or appending a new turn; a normal user
     // request must not mutate the approval checkpoint.
-    if (turnText.trim() && checkpoint.pendingInteraction?.type === "approval") {
+    if (hasUserInput && checkpoint.pendingInteraction?.type === "approval") {
       return {
         checkpoint,
         events: [createAgentEvent(runId, { type: "assistant.message", text: "当前有一项文档操作等待确认，请先批准或拒绝后再继续。" })],
       };
     }
-    if (!turnText.trim() && checkpoint.pendingInteraction) return { checkpoint, events: [] };
-    if (turnText.trim() && checkpoint.pendingInteraction?.type === "user_input") {
+    if (!hasUserInput && checkpoint.pendingInteraction) return { checkpoint, events: [] };
+    if (hasUserInput && checkpoint.pendingInteraction?.type === "user_input") {
       if (!interactionId || interactionId !== checkpoint.pendingInteraction.interactionId) throw new Error("USER_INPUT_INTERACTION_MISMATCH");
-      const message = { id: clientMessageId ?? crypto.randomUUID(), text: turnText, images: userAttachments };
+      const message = { id: clientMessageId ?? crypto.randomUUID(), text: turnText, images: effectiveAttachments };
       const claimed = this.store.resolvePendingUserInput
         ? await this.store.resolvePendingUserInput(runId, interactionId, message)
         : { ...checkpoint, pendingResolution: { interactionId, type: "user_input" as const, messageId: message.id, text: message.text, ...(message.images?.length ? { images: message.images } : {}) }, status: "running" as const };
@@ -394,7 +400,7 @@ export class AgentLoopRunner {
       checkpoint.status = "running";
       await this.store.appendUserMessage?.(runId, message);
     }
-    if (turnText.trim() && existingUserResolution) {
+    if (hasUserInput && existingUserResolution) {
       // A request can die after the resolution RPC but before the conversation
       // row is materialized. Replaying this idempotent write repairs that
       // durable projection before the inbox item is consumed.
@@ -407,7 +413,7 @@ export class AgentLoopRunner {
     } else {
       checkpoint.permissionMode ??= permissionMode;
     }
-    if ((checkpoint.status === "completed" || checkpoint.status === "failed" || checkpoint.status === "cancelled") && !userText.trim()) {
+    if ((checkpoint.status === "completed" || checkpoint.status === "failed" || checkpoint.status === "cancelled") && !hasUserInput) {
       if (!checkpoint.finalText) return { checkpoint, events: [] };
       const terminalEvent = checkpoint.status === "completed"
         ? createAgentEvent(runId, { type: "turn.completed", text: checkpoint.finalText })
@@ -416,7 +422,7 @@ export class AgentLoopRunner {
           : createAgentEvent(runId, { type: "turn.cancelled", text: checkpoint.finalText });
       return { checkpoint, events: [terminalEvent] };
     }
-    if (turnText.trim()) {
+    if (hasUserInput) {
       // An answer to ask_user continues the same checkpoint and therefore
       // carries the question's preceding context into the next model call.
       checkpoint.messages.push({ role: "user", content: `${turnText}${modelAttachmentDescription}` });

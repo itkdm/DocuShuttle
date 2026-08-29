@@ -38,7 +38,7 @@ begin
         raise exception 'MESSAGE_PARTS_INVALID' using errcode = '22023';
       end if;
       select * into v_asset from public.assets
-       where id = (v_part->>'assetId')::uuid and owner_user_id = v_owner
+       where id::text = v_part->>'assetId' and owner_user_id = v_owner
          and task_id = p_task_id and kind = 'uploaded_image';
       if not found or v_asset.mime_type <> v_part->>'mimeType' then raise exception 'IMAGE_ASSET_INVALID' using errcode = '22023'; end if;
     else
@@ -51,7 +51,7 @@ begin
   select * into v_active from public.agent_runs where task_id = p_task_id and owner_user_id = v_owner
     and status in ('queued','running','awaiting_approval','awaiting_user','awaiting_review') order by updated_at desc limit 1 for update;
   if found then
-    if v_active.status in ('queued','running') and v_active.lease_expires_at <= now() then
+    if v_active.status in ('queued','running') and v_active.lease_expires_at is not null and v_active.lease_expires_at <= now() then
       update public.agent_runs set status='cancelled', state=jsonb_set(jsonb_set(coalesce(state,'{}'::jsonb),'{status}','"cancelled"'::jsonb,true),'{loopCheckpoint,status}','"cancelled"'::jsonb,true), finished_at=now(), updated_at=now(), lease_expires_at=null where id=v_active.id;
     else raise exception 'TURN_NOT_ALLOWED' using errcode = '40001'; end if;
   end if;

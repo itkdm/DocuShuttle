@@ -1,11 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { AGENT_LEASE_MANAGED_STATUSES, normalizeAgentLoopCheckpoint, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentLoopStore } from "../../application/loop";
+import { AGENT_LEASE_MANAGED_STATUSES, normalizeAgentLoopCheckpoint, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentLoopMessage, type AgentLoopStore } from "../../application/loop";
 import type { AgentConversationContext } from "../../application/ports";
 import { createAgentEvent, type AgentEvent } from "../../application/events";
 import { ConcurrentRunUpdateError } from "../../domain/errors";
 import { logger, measure } from "@/infrastructure/observability";
 import type { AgentImageAttachment } from "../../application/message-parts";
+import { describeAgentImages, imagePartsFromMessageParts, textFromAgentMessageParts, normalizeAgentMessageParts } from "../../application/message-parts";
 
 export type SupabaseAgentLoopBootstrap = {
   runId: string;
@@ -40,7 +41,12 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
         conversationId: typeof payload.conversationId === "string" ? payload.conversationId : undefined,
         context: {
           conversationId: typeof payload.conversationId === "string" ? payload.conversationId : undefined,
-          messages: context.filter((message): message is { role: "user" | "assistant"; content: string } => Boolean(message) && typeof message === "object" && ((message as { role?: unknown }).role === "user" || (message as { role?: unknown }).role === "assistant") && typeof (message as { content?: unknown }).content === "string"),
+          messages: context.flatMap((message): AgentLoopMessage[] => {
+            if (!message || typeof message !== "object" || ((message as { role?: unknown }).role !== "user" && (message as { role?: unknown }).role !== "assistant")) return [];
+            const item = message as { role: "user" | "assistant"; parts?: unknown; content?: unknown };
+            if (Array.isArray(item.parts)) { const parts = normalizeAgentMessageParts(item.parts); const content = `${textFromAgentMessageParts(parts).trim()}${describeAgentImages(imagePartsFromMessageParts(parts))}`; return content ? [{ role: item.role, content }] : []; }
+            return typeof item.content === "string" && item.content ? [{ role: item.role, content: item.content }] : [];
+          }),
           loadedCount: typeof payload.loadedCount === "number" ? payload.loadedCount : context.length,
           truncated: payload.truncated === true,
           limit: 200,

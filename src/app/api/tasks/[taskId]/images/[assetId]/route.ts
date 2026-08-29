@@ -11,7 +11,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tas
     const { client, userId } = await requireSupabaseIdentity();
     const generatedStore = new SupabaseGeneratedAssetStore(client);
     const generated = await generatedStore.load({ assetId, taskId, ownerUserId: userId });
-    const asset = generated ? { ...generated, kind: "generated_image" as const } : await generatedStore.loadImage({ assetId, taskId, ownerUserId: userId });
+    const uploaded = !generated && typeof generatedStore.loadImage === "function"
+      ? await generatedStore.loadImage({ assetId, taskId, ownerUserId: userId })
+      : null;
+    const asset = generated ? { ...generated, kind: "generated_image" as const } : uploaded;
     if (!asset || !allowedMimeTypes.has(asset.mimeType)) return new Response(null, { status: 404 });
     const bytes = await new SupabaseStorageAdapter(client).get(asset.objectKey);
     return new Response(bytes as BodyInit, { status: 200, headers: { "Content-Type": asset.mimeType, "Cache-Control": "private" } });

@@ -43,14 +43,14 @@ class MemoryStore {
     this.value = claimed;
     return claimed;
   }
-  async resolvePendingUserInput(_runId: string, interactionId: string, message: { id: string; text: string }) {
+  async resolvePendingUserInput(_runId: string, interactionId: string, message: { id: string; text: string; images?: readonly { assetId: string; mimeType: "image/png" | "image/jpeg" | "image/webp" }[] }) {
     const checkpoint = this.value;
     if (checkpoint?.pendingInteraction?.type !== "user_input" || checkpoint.pendingInteraction.interactionId !== interactionId) return undefined;
     const claimed = structuredClone(checkpoint);
     claimed.pendingInteraction = undefined;
     claimed.status = "running";
     claimed.pendingResolution = { interactionId, type: "user_input", messageId: message.id, text: message.text };
-    this.value = claimed;
+    this.value = { ...claimed, pendingResolution: { interactionId, type: "user_input", messageId: message.id, text: message.text, ...(message.images?.length ? { images: message.images } : {}) } };
     return claimed;
   }
 }
@@ -88,6 +88,31 @@ const inspectTool: AgentTool = {
 };
 
 describe("AgentLoopRunner", () => {
+  it("accepts an image-only fresh user turn and exposes only safe image identity to the model", async () => {
+    let modelInput = "";
+    const image = { assetId: "asset-image-1", mimeType: "image/png" as const };
+    const result = await new AgentLoopRunner({ decide: async ({ messages }) => {
+      modelInput = messages.at(-1)?.content ?? "";
+      return { kind: "message", text: "已读取图片", finish: true };
+    } }, new MemoryStore(), []).runWithPermission("run-image-only", "", "default", undefined, undefined, undefined, undefined, [image]);
+    expect(modelInput).toContain("asset-image-1");
+    expect(modelInput).not.toContain("objectKey");
+    expect(result.checkpoint.messages.find((message) => message.role === "user")?.content).toContain("asset-image-1");
+  });
+
+  it("uses durable images when recovering an image-only ask_user resolution", async () => {
+    const store = new MemoryStore();
+    const image = { assetId: "asset-ask-image", mimeType: "image/jpeg" as const };
+    const interactionId = "00000000-0000-4000-8000-000000000002";
+    store.seed({ messages: [{ role: "assistant", content: "请上传图片" }], iterations: 1, toolCallCount: 0, status: "running", permissionMode: "default", pendingResolution: { interactionId, type: "user_input", messageId: "message-ask-image", text: "", images: [image] } });
+    const result = await new AgentLoopRunner({ decide: async ({ messages }) => {
+      expect(messages.at(-1)?.content).toContain(image.assetId);
+      return { kind: "message", text: "图片已收到", finish: true };
+    } }, store, []).runWithPermission("run-ask-image", "", "default", undefined, undefined, undefined, interactionId);
+    expect(result.checkpoint.status).toBe("completed");
+    expect(result.checkpoint.messages.find((message) => message.role === "user")?.content).toContain(image.assetId);
+  });
+
   it("seeds a fresh run from prior semantic conversation messages without duplicating its current prompt", async () => {
     const seen: string[][] = [];
     const context = new MemoryConversationContext([

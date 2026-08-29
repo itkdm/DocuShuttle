@@ -67,6 +67,9 @@ function CustomSelect({ value, options, onChange, disabled, icon }: { value: str
 export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspaceReady, taskId, run, messages = [], activeEvents = [], historicalEvents = [], onLoopApproval, permissionMode, onPermissionModeChange, onLoadEarlier, hasEarlierMessages = false, loadingEarlierMessages = false, conversationLoading = false, approvalSubmitting = false }: AgentPanelProps) {
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<Array<{ file: File; preview: string; error?: string }>>([]);
+  const attachmentsRef = useRef(attachments);
+  const submittingRef = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -92,6 +95,15 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
   // Runtime Approval pauses the composer; an ask_user checkpoint is
   // specifically waiting for ordinary user text and must remain writable.
   const inputBlocked = !runtimeView.canSend;
+  attachmentsRef.current = attachments;
+  useEffect(() => () => { attachmentsRef.current.forEach((item) => URL.revokeObjectURL(item.preview)); }, []);
+  useEffect(() => {
+    setAttachments((current) => {
+      current.forEach((item) => URL.revokeObjectURL(item.preview));
+      return [];
+    });
+    setPrompt("");
+  }, [taskId]);
   useEffect(() => {
     const element = contentRef.current;
     if (!element || !stickToBottomRef.current) return;
@@ -119,9 +131,9 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
     setShowScrollToBottom(!atBottom);
   };
   const handleLoopApproval = (choice: "approved" | "rejected", callId?: string) => onLoopApproval?.(choice, callId);
-  const addPastedImages = (event: React.ClipboardEvent<HTMLTextAreaElement>) => { const files = Array.from(event.clipboardData.items).filter((item) => item.kind === "file" && item.type.startsWith("image/")).map((item) => item.getAsFile()).filter((file): file is File => Boolean(file)); if (!files.length) return; event.preventDefault(); setAttachments((current) => [...current, ...files.map((file) => ({ file, preview: URL.createObjectURL(file) }))].slice(0, 4)); };
+  const addPastedImages = (event: React.ClipboardEvent<HTMLTextAreaElement>) => { const files = Array.from(event.clipboardData.items).filter((item) => item.kind === "file" && item.type.startsWith("image/")).map((item) => item.getAsFile()).filter((file): file is File => Boolean(file)); if (!files.length) return; event.preventDefault(); setAttachments((current) => { const accepted = files.slice(0, Math.max(0, 4 - current.length)).map((file) => ({ file, preview: URL.createObjectURL(file) })); return [...current, ...accepted]; }); };
   const removeAttachment = (index: number) => setAttachments((current) => { const removed = current[index]; if (removed) URL.revokeObjectURL(removed.preview); return current.filter((_, itemIndex) => itemIndex !== index); });
-  const submit = async () => { if (inputBlocked || !workspaceReady || !taskId) return; const value = prompt.trim(); if (!value && !attachments.length) return; if (attachments.reduce((total, item) => total + item.file.size, 0) > 40 * 1024 * 1024) { setAttachments((current) => current.map((item) => ({ ...item, error: "图片总大小不能超过 40MB" }))); return; } stickToBottomRef.current = true; setShowScrollToBottom(false); try { const uploaded = await Promise.all(attachments.map((item) => uploadBrowserImage(taskId, item.file))); await onRun(value, uploaded); attachments.forEach((item) => URL.revokeObjectURL(item.preview)); setAttachments([]); setPrompt(""); } catch (error) { setAttachments((current) => current.map((item) => ({ ...item, error: error instanceof Error ? error.message : "图片上传失败" }))); } };
+  const submit = async () => { if (submittingRef.current || inputBlocked || !workspaceReady || !taskId) return; const value = prompt.trim(); const submittedAttachments = attachments; if (!value && !submittedAttachments.length) return; submittingRef.current = true; setSubmitting(true); if (submittedAttachments.reduce((total, item) => total + item.file.size, 0) > 40 * 1024 * 1024) { setAttachments((current) => current.map((item) => ({ ...item, error: "图片总大小不能超过 40MB" }))); submittingRef.current = false; setSubmitting(false); return; } stickToBottomRef.current = true; setShowScrollToBottom(false); try { const uploaded = await Promise.all(submittedAttachments.map((item) => uploadBrowserImage(taskId, item.file))); void Promise.resolve(onRun(value, uploaded)).catch(() => undefined); submittedAttachments.forEach((item) => URL.revokeObjectURL(item.preview)); setAttachments([]); setPrompt(""); submittingRef.current = false; setSubmitting(false); } catch (error) { setAttachments((current) => current.map((item) => ({ ...item, error: error instanceof Error ? error.message : "图片上传失败" }))); submittingRef.current = false; setSubmitting(false); } };
   return (
     <aside className="agent-panel" aria-label="纸上鸭 Agent">
       <div className="agent-heading">
@@ -135,7 +147,7 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
         {showScrollToBottom && <button type="button" className="scroll-to-bottom" onClick={() => { const element = contentRef.current; if (!element) return; stickToBottomRef.current = true; setShowScrollToBottom(false); scrollToBottom(element, "smooth"); }} aria-label="回到底部">↓ 回到底部</button>}
       </div>
       <div className="agent-composer">
-        {attachments.length > 0 && <div className="agent-composer-attachments">{attachments.map((item, index) => <div className="agent-composer-attachment" key={item.preview}><Image src={item.preview} alt="待发送图片" width={58} height={58} unoptimized /><button type="button" onClick={() => removeAttachment(index)} aria-label="移除图片"><X size={12} /></button>{item.error && <small>{item.error}</small>}</div>)}</div>}
+        {attachments.length > 0 && <div className="agent-composer-attachments">{attachments.map((item, index) => <div className="agent-composer-attachment" key={item.preview}><Image src={item.preview} alt="待发送图片" width={58} height={58} unoptimized /><button type="button" onClick={() => removeAttachment(index)} aria-label="移除图片" disabled={submitting}><X size={12} /></button>{item.error && <small>{item.error}</small>}</div>)}</div>}
         <textarea ref={promptRef} id="agent-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onPaste={addPastedImages} onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter" && !event.shiftKey && !inputBlocked && workspaceReady) { event.preventDefault(); void submit(); } }} placeholder={awaitingUserQuestion ? "请回答纸上鸭的问题…" : !workspaceReady ? "请先打开一份 DOCX" : inputBlocked ? "Agent 运行中，可先输入下一条提示词…" : "例如：把实验结论改得更专业，只改一个单元格…"} rows={2} disabled={!workspaceReady} />
         <div className="composer-toolbar">
           <CustomSelect
@@ -150,7 +162,7 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
           />
           <div className="composer-actions">
             <span>{inputBlocked ? "当前任务完成后即可发送" : "Enter 发送 · Shift + Enter 换行"}</span>
-            {runtimeView.canCancel ? <button className="composer-stop" onClick={() => void onCancel()} aria-label="停止当前任务"><StopCircle size={14} /> 停止</button> : <button className="composer-send" onClick={() => void submit()} disabled={(!prompt.trim() && !attachments.length) || inputBlocked || !workspaceReady} aria-label="发送要求"><Send size={14} /></button>}
+            {runtimeView.canCancel ? <button className="composer-stop" onClick={() => void onCancel()} aria-label="停止当前任务"><StopCircle size={14} /> 停止</button> : <button className="composer-send" onClick={() => void submit()} disabled={submitting || (!prompt.trim() && !attachments.length) || inputBlocked || !workspaceReady} aria-label="发送要求"><Send size={14} /></button>}
           </div>
         </div>
       </div>

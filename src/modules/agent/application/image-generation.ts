@@ -35,6 +35,21 @@ const hash = async (value: unknown) => { const bytes = new TextEncoder().encode(
 const sha256 = async (bytes: Uint8Array) => { const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer); return Array.from(new Uint8Array(digest), (v) => v.toString(16).padStart(2, "0")).join(""); };
 const allowed = new Set(["image/png", "image/jpeg", "image/webp"]);
 
+export const canonicalizeJson = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonicalizeJson);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalizeJson(entry)]),
+    );
+  }
+  return value;
+};
+
+export const stableJson = (value: unknown) => JSON.stringify(canonicalizeJson(value));
+
 export class AgentImageGenerationService {
   constructor(private readonly provider: ImageGenerationPort, private readonly jobs: ImageGenerationJobStore, private readonly assets: GeneratedAgentAssetStore, private readonly storage: PrivateObjectStoragePort, private readonly resolver: AgentImageReferenceResolver, private readonly fetcher: { fetch(url: string, signal?: AbortSignal): Promise<{ bytes: Uint8Array; mimeType: string }> }, private readonly ownerUserId: string, private readonly taskId: string, private readonly runId: string, private readonly callId: string, private readonly idempotencyKey: string) {}
   async execute(input: z.infer<typeof generateImageSchema>, signal?: AbortSignal): Promise<unknown> {
@@ -62,7 +77,7 @@ export class AgentImageGenerationService {
       if (referenceBytes.some((size) => size === 0)) throw new Error("IMAGE_REFERENCE_INVALID");
       if (referenceBytes.some((size) => size > 20 * 1024 * 1024)) throw new Error("IMAGE_REFERENCE_TOO_LARGE");
       if (referenceBytes.reduce((total, size) => total + size, 0) > 40 * 1024 * 1024) throw new Error("IMAGE_REFERENCES_TOO_LARGE");
-      if (JSON.stringify(safeRequest) !== JSON.stringify(job.safeRequest)) throw new Error("IMAGE_REFERENCE_CHANGED_BEFORE_SUBMISSION");
+      if (stableJson(safeRequest) !== stableJson(job.safeRequest)) throw new Error("IMAGE_REFERENCE_CHANGED_BEFORE_SUBMISSION");
     }
     let completed = job;
     if (job.status === "created") {

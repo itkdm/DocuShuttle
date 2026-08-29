@@ -34,11 +34,11 @@ const initialVersions: VersionItem[] = [
 ];
 const isDocumentMutationTool = (name?: string) => name === "apply_text_change" || name === "apply_text_changes" || name === "replace_document_image";
 const messageImages = (parts: readonly { type?: string; assetId?: unknown; mimeType?: unknown }[]): AgentImageAttachment[] => parts.filter((part): part is { type: "image"; assetId: string; mimeType: AgentImageAttachment["mimeType"] } => part.type === "image" && typeof part.assetId === "string" && ["image/png", "image/jpeg", "image/webp"].includes(String(part.mimeType))).map((part) => ({ assetId: part.assetId, mimeType: part.mimeType }));
-type ClientToolInput = { target: "visible" | "page"; pageNumber?: number };
+type ClientToolInput = { target: "visible" };
 const isClientToolInput = (value: unknown): value is ClientToolInput => {
   if (!value || typeof value !== "object") return false;
   const input = value as Record<string, unknown>;
-  return (input.target === "visible" || input.target === "page") && (input.target !== "page" || (typeof input.pageNumber === "number" && Number.isInteger(input.pageNumber) && input.pageNumber > 0));
+  return input.target === "visible" && Object.keys(input).length === 1;
 };
 export function Workbench() {
   const pathname = usePathname();
@@ -384,7 +384,7 @@ export function Workbench() {
       setNotice(state.dirty ? "文档有未保存变化，暂时无法捕获视觉结果" : "文档尚未准备好，请稍后重试");
       return;
     }
-    if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.capture.start", { target: input.target, pageNumber: input.pageNumber, surfaceReadyVersion });
+    if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.capture.start", { target: input.target, surfaceReadyVersion });
     clientToolSubmissionRef.current = key;
     const currentTaskId = taskId;
     const currentRunId = run.id;
@@ -394,9 +394,7 @@ export function Workbench() {
     agentAbortRef.current = abort;
     void (async () => {
       try {
-        const captured = input.target === "page" ? await surface.capturePage(input.pageNumber!) : await surface.captureVisible();
-        const pageCapture = "captures" in captured ? captured.captures[0] : captured;
-        if (!pageCapture) throw new Error("DOCUMENT_VIEW_CAPTURE_EMPTY");
+        const pageCapture = await surface.captureVisible();
         if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.capture.completed", { width: pageCapture.width, height: pageCapture.height, pageNumber: pageCapture.pageNumber });
         const asset = await uploadBrowserDocumentPreview(currentTaskId, { runId: currentRunId, interactionId: currentInteractionId, callId: currentCallId }, pageCapture);
         if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.upload.completed", { assetId: asset.assetId, width: asset.width, height: asset.height });

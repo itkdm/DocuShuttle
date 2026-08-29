@@ -103,12 +103,12 @@ describe("AgentLoopRunner", () => {
     const store = new MemoryStore();
     let executions = 0;
     const clientTool: AgentTool = {
-      name: "capture_document_view", description: "Capture the current document", clientExecution: true,
-      inputSchema: z.object({ target: z.literal("page"), pageNumber: z.number().int().positive() }),
+      name: "capture_document_view", description: "Capture the current visible document viewport", clientExecution: true,
+      inputSchema: z.object({ target: z.literal("visible") }),
       async execute() { executions += 1; return {}; },
     };
     const modelDecisions = [
-      { kind: "tool_calls" as const, calls: [{ id: "client-call", name: "capture_document_view", input: { target: "page", pageNumber: 2 } }] },
+      { kind: "tool_calls" as const, calls: [{ id: "client-call", name: "capture_document_view", input: { target: "visible" } }] },
       { kind: "message" as const, text: "页面布局看起来正常。" },
     ];
     const model = { decide: async () => modelDecisions.shift()! };
@@ -119,7 +119,7 @@ describe("AgentLoopRunner", () => {
     expect(executions).toBe(0);
     const pending = first.checkpoint.pendingInteraction!;
     const result = await new AgentLoopRunner(model, store, [clientTool]).resumeClientTool("run-client-tool", pending.interactionId, pending.type === "client_tool" ? pending.callId : "", {
-      assetId: "asset-preview", mimeType: "image/png", sha256: "a".repeat(64), pageNumber: 2, width: 800, height: 1000, revision: "revision-1",
+      assetId: "asset-preview", mimeType: "image/png", sha256: "a".repeat(64), width: 800, height: 900, revision: "revision-1",
     });
     expect(result.checkpoint.status).toBe("completed");
     expect(result.checkpoint.messages.filter((message) => message.role === "tool")).toHaveLength(1);

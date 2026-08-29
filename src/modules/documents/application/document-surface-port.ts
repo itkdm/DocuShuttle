@@ -14,8 +14,12 @@ export type DocumentPageCapture = {
   height: number;
 };
 
-export type DocumentVisibleCapture = DocumentPageCapture | {
-  captures: readonly DocumentPageCapture[];
+export type DocumentVisibleCapture = {
+  blob: Blob;
+  mimeType: "image/png";
+  width: number;
+  height: number;
+  pageNumber?: number;
 };
 
 /** Browser-neutral surface contract; concrete DOM/document engines stay in adapters. */

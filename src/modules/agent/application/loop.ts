@@ -646,7 +646,6 @@ export class AgentLoopRunner {
             continue;
           }
           const interactionId = crypto.randomUUID();
-          const clientInput = call.input as { target?: unknown; pageNumber?: unknown };
           checkpoint.pendingInteraction = {
             interactionId,
             type: "client_tool",
@@ -661,8 +660,7 @@ export class AgentLoopRunner {
             interactionId,
             callId: call.id,
             name: call.name,
-            target: clientInput.target === "page" ? "page" : "visible",
-            ...(typeof clientInput.pageNumber === "number" ? { pageNumber: clientInput.pageNumber } : {}),
+            target: "visible",
           }, false);
           await saveCheckpoint();
           onEvent?.(requiredEvent);

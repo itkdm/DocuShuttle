@@ -54,12 +54,15 @@ function Activity({ activity, taskId, onApproval, deciding }: { activity: AgentA
 function Turn({ turn, taskId, onApproval, deciding }: { turn: AgentThreadTurn; taskId?: string; onApproval?: (choice: "approved" | "rejected") => void | Promise<void>; deciding: boolean }) {
   const assistant = turn.assistant;
   const live = assistant.status === "running" || assistant.status === "awaiting_approval" || assistant.status === "awaiting_user";
+  const terminal = assistant.status === "completed" || assistant.status === "failed" || assistant.status === "cancelled";
   const [activityOpen, setActivityOpen] = useState(live);
   const previousStatus = useRef(assistant.status);
   useEffect(() => {
-    if (previousStatus.current !== "completed" && live) setActivityOpen(true);
+    const wasLive = previousStatus.current === "running" || previousStatus.current === "awaiting_approval" || previousStatus.current === "awaiting_user";
+    if (!wasLive && live) setActivityOpen(true);
+    if (wasLive && terminal) setActivityOpen(false);
     previousStatus.current = assistant.status;
-  }, [assistant.status, live]);
+  }, [assistant.status, live, terminal]);
   if (turn.user && assistant.status === "completed" && !assistant.finalContent && !assistant.streamingContent && assistant.activities.length === 0) return <div className="thread-message user" data-status={turn.user.deliveryStatus}><div className="user-bubble"><p>{turn.user.content}</p></div></div>;
   const content = assistant.finalContent ?? assistant.streamingContent;
   return <section className="agent-turn" aria-label="Agent 对话条目">{turn.user && <div className="thread-message user" data-status={turn.user.deliveryStatus}><div className="user-bubble"><p>{turn.user.content}</p></div></div>}<div className="assistant-turn"><div className="assistant-byline"><span className="agent-avatar">鸭</span><strong>纸上鸭</strong><small>{assistant.status === "running" ? "正在处理" : assistant.status === "awaiting_approval" ? "等待确认" : assistant.status === "awaiting_user" ? "等待你的回答" : assistant.status === "failed" ? "未完成" : assistant.status === "cancelled" ? "已取消" : "回复"}</small></div>{assistant.activities.length > 0 && <details className="agent-activity" open={activityOpen} onToggle={(event) => setActivityOpen(event.currentTarget.open)}><summary><span className="agent-activity-icon"><Check size={13} /></span><span>执行过程</span><small>{executionSummary(assistant.status, assistant.activities)}</small></summary><div className="agent-activity-body">{assistant.activities.map((activity) => <Activity key={activity.id} activity={activity} taskId={taskId} onApproval={onApproval} deciding={deciding} />)}</div></details>}{content && <div className="agent-rich-text">{renderAgentMarkdown(content)}</div>}{assistant.status === "failed" && !content && <div className="agent-turn-error"><AlertCircle size={14} />这次请求没有完成，请稍后重试。</div>}</div></section>;

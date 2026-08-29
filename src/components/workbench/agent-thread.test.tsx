@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AgentThread } from "./agent-thread";
@@ -10,6 +10,12 @@ const renderActivity = (activity: AgentActivity) => render(<AgentThread
   turns={[{ id: "turn-1", runId: "run-1", anchor: "2026-01-01", user: { id: "user-1", content: "检查", deliveryStatus: "sent" }, assistant: { status: activity.type === "tool" && activity.state === "failed" ? "failed" : "completed", activities: [activity] } }]}
   conversationLoading={false} hasEarlierMessages={false} loadingEarlierMessages={false} onApproval={() => undefined} deciding={false}
 />);
+
+const turnFor = (status: "running" | "awaiting_approval" | "awaiting_user" | "completed" | "failed" | "cancelled") => ({
+  id: "turn-status", runId: "run-status", anchor: "2026-01-01", user: { id: "user-status", content: "检查", deliveryStatus: "sent" as const },
+  assistant: { status, activities: [{ type: "tool", id: "activity-status", callId: "call-status", name: "inspect_document", state: status === "awaiting_approval" ? "approval" : status === "completed" ? "completed" : status === "failed" ? "failed" : "running" }] as const },
+});
+const renderStatus = (status: Parameters<typeof turnFor>[0]) => render(<AgentThread turns={[turnFor(status)]} conversationLoading={false} hasEarlierMessages={false} loadingEarlierMessages={false} onApproval={() => undefined} deciding={false} />);
 
 describe("Agent thread tool rows", () => {
   afterEach(() => cleanup());
@@ -62,5 +68,51 @@ describe("Agent thread tool rows", () => {
     renderActivity({ type: "tool", id: "tool-6", callId: "call-6", name: "plan_text_change", state: "completed" });
     expect(screen.getByText("预演修改方案")).toBeTruthy();
     expect(screen.queryByText("执行文档操作")).toBeNull();
+  });
+
+  it("opens active execution and closes once when it reaches a terminal status", () => {
+    const view = renderStatus("running");
+    const details = () => document.querySelector(".agent-activity") as HTMLDetailsElement;
+    expect(details().open).toBe(true);
+    view.rerender(<AgentThread turns={[turnFor("completed")]} conversationLoading={false} hasEarlierMessages={false} loadingEarlierMessages={false} onApproval={() => undefined} deciding={false} />);
+    expect(details().open).toBe(false);
+  });
+
+  it("closes approval and user-input execution when either completes", () => {
+    for (const active of ["awaiting_approval", "awaiting_user"] as const) {
+      const view = renderStatus(active);
+      const details = () => document.querySelector(".agent-activity") as HTMLDetailsElement;
+      expect(details().open).toBe(true);
+      view.rerender(<AgentThread turns={[turnFor("completed")]} conversationLoading={false} hasEarlierMessages={false} loadingEarlierMessages={false} onApproval={() => undefined} deciding={false} />);
+      expect(details().open).toBe(false);
+      cleanup();
+    }
+  });
+
+  it("closes active execution for failure and cancellation", () => {
+    for (const terminal of ["failed", "cancelled"] as const) {
+      const view = renderStatus("running");
+      const details = () => document.querySelector(".agent-activity") as HTMLDetailsElement;
+      view.rerender(<AgentThread turns={[turnFor(terminal)]} conversationLoading={false} hasEarlierMessages={false} loadingEarlierMessages={false} onApproval={() => undefined} deciding={false} />);
+      expect(details().open).toBe(false);
+      cleanup();
+    }
+  });
+
+  it("keeps historical terminal execution closed but lets users reopen it", () => {
+    const view = renderStatus("completed");
+    const details = () => document.querySelector(".agent-activity") as HTMLDetailsElement;
+    expect(details().open).toBe(false);
+    fireEvent.click(details().querySelector("summary")!);
+    expect(details().open).toBe(true);
+    view.rerender(<AgentThread turns={[turnFor("completed")]} conversationLoading={false} hasEarlierMessages={false} loadingEarlierMessages={false} onApproval={() => undefined} deciding={false} />);
+    expect(details().open).toBe(true);
+  });
+
+  it("keeps execution open across active-to-active transitions", () => {
+    const view = renderStatus("awaiting_approval");
+    const details = () => document.querySelector(".agent-activity") as HTMLDetailsElement;
+    view.rerender(<AgentThread turns={[turnFor("running")]} conversationLoading={false} hasEarlierMessages={false} loadingEarlierMessages={false} onApproval={() => undefined} deciding={false} />);
+    expect(details().open).toBe(true);
   });
 });

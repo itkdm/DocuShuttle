@@ -61,6 +61,7 @@ async function consumeAgentStream(
   onEvent: (event: AgentEvent) => void,
   startedAt: number,
   timeToHeadersMs: number,
+  onAccepted?: () => void,
 ) {
   if (!response.ok || !response.body) {
     logBrowserEvent({ event: "client.agent.loop_stream.failed", timeToHeadersMs, totalMs: performance.now() - startedAt, status: response.status, chunkCount: 0, frameCount: 0, bytesReceived: 0, finalResultReceived: false });
@@ -93,6 +94,7 @@ async function consumeAgentStream(
           const normalized = isAgentEvent(data) && data.runId === runId ? data : undefined;
           if (normalized) {
             if (normalized.type === "model.delta") firstModelDeltaMs ??= performance.now() - startedAt;
+            onAccepted?.();
             onEvent(normalized);
           }
         }
@@ -111,6 +113,7 @@ async function consumeAgentStream(
         const normalized = isAgentEvent(data) && data.runId === runId ? data : undefined;
         if (normalized) {
           if (normalized.type === "model.delta") firstModelDeltaMs ??= performance.now() - startedAt;
+          onAccepted?.();
           onEvent(normalized);
         }
       }
@@ -133,13 +136,14 @@ const consumeAgentFetch = async (
   request: Promise<Response>,
   runId: string,
   onEvent: (event: AgentEvent) => void,
+  onAccepted?: () => void,
 ) => {
   const startedAt = performance.now();
   let responseReceived = false;
   try {
     const response = await request;
     responseReceived = true;
-    return consumeAgentStream(response, runId, onEvent, startedAt, performance.now() - startedAt);
+    return consumeAgentStream(response, runId, onEvent, startedAt, performance.now() - startedAt, onAccepted);
   } catch (error) {
     if (!responseReceived) {
       logBrowserEvent({ event: "client.agent.loop_stream.failed", totalMs: performance.now() - startedAt, finalResultReceived: false });
@@ -226,11 +230,13 @@ export async function runBrowserAgentLoopStream(
   clientMessageId?: string,
   interactionId?: string,
   attachments: readonly AgentImageAttachment[] = [],
+  onAccepted?: () => void,
 ) {
   return consumeAgentFetch(
     fetch(`/api/agent/runs/${runId}/loop`, { ...post({ message, permissionMode, attachments, ...(clientMessageId ? { clientMessageId } : {}), ...(interactionId ? { interactionId } : {}) }), method: "PUT", signal }),
     runId,
     onEvent,
+    onAccepted,
   );
 }
 

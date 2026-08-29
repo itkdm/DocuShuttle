@@ -365,6 +365,12 @@ export function Workbench() {
     const abortController = new AbortController();
     agentAbortRef.current = abortController;
     let activeRunForRecovery: AgentRun | undefined;
+    let submissionAccepted = false;
+    const acceptSubmission = () => {
+      if (submissionAccepted) return;
+      submissionAccepted = true;
+      lifecycle?.accepted();
+    };
     try {
       // A completed/failed run is an immutable execution record, not a
       // conversation handle for the next user turn. Start a new run for the
@@ -381,13 +387,14 @@ export function Workbench() {
       activeRunForRecovery = activeRun;
       setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, runId: activeRun.id } : item));
       setRun(activeRun);
-      lifecycle?.accepted();
+      if (startsFreshRun) acceptSubmission();
       const interactionId = loopResult?.checkpoint.pendingInteraction?.type === "user_input" ? loopResult.checkpoint.pendingInteraction.interactionId : undefined;
       const result = await runBrowserAgentLoopStream(activeRun.id, prompt, permissionMode, (event) => {
         setActiveEvents((items) => mergeTimelineEvents(items, [event]));
         if (event.type === "model.delta") setNotice("纸上鸭正在回复");
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
-      }, abortController.signal, localMessageId, interactionId, attachments);
+      }, abortController.signal, localMessageId, interactionId, attachments, acceptSubmission);
+      acceptSubmission();
       applyRuntimeResult(activeRun.id, result);
       setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, status: result.checkpoint.status === "failed" ? "failed" : "sent" } : item));
       if (result.checkpoint.status === "failed") {
@@ -426,6 +433,11 @@ export function Workbench() {
       if (runToRecover) {
         try {
           const recovered = await recoverAndReconcileRun(runToRecover.id);
+          if (recovered.checkpoint.pendingInteraction?.type === "user_input") {
+            lifecycle?.failed();
+          } else {
+            acceptSubmission();
+          }
           if (recovered.checkpoint.pendingInteraction) {
             setNotice(recovered.checkpoint.pendingInteraction.type === "approval" ? "Agent 已完成读取并请求写入确认" : "Agent 正在等待你的回答");
             return;
@@ -436,7 +448,7 @@ export function Workbench() {
           }
         } catch { /* preserve the original error below */ }
       }
-      if (!activeRunForRecovery) lifecycle?.failed();
+      if (!submissionAccepted) lifecycle?.failed();
       setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, status: "failed" } : item));
       setNotice(error instanceof Error ? `连接中断，恢复失败：${error.message}` : "连接中断，恢复失败，请刷新后重试。");
     } finally {

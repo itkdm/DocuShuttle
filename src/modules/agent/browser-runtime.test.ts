@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { normalizeReplayEvents, recoverBrowserAgentLoop } from "./browser-runtime";
+import { normalizeReplayEvents, recoverBrowserAgentLoop, runBrowserAgentLoopStream } from "./browser-runtime";
 
 const checkpoint = (status: "running" | "completed") => ({
   status,
@@ -12,6 +12,20 @@ const checkpoint = (status: "running" | "completed") => ({
 afterEach(() => vi.restoreAllMocks());
 
 describe("browser Agent recovery", () => {
+  it("acknowledges same-run submission only after the first streamed durable event", async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      `event: event\ndata: ${JSON.stringify({ eventId: "started", runId: "run-user", timestamp: "2026-08-28T00:00:00.000Z", type: "model.started", text: "request" })}\n\nevent: result\ndata: ${JSON.stringify({ checkpoint: checkpoint("completed"), events: [] })}\n\n`,
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    let accepted = false;
+    const stream = runBrowserAgentLoopStream("run-user", "回答", "default", () => {}, undefined, "message-1", "interaction-1", [], () => { accepted = true; });
+    expect(accepted).toBe(false);
+    const result = await stream;
+    expect(accepted).toBe(true);
+    expect(result.checkpoint.status).toBe("completed");
+  });
+
   it("reconciles a terminal checkpoint from replay without opening a recovery stream", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toContain("/loop?after=0&limit=500");

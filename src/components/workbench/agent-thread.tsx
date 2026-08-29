@@ -6,7 +6,39 @@ import { AgentImageActivity } from "./agent-image-activity";
 import { ToolActivityDisclosure } from "./tool-activity-disclosure";
 import { ToolActivityRow } from "./tool-activity-row";
 
-const toolLabel = (name: string) => ({ inspect_document: "查找文档区域", list_document_regions: "查找文档区域", read_document_region: "读取目标内容", apply_text_change: "修改当前文档", apply_text_changes: "批量修改文档", inspect_node_capabilities: "检查节点能力" }[name] ?? "执行文档操作");
+const toolLabel = (name: string) => ({
+  inspect_document: "读取当前文档",
+  list_document_regions: "查找文档区域",
+  read_document_region: "读取目标内容",
+  inspect_node_capabilities: "检查节点能力",
+  plan_text_change: "预演修改方案",
+  apply_text_change: "修改当前文档",
+  apply_text_changes: "批量修改文档",
+  list_source_documents: "读取参考资料",
+  read_source_document: "读取参考内容",
+  list_document_versions: "查看版本历史",
+  restore_document_version: "恢复文档版本",
+  export_document: "导出文档",
+}[name] ?? "执行文档操作");
+
+type TextChange = { expectedText: string; replacement: string };
+const asRecord = (value: unknown): Record<string, unknown> | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+const textChange = (value: unknown): TextChange | undefined => {
+  const record = asRecord(value);
+  return typeof record?.expectedText === "string" && typeof record.replacement === "string" ? { expectedText: record.expectedText, replacement: record.replacement } : undefined;
+};
+
+function TextMutationPreview({ activity }: { activity: Extract<AgentActivity, { type: "tool" }> }) {
+  const input = asRecord(activity.input);
+  if (activity.name === "apply_text_change") {
+    const change = textChange(input);
+    if (!change) return null;
+    return <div className="agent-text-mutation-preview"><div className="agent-text-change"><small>修改前</small><pre>{change.expectedText}</pre><span aria-hidden="true">↓</span><small>修改后</small><pre>{change.replacement}</pre></div></div>;
+  }
+  const changes = Array.isArray(input?.changes) ? input.changes.map(textChange).filter((change): change is TextChange => Boolean(change)) : [];
+  if (activity.name !== "apply_text_changes" || changes.length === 0) return null;
+  return <div className="agent-text-mutation-preview"><p>将修改 {changes.length} 处</p>{changes.map((change, index) => <div className="agent-text-change" key={`${index}-${change.expectedText}`}><small>修改前</small><pre>{change.expectedText}</pre><span aria-hidden="true">↓</span><small>修改后</small><pre>{change.replacement}</pre></div>)}</div>;
+}
 
 function Activity({ activity, taskId, onApproval, deciding }: { activity: AgentActivity; taskId?: string; onApproval?: (choice: "approved" | "rejected") => void | Promise<void>; deciding: boolean }) {
   if (activity.type === "note") return <div className="agent-activity-note">{renderAgentMarkdown(activity.text)}</div>;
@@ -15,7 +47,8 @@ function Activity({ activity, taskId, onApproval, deciding }: { activity: AgentA
   const detail = activity.state === "approval" ? "等待你的确认" : activity.state === "failed" ? activity.error ?? "未完成" : activity.state === "running" ? "处理中" : "已完成";
   const row = <ToolActivityRow name={toolLabel(activity.name)} detail={`${detail}${activity.durationMs !== undefined ? ` · ${activity.durationMs}ms` : ""}`} icon={icon} className={activity.state} />;
   if (activity.state !== "approval" || !onApproval) return row;
-  return <ToolActivityDisclosure state={activity.state} initiallyOpen summary={row}><div className="agent-tool-body-content"><div className="agent-approval-actions"><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并执行</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div></div></ToolActivityDisclosure>;
+  const hasTextPreview = activity.name === "apply_text_change" ? Boolean(textChange(asRecord(activity.input))) : activity.name === "apply_text_changes" && Boolean(asRecord(activity.input)?.changes);
+  return <ToolActivityDisclosure state={activity.state} initiallyOpen summary={row}><div className="agent-tool-body-content">{hasTextPreview && <TextMutationPreview activity={activity} />}<div className="agent-approval-actions"><button className="primary-small" onClick={() => void onApproval("approved")} disabled={deciding}>批准并执行</button><button onClick={() => void onApproval("rejected")} disabled={deciding}>拒绝</button></div></div></ToolActivityDisclosure>;
 }
 
 function Turn({ turn, taskId, onApproval, deciding }: { turn: AgentThreadTurn; taskId?: string; onApproval?: (choice: "approved" | "rejected") => void | Promise<void>; deciding: boolean }) {

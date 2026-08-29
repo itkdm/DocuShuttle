@@ -271,6 +271,14 @@ button:focus-visible, textarea:focus-visible, label:has(input:focus-visible) { o
 .agent-tool-summary::after { content: "›"; flex: 0 0 auto; margin-left: 8px; color: var(--muted); transform: rotate(0deg); transition: transform 160ms ease; }
 .agent-tool-disclosure[open] > .agent-tool-summary::after { transform: rotate(90deg); }
 .agent-tool-body { width: 100%; min-width: 0; padding: 0 0 7px 28px; }
+.agent-tool-body-content { min-width: 0; max-width: 100%; }
+.agent-text-mutation-preview { max-height: 270px; min-width: 0; max-width: 100%; overflow-y: auto; padding: 2px 0 6px; }
+.agent-text-mutation-preview > p { margin: 0 0 6px; color: var(--muted); font-size: 10px; }
+.agent-text-change { display: grid; gap: 4px; min-width: 0; padding: 7px 0; }
+.agent-text-change + .agent-text-change { border-top: 1px solid #ecebe4; }
+.agent-text-change small { color: var(--muted); font-size: 10px; }
+.agent-text-change span { color: var(--muted); font-size: 12px; line-height: 1; text-align: center; }
+.agent-text-change pre { max-height: 80px; min-width: 0; max-width: 100%; overflow-y: auto; margin: 0; padding: 6px 8px; border: 1px solid #e6e5dc; border-radius: 5px; background: #fafaf6; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .agent-approval-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 8px; }
 .agent-approval-actions button { min-width: 0; height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; background: #f8f8f3; color: var(--ink); font-size: 11px; cursor: pointer; }
 .agent-approval-actions .primary-small { background: var(--ink); border-color: var(--ink); color: white; }

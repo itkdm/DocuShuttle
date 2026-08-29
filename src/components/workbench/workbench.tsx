@@ -26,7 +26,7 @@ import { initialConversationLoading, shouldHoldConversationRestore, startProgres
 import { createApprovalSubmissionGate } from "./approval-submission-gate";
 import { shouldPreserveSubmittedUserReply } from "./user-input-recovery";
 import type { AgentImageAttachment } from "@/modules/agent/application/message-parts";
-import { ManualEditRequestError, saveBrowserManualDocumentEdit } from "@/modules/documents";
+import { ManualEditRequestError, saveBrowserManualDocumentEdit } from "@/modules/documents/browser/manual-edit";
 import type { DocumentEditorPort, DocumentEditorState, DocumentSurfacePort } from "@/modules/documents";
 
 const initialAssets: UploadAsset[] = [];

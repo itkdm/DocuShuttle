@@ -5,4 +5,3 @@ export { inspectManualEditCapabilities } from "./application/manual-edit-capabil
 export type { DocumentPageCapture, DocumentSurfacePort, DocumentSurfaceState, DocumentVisibleCapture } from "./application/document-surface-port";
 export * from "./domain/types";
 export { OoxmlPreservationKernel } from "./infrastructure/ooxml/ooxml-preservation-kernel";
-export { ManualEditRequestError, saveBrowserManualDocumentEdit } from "./browser/manual-edit";

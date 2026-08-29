@@ -7,8 +7,9 @@ import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { SupabaseAgentRunStore } from "@/modules/agent/infrastructure/supabase/runtime-persistence";
 import { isDurableAgentEvent, type DurableAgentEvent } from "@/modules/agent/application/events";
 import { agentErrorResponse } from "../http";
+import { agentImageAttachmentSchema } from "@/modules/agent/application/message-parts";
 
-const schema = z.object({ taskId: z.uuid(), goal: z.string().trim().min(1).max(8_000), clientMessageId: z.uuid().optional() });
+const schema = z.object({ taskId: z.uuid(), goal: z.string().max(8_000).default(""), attachments: z.array(agentImageAttachmentSchema).max(4).default([]), clientMessageId: z.uuid().optional() }).refine((input) => input.goal.trim().length > 0 || input.attachments.length > 0, "MESSAGE_REQUIRED");
 
 export async function GET(request: Request) {
   const started = performance.now();
@@ -71,6 +72,7 @@ export async function POST(request: Request) {
       now: new Date().toISOString(),
       goal: input.goal,
       clientMessageId: input.clientMessageId,
+      attachments: input.attachments,
     });
     logger.info("agent.run_create.completed", { taskId: input.taskId, durationMs: performance.now() - started, userId });
     return NextResponse.json({ run }, { status: 201 });

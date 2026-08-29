@@ -1,8 +1,9 @@
 import { useCallback, useReducer } from "react";
 import type { BrowserAgentLoopResult } from "@/modules/agent/browser-runtime";
 import type { AgentEvent } from "@/modules/agent/application/events";
+import type { AgentImageAttachment } from "@/modules/agent/application/message-parts";
 
-export type ConversationMessage = { id?: string; role: "user" | "agent"; text: string; runId?: string; createdAt?: string; status?: "pending" | "sent" | "failed" };
+export type ConversationMessage = { id?: string; role: "user" | "agent"; text: string; images?: readonly AgentImageAttachment[]; runId?: string; createdAt?: string; status?: "pending" | "sent" | "failed" };
 type Event = AgentEvent;
 type Updater<T> = T | ((value: T) => T);
 type State = { messages: ConversationMessage[]; loopResult?: BrowserAgentLoopResult; activeEvents: Event[]; historicalEvents: Event[] };

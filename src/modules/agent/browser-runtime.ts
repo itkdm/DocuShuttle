@@ -4,6 +4,7 @@ import type { AgentRun } from "./domain/model";
 import type { AgentPermissionMode } from "./application/loop";
 import type { PublicAgentLoopResult } from "./application/public-runtime";
 import { isAgentEvent, isDurableAgentEvent, type AgentEvent, type DurableAgentEvent } from "./application/events";
+import type { AgentImageAttachment, AgentMessagePart } from "./application/message-parts";
 import { SseParser } from "./browser/sse-parser";
 import { createInFlightRequestCache } from "@/lib/in-flight-request";
 
@@ -147,10 +148,10 @@ const consumeAgentFetch = async (
   }
 };
 
-export const createBrowserAgentRun = async (taskId: string, goal: string, clientMessageId?: string) => {
+export const createBrowserAgentRun = async (taskId: string, goal: string, clientMessageId?: string, attachments: readonly AgentImageAttachment[] = []) => {
   const started = performance.now();
   try {
-    const run = (await json<AgentResponse>("/api/agent/runs", post({ taskId, goal, ...(clientMessageId ? { clientMessageId } : {}) }))).run;
+    const run = (await json<AgentResponse>("/api/agent/runs", post({ taskId, goal, attachments, ...(clientMessageId ? { clientMessageId } : {}) }))).run;
     logBrowserEvent({ event: "client.agent.run_create.completed", durationMs: performance.now() - started });
     return run;
   } catch (error) {
@@ -182,7 +183,7 @@ export const loadBrowserAgentTaskTimeline = async (taskId: string) =>
 export type BrowserConversationMessage = {
   id: string;
   role: "user" | "assistant" | "tool";
-  parts: ReadonlyArray<{ type?: string; text?: string; [key: string]: unknown }>;
+  parts: ReadonlyArray<AgentMessagePart | { type?: string; text?: string; assetId?: unknown; mimeType?: unknown }>;
   run_id?: string | null;
   created_at: string;
   message_key: string;
@@ -223,9 +224,10 @@ export async function runBrowserAgentLoopStream(
   signal?: AbortSignal,
   clientMessageId?: string,
   interactionId?: string,
+  attachments: readonly AgentImageAttachment[] = [],
 ) {
   return consumeAgentFetch(
-    fetch(`/api/agent/runs/${runId}/loop`, { ...post({ message, permissionMode, ...(clientMessageId ? { clientMessageId } : {}), ...(interactionId ? { interactionId } : {}) }), method: "PUT", signal }),
+    fetch(`/api/agent/runs/${runId}/loop`, { ...post({ message, permissionMode, attachments, ...(clientMessageId ? { clientMessageId } : {}), ...(interactionId ? { interactionId } : {}) }), method: "PUT", signal }),
     runId,
     onEvent,
   );

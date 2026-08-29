@@ -14,7 +14,7 @@ export type AgentRuntimePendingInteraction =
 
 export type AgentInteractionResolution =
   | { readonly interactionId: string; readonly type: "approval"; readonly callId: string; readonly toolName: string; readonly input: unknown; readonly decision: "approved" | "rejected" }
-  | { readonly interactionId: string; readonly type: "user_input"; readonly messageId: string; readonly text: string };
+  | { readonly interactionId: string; readonly type: "user_input"; readonly messageId: string; readonly text: string; readonly images?: readonly AgentImageAttachment[] };
 
 export type AgentRunFailure = {
   readonly code: string;
@@ -38,3 +38,4 @@ export interface AgentRun {
   readonly updatedAt: string;
   readonly completedAt?: string;
 }
+import type { AgentImageAttachment } from "../application/message-parts";

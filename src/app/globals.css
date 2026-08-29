@@ -170,6 +170,12 @@ button:focus-visible, textarea:focus-visible, label:has(input:focus-visible) { o
 .thread-message.user { display: flex; justify-content: flex-end; }
 .user-bubble { max-width: min(88%, 480px); padding: 9px 13px; border-radius: 14px 14px 4px 14px; background: #efede4; color: var(--ink); }
 .user-bubble p { margin: 0; font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.user-bubble .agent-image-preview { width: 180px; height: 140px; margin-top: 6px; }
+.agent-composer-attachments { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 8px; }
+.agent-composer-attachment { position: relative; flex: 0 0 58px; width: 58px; height: 58px; }
+.agent-composer-attachment img { width: 58px; height: 58px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
+.agent-composer-attachment button { position: absolute; top: -5px; right: -5px; width: 18px; height: 18px; border: 0; border-radius: 50%; background: var(--ink); color: white; display: grid; place-items: center; padding: 0; cursor: pointer; }
+.agent-composer-attachment small { position: absolute; inset: auto 0 0; background: rgba(150, 30, 20, .85); color: white; font-size: 8px; overflow: hidden; white-space: nowrap; }
 .thread-message.user[data-status="pending"] .user-bubble { opacity: .72; }
 .thread-message.user[data-status="failed"] .user-bubble { border: 1px solid #e4b9b2; color: var(--red); }
 .assistant-turn { min-width: 0; padding: 0 2px; color: var(--ink); }

@@ -25,13 +25,16 @@ import { SupabaseSourceDocumentContext } from "@/modules/agent/infrastructure/su
 import { SupabaseAgentConversationContext } from "@/modules/agent/infrastructure/supabase/conversation-context";
 import { OoxmlPreservationKernel } from "@/modules/documents";
 import { logger, withLogContext } from "@/infrastructure/observability";
+import { agentImageAttachmentSchema, type AgentImageAttachment } from "@/modules/agent/application/message-parts";
+import { SupabaseImageAssetStore } from "@/modules/uploads/supabase-image-asset-store";
 
 const schema = z.object({
-  message: z.string().trim().min(1).max(8_000),
+  message: z.string().max(8_000),
+  attachments: z.array(agentImageAttachmentSchema).max(4).default([]),
   permissionMode: z.enum(["default", "full"]).optional().default("default"),
   clientMessageId: z.uuid().optional(),
   interactionId: z.uuid().optional(),
-});
+}).refine((input) => input.message.trim().length > 0 || input.attachments.length > 0, "MESSAGE_REQUIRED");
 
 const eventPayload = (event: string, data: unknown) => {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -60,6 +63,18 @@ async function createRunner(runId: string) {
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
   return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client, bootstrap.context));
+}
+
+async function validateUploadedImages(runId: string, attachments: readonly AgentImageAttachment[]) {
+  if (!attachments.length) return;
+  const { client, userId } = await requireSupabaseIdentity();
+  const run = await client.from("agent_runs").select("task_id").eq("id", runId).single();
+  if (run.error || !run.data) throw new Error("RUN_NOT_FOUND");
+  const assets = new SupabaseImageAssetStore(client);
+  for (const image of attachments) {
+    const asset = await assets.loadImage({ assetId: image.assetId, ownerUserId: userId, taskId: run.data.task_id as string });
+    if (!asset || asset.kind !== "uploaded_image" || asset.mimeType !== image.mimeType) throw new Error("IMAGE_ASSET_INVALID");
+  }
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ runId: string }> }) {
@@ -104,7 +119,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ run
     const started = performance.now();
   try {
     const input = schema.parse(await request.json());
-    const result = await (await createRunner(runId)).runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, undefined, undefined, input.clientMessageId, input.interactionId);
+    await validateUploadedImages(runId, input.attachments);
+    const result = await (await createRunner(runId)).runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, undefined, undefined, input.clientMessageId, input.interactionId, input.attachments);
     const response = NextResponse.json(projectAgentLoopResultForClient(result));
     logger.info("http.request.completed", { method: "POST", route: "/api/agent/runs/:runId/loop", status: response.status, durationMs: performance.now() - started, runId });
     return response;
@@ -126,6 +142,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
     const started = performance.now();
   try {
     const input = schema.parse(await request.json());
+    await validateUploadedImages(runId, input.attachments);
     const runner = await createRunner(runId);
     const encoder = new TextEncoder();
     let eventCount = 0;
@@ -147,7 +164,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ runI
           try { controller.enqueue(payload); } catch { transportOpen = false; }
         };
         try {
-          const result = await runner.runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, request.signal, (event) => send("event", event), input.clientMessageId, input.interactionId);
+          const result = await runner.runWithPermission(runId, input.message, input.permissionMode as AgentPermissionMode, request.signal, (event) => send("event", event), input.clientMessageId, input.interactionId, input.attachments);
           send("result", projectAgentLoopResultForClient(result));
         } catch (error) {
           if (error instanceof Error && error.message === "TRANSPORT_INTERRUPTED") {

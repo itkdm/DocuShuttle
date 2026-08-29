@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@/modules/agent/application/events";
 import type { BrowserConversationMessage } from "@/modules/agent/browser-runtime";
+import type { AgentImageAttachment } from "@/modules/agent/application/message-parts";
 import { reduceAgentEvents, type AgentActivity } from "./agent-turn-reducer";
 export type { AgentActivity } from "./agent-turn-reducer";
 
@@ -12,12 +13,13 @@ export type AgentThreadAssistant = {
 };
 export type AgentThreadTurn = {
   id: string; runId?: string; anchor: string;
-  user?: { id: string; content: string; createdAt?: string; deliveryStatus: "pending" | "sent" | "failed" };
+  user?: { id: string; content: string; images?: readonly AgentImageAttachment[]; createdAt?: string; deliveryStatus: "pending" | "sent" | "failed" };
   assistant: AgentThreadAssistant;
 };
 export type AgentThreadProjection = { turns: readonly AgentThreadTurn[] };
 
-const textPart = (message: BrowserConversationMessage) => message.parts.find((part) => part.type === "text")?.text;
+const textPart = (message: BrowserConversationMessage) => { const part = message.parts.find((candidate) => candidate.type === "text"); return part && "text" in part && typeof part.text === "string" ? part.text : undefined; };
+const imageParts = (message: BrowserConversationMessage): AgentImageAttachment[] => message.parts.filter((part): part is { type: "image"; assetId: string; mimeType: AgentImageAttachment["mimeType"] } => part.type === "image" && typeof part.assetId === "string" && ["image/png", "image/jpeg", "image/webp"].includes(String(part.mimeType))).map(({ assetId, mimeType }) => ({ assetId, mimeType }));
 const parsedTime = (value?: string) => value ? Date.parse(value) : Number.NaN;
 const validTime = (value?: string) => Number.isFinite(parsedTime(value)) ? value! : "";
 const eventTime = (event: AgentEvent) => parsedTime(event.timestamp);
@@ -77,7 +79,7 @@ export function projectAgentThread(input: { messages: readonly BrowserConversati
     const runId = message.run_id ?? undefined;
     if (!runId) {
       turns.push(message.role === "user"
-        ? { id: message.id, user: { id: message.id, content: textPart(message) ?? "", createdAt: message.created_at, deliveryStatus: message.delivery_status ?? "sent" }, assistant: emptyAssistant(message.delivery_status === "pending"), anchor: validTime(message.created_at) }
+        ? { id: message.id, user: { id: message.id, content: textPart(message) ?? "", images: imageParts(message), createdAt: message.created_at, deliveryStatus: message.delivery_status ?? "sent" }, assistant: emptyAssistant(message.delivery_status === "pending"), anchor: validTime(message.created_at) }
         : { id: message.id, assistant: assistantFor(`message:${message.id}`, [], message), anchor: validTime(message.created_at) });
       return;
     }
@@ -99,20 +101,20 @@ export function projectAgentThread(input: { messages: readonly BrowserConversati
       const phaseEvents = eventsForPhase(events, message.created_at, nextUser?.created_at);
       const assistantMessage = messages.find((candidate) => candidate.role === "assistant" && parsedTime(candidate.created_at) >= parsedTime(message.created_at) && (!nextUser || parsedTime(candidate.created_at) < parsedTime(nextUser.created_at)));
       const assistant = assistantMessage ? assistantFor(runId, phaseEvents, assistantMessage) : phaseEvents.length ? assistantFor(runId, phaseEvents) : emptyAssistant(message.delivery_status === "pending");
-      return { id: message.id, runId, user: { id: message.id, content: textPart(message) ?? "", createdAt: message.created_at, deliveryStatus: message.delivery_status ?? "sent" }, assistant, anchor: validTime(message.created_at) } satisfies AgentThreadTurn;
+      return { id: message.id, runId, user: { id: message.id, content: textPart(message) ?? "", images: imageParts(message), createdAt: message.created_at, deliveryStatus: message.delivery_status ?? "sent" }, assistant, anchor: validTime(message.created_at) } satisfies AgentThreadTurn;
     });
     const assignedAssistants = new Set(phaseTurns.map((turn) => turn.assistant.messageId).filter(Boolean));
     const orphanAssistants = messages.filter((message) => message.role === "assistant" && !assignedAssistants.has(message.id)).map((message) => ({ id: message.id, runId, assistant: assistantFor(runId, [], message), anchor: validTime(message.created_at) } satisfies AgentThreadTurn));
     turns.push(...phaseTurns, ...orphanAssistants);
     if (!users.length && events.length) {
       const started = events.find((event) => event.type === "turn.started");
-      turns.push({ id: `${runId}:user`, runId, user: { id: `${runId}:user`, content: started?.text ?? "", createdAt: started?.timestamp, deliveryStatus: "sent" }, assistant: assistantFor(runId, events), anchor: started?.timestamp ?? earliestEventTime(events) });
+      turns.push({ id: `${runId}:user`, runId, user: { id: `${runId}:user`, content: started?.text ?? "", images: [], createdAt: started?.timestamp, deliveryStatus: "sent" }, assistant: assistantFor(runId, events), anchor: started?.timestamp ?? earliestEventTime(events) });
     }
   }
   for (const [runId, events] of eventsByRun) {
     if (messagesByRun.has(runId)) continue;
     const started = events.find((event) => event.type === "turn.started");
-    turns.push({ id: `${runId}:user`, runId, user: { id: `${runId}:user`, content: started?.text ?? "", createdAt: started?.timestamp, deliveryStatus: "sent" }, assistant: assistantFor(runId, events), anchor: started?.timestamp ?? earliestEventTime(events) });
+    turns.push({ id: `${runId}:user`, runId, user: { id: `${runId}:user`, content: started?.text ?? "", images: [], createdAt: started?.timestamp, deliveryStatus: "sent" }, assistant: assistantFor(runId, events), anchor: started?.timestamp ?? earliestEventTime(events) });
   }
   return { turns: turns.sort(compareAnchors) };
 }

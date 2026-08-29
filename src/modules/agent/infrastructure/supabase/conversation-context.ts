@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { AgentConversationContext, AgentConversationContextPort } from "../../application/ports";
 import type { AgentLoopMessage } from "../../application/loop";
+import { describeAgentImages, imagePartsFromMessageParts, textFromAgentMessageParts } from "../../application/message-parts";
 
 export const CONVERSATION_CONTEXT_MESSAGE_LIMIT = 200;
 
@@ -13,19 +14,9 @@ type MessageRow = {
   created_at: string;
 };
 
-const textFromParts = (parts: unknown): string => {
-  if (!Array.isArray(parts)) return "";
-  return parts
-    .filter((part): part is { type?: unknown; text?: unknown } => Boolean(part) && typeof part === "object")
-    .filter((part) => part.type === "text" && typeof part.text === "string")
-    .map((part) => part.text as string)
-    .join("\n")
-    .trim();
-};
-
 const toSemanticMessage = (row: MessageRow): AgentLoopMessage | undefined => {
   if (row.role !== "user" && row.role !== "assistant") return undefined;
-  const content = textFromParts(row.parts);
+  const content = `${textFromAgentMessageParts(row.parts).trim()}${describeAgentImages(imagePartsFromMessageParts(row.parts))}`;
   return content ? { role: row.role, content } : undefined;
 };
 

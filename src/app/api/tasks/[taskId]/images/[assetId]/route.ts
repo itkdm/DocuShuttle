@@ -9,7 +9,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tas
   try {
     const { taskId, assetId } = await params;
     const { client, userId } = await requireSupabaseIdentity();
-    const asset = await new SupabaseGeneratedAssetStore(client).load({ assetId, taskId, ownerUserId: userId });
+    const generatedStore = new SupabaseGeneratedAssetStore(client);
+    const generated = await generatedStore.load({ assetId, taskId, ownerUserId: userId });
+    const asset = generated ? { ...generated, kind: "generated_image" as const } : await generatedStore.loadImage({ assetId, taskId, ownerUserId: userId });
     if (!asset || !allowedMimeTypes.has(asset.mimeType)) return new Response(null, { status: 404 });
     const bytes = await new SupabaseStorageAdapter(client).get(asset.objectKey);
     return new Response(bytes as BodyInit, { status: 200, headers: { "Content-Type": asset.mimeType, "Cache-Control": "private" } });
@@ -19,4 +21,3 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tas
     return Response.json({ code: "IMAGE_PREVIEW_FAILED" }, { status: 404 });
   }
 }
-

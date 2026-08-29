@@ -1,17 +1,20 @@
-import { Check, ChevronDown, PanelRightClose, Send, Shield, Sparkles, StopCircle, Unlock } from "lucide-react";
+import { Check, ChevronDown, PanelRightClose, Send, Shield, Sparkles, StopCircle, Unlock, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import type { AgentRuntimeView } from "./runtime-view-state";
 import type { AgentEvent } from "@/modules/agent/application/events";
 import type { AgentRun } from "@/modules/agent";
 import type { AgentPermissionMode } from "@/modules/agent/application/loop";
 import type { ConversationMessage } from "./conversation-store";
+import type { AgentImageAttachment } from "@/modules/agent/application/message-parts";
+import { uploadBrowserImage } from "@/modules/uploads/browser-image-upload";
 import { AgentThread } from "./agent-thread";
 import { projectAgentThread } from "./agent-thread-projection";
 import { isAtBottom, scrollToBottom } from "./chat-scroll";
 
 interface AgentPanelProps {
   runtimeView: AgentRuntimeView; onCollapse: () => void;
-  onRun: (prompt: string) => void | Promise<void>; onCancel: () => void | Promise<void>;
+  onRun: (prompt: string, attachments?: readonly AgentImageAttachment[]) => void | Promise<void>; onCancel: () => void | Promise<void>;
   workspaceReady: boolean;
   taskId?: string;
   run?: AgentRun;
@@ -63,6 +66,7 @@ function CustomSelect({ value, options, onChange, disabled, icon }: { value: str
 
 export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspaceReady, taskId, run, messages = [], activeEvents = [], historicalEvents = [], onLoopApproval, permissionMode, onPermissionModeChange, onLoadEarlier, hasEarlierMessages = false, loadingEarlierMessages = false, conversationLoading = false, approvalSubmitting = false }: AgentPanelProps) {
   const [prompt, setPrompt] = useState("");
+  const [attachments, setAttachments] = useState<Array<{ file: File; preview: string; error?: string }>>([]);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -71,7 +75,7 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
   const currentTimeline = activeEvents;
   const timelineEvents = [...historicalEvents, ...currentTimeline];
   const turns = projectAgentThread({
-    messages: messages.map((message, index) => ({ id: message.id ?? `local:${index}`, role: message.role === "agent" ? "assistant" as const : "user" as const, parts: [{ type: "text", text: message.text }], run_id: message.runId ?? null, created_at: message.createdAt ?? "", message_key: message.id ?? `local:${index}`, delivery_status: message.status })),
+    messages: messages.map((message, index) => ({ id: message.id ?? `local:${index}`, role: message.role === "agent" ? "assistant" as const : "user" as const, parts: [{ type: "text" as const, text: message.text }, ...(message.images ?? []).map((image) => ({ type: "image" as const, ...image }))], run_id: message.runId ?? null, created_at: message.createdAt ?? "", message_key: message.id ?? `local:${index}`, delivery_status: message.status })),
     historicalEvents,
     activeEvents: currentTimeline,
     activeRunId: run?.id,
@@ -115,7 +119,9 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
     setShowScrollToBottom(!atBottom);
   };
   const handleLoopApproval = (choice: "approved" | "rejected", callId?: string) => onLoopApproval?.(choice, callId);
-  const submit = () => { if (inputBlocked || !workspaceReady) return; const value = prompt.trim(); if (!value) return; stickToBottomRef.current = true; setShowScrollToBottom(false); onRun(value); setPrompt(""); };
+  const addPastedImages = (event: React.ClipboardEvent<HTMLTextAreaElement>) => { const files = Array.from(event.clipboardData.items).filter((item) => item.kind === "file" && item.type.startsWith("image/")).map((item) => item.getAsFile()).filter((file): file is File => Boolean(file)); if (!files.length) return; event.preventDefault(); setAttachments((current) => [...current, ...files.map((file) => ({ file, preview: URL.createObjectURL(file) }))].slice(0, 4)); };
+  const removeAttachment = (index: number) => setAttachments((current) => { const removed = current[index]; if (removed) URL.revokeObjectURL(removed.preview); return current.filter((_, itemIndex) => itemIndex !== index); });
+  const submit = async () => { if (inputBlocked || !workspaceReady || !taskId) return; const value = prompt.trim(); if (!value && !attachments.length) return; if (attachments.reduce((total, item) => total + item.file.size, 0) > 40 * 1024 * 1024) { setAttachments((current) => current.map((item) => ({ ...item, error: "图片总大小不能超过 40MB" }))); return; } stickToBottomRef.current = true; setShowScrollToBottom(false); try { const uploaded = await Promise.all(attachments.map((item) => uploadBrowserImage(taskId, item.file))); await onRun(value, uploaded); attachments.forEach((item) => URL.revokeObjectURL(item.preview)); setAttachments([]); setPrompt(""); } catch (error) { setAttachments((current) => current.map((item) => ({ ...item, error: error instanceof Error ? error.message : "图片上传失败" }))); } };
   return (
     <aside className="agent-panel" aria-label="纸上鸭 Agent">
       <div className="agent-heading">
@@ -129,7 +135,8 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
         {showScrollToBottom && <button type="button" className="scroll-to-bottom" onClick={() => { const element = contentRef.current; if (!element) return; stickToBottomRef.current = true; setShowScrollToBottom(false); scrollToBottom(element, "smooth"); }} aria-label="回到底部">↓ 回到底部</button>}
       </div>
       <div className="agent-composer">
-        <textarea ref={promptRef} id="agent-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter" && !event.shiftKey && !inputBlocked && workspaceReady) { event.preventDefault(); submit(); } }} placeholder={awaitingUserQuestion ? "请回答纸上鸭的问题…" : !workspaceReady ? "请先打开一份 DOCX" : inputBlocked ? "Agent 运行中，可先输入下一条提示词…" : "例如：把实验结论改得更专业，只改一个单元格…"} rows={2} disabled={!workspaceReady} />
+        {attachments.length > 0 && <div className="agent-composer-attachments">{attachments.map((item, index) => <div className="agent-composer-attachment" key={item.preview}><Image src={item.preview} alt="待发送图片" width={58} height={58} unoptimized /><button type="button" onClick={() => removeAttachment(index)} aria-label="移除图片"><X size={12} /></button>{item.error && <small>{item.error}</small>}</div>)}</div>}
+        <textarea ref={promptRef} id="agent-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onPaste={addPastedImages} onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter" && !event.shiftKey && !inputBlocked && workspaceReady) { event.preventDefault(); void submit(); } }} placeholder={awaitingUserQuestion ? "请回答纸上鸭的问题…" : !workspaceReady ? "请先打开一份 DOCX" : inputBlocked ? "Agent 运行中，可先输入下一条提示词…" : "例如：把实验结论改得更专业，只改一个单元格…"} rows={2} disabled={!workspaceReady} />
         <div className="composer-toolbar">
           <CustomSelect
             value={permissionMode}
@@ -143,7 +150,7 @@ export function AgentPanel({ runtimeView, onCollapse, onRun, onCancel, workspace
           />
           <div className="composer-actions">
             <span>{inputBlocked ? "当前任务完成后即可发送" : "Enter 发送 · Shift + Enter 换行"}</span>
-            {runtimeView.canCancel ? <button className="composer-stop" onClick={() => void onCancel()} aria-label="停止当前任务"><StopCircle size={14} /> 停止</button> : <button className="composer-send" onClick={submit} disabled={!prompt.trim() || inputBlocked || !workspaceReady} aria-label="发送要求"><Send size={14} /></button>}
+            {runtimeView.canCancel ? <button className="composer-stop" onClick={() => void onCancel()} aria-label="停止当前任务"><StopCircle size={14} /> 停止</button> : <button className="composer-send" onClick={() => void submit()} disabled={(!prompt.trim() && !attachments.length) || inputBlocked || !workspaceReady} aria-label="发送要求"><Send size={14} /></button>}
           </div>
         </div>
       </div>

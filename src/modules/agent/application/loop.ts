@@ -3,6 +3,8 @@ import { compactAgentMessages, DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY, type Age
 import { createAgentEvent, shouldPersistAgentEvent, type AgentEvent, type AgentEventPayload } from "./events";
 import type { AgentConversationContextPort } from "./ports";
 import type { AgentInteractionResolution, AgentRuntimePendingInteraction } from "../domain/model";
+import type { AgentImageAttachment } from "./message-parts";
+import { describeAgentImages } from "./message-parts";
 
 export type AgentLoopMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -80,7 +82,7 @@ export type AgentLoopStore = {
   appendEvents?(runId: string, events: readonly AgentEvent[]): Promise<void>;
   /** Persist only user-visible conversation semantics, never tool transcripts. */
   appendAssistantMessage?(runId: string, message: { id: string; text: string }): Promise<void>;
-  appendUserMessage?(runId: string, message: { id: string; text: string }): Promise<void>;
+  appendUserMessage?(runId: string, message: { id: string; text: string; images?: readonly AgentImageAttachment[] }): Promise<void>;
   /** Durable result for a side effect, keyed by runId:callId. */
   loadEffectReceipt?(runId: string, idempotencyKey: string): Promise<AgentEffectReceipt | undefined>;
   saveEffectReceipt?(runId: string, receipt: AgentEffectReceipt): Promise<AgentEffectReceipt>;
@@ -89,7 +91,7 @@ export type AgentLoopStore = {
   claimRecovery?(runId: string): Promise<AgentLoopCheckpoint | undefined>;
   releaseLeaseForRecovery?(runId: string): Promise<void>;
   resolvePendingApproval?(runId: string, interactionId: string, callId: string, decision: "approved" | "rejected"): Promise<AgentLoopCheckpoint | undefined>;
-  resolvePendingUserInput?(runId: string, interactionId: string, message: { id: string; text: string }): Promise<AgentLoopCheckpoint | undefined>;
+  resolvePendingUserInput?(runId: string, interactionId: string, message: { id: string; text: string; images?: readonly AgentImageAttachment[] }): Promise<AgentLoopCheckpoint | undefined>;
   markCancelled?(runId: string): Promise<void>;
 };
 
@@ -336,7 +338,7 @@ export class AgentLoopRunner {
     return this.runWithPermission(runId, "", current.permissionMode ?? "default", signal, onEvent);
   }
 
-  async runWithPermission(runId: string, userText: string, permissionMode: AgentPermissionMode, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void, clientMessageId?: string, interactionId?: string): Promise<AgentLoopResult> {
+  async runWithPermission(runId: string, userText: string, permissionMode: AgentPermissionMode, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void, clientMessageId?: string, interactionId?: string, userAttachments: readonly AgentImageAttachment[] = []): Promise<AgentLoopResult> {
     const current = await this.store.load(runId);
     const isFreshRun = !current;
     let checkpoint: AgentLoopCheckpoint = current ?? {
@@ -355,6 +357,7 @@ export class AgentLoopRunner {
       }
     }
     let turnText = userText;
+    const modelAttachmentDescription = describeAgentImages(userAttachments);
     const existingUserResolution = checkpoint.pendingResolution?.type === "user_input" ? checkpoint.pendingResolution : undefined;
     if (existingUserResolution) {
       if (!interactionId || interactionId !== existingUserResolution.interactionId) throw new Error("USER_INPUT_INTERACTION_MISMATCH");
@@ -381,10 +384,10 @@ export class AgentLoopRunner {
     if (!turnText.trim() && checkpoint.pendingInteraction) return { checkpoint, events: [] };
     if (turnText.trim() && checkpoint.pendingInteraction?.type === "user_input") {
       if (!interactionId || interactionId !== checkpoint.pendingInteraction.interactionId) throw new Error("USER_INPUT_INTERACTION_MISMATCH");
-      const message = { id: clientMessageId ?? crypto.randomUUID(), text: turnText };
+      const message = { id: clientMessageId ?? crypto.randomUUID(), text: turnText, images: userAttachments };
       const claimed = this.store.resolvePendingUserInput
         ? await this.store.resolvePendingUserInput(runId, interactionId, message)
-        : { ...checkpoint, pendingResolution: { interactionId, type: "user_input" as const, messageId: message.id, text: message.text }, status: "running" as const };
+        : { ...checkpoint, pendingResolution: { interactionId, type: "user_input" as const, messageId: message.id, text: message.text, ...(message.images?.length ? { images: message.images } : {}) }, status: "running" as const };
       if (!claimed) throw new Error("USER_INPUT_ALREADY_CLAIMED");
       checkpoint = claimed;
       checkpoint.pendingInteraction = undefined;
@@ -395,7 +398,7 @@ export class AgentLoopRunner {
       // A request can die after the resolution RPC but before the conversation
       // row is materialized. Replaying this idempotent write repairs that
       // durable projection before the inbox item is consumed.
-      await this.store.appendUserMessage?.(runId, { id: existingUserResolution.messageId, text: existingUserResolution.text });
+      await this.store.appendUserMessage?.(runId, { id: existingUserResolution.messageId, text: existingUserResolution.text, images: existingUserResolution.images });
     }
     if (isFreshRun) {
       checkpoint.permissionMode = permissionMode;
@@ -416,7 +419,7 @@ export class AgentLoopRunner {
     if (turnText.trim()) {
       // An answer to ask_user continues the same checkpoint and therefore
       // carries the question's preceding context into the next model call.
-      checkpoint.messages.push({ role: "user", content: turnText });
+      checkpoint.messages.push({ role: "user", content: `${turnText}${modelAttachmentDescription}` });
       checkpoint.pendingResolution = undefined;
     }
     checkpoint.status = "running";

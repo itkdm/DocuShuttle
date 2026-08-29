@@ -4,6 +4,7 @@ import type { AgentRunStore } from "../../application/ports";
 import type { AgentLoopCheckpoint } from "../../application/loop";
 import type { AgentRun } from "../../domain/model";
 import { logger, measure } from "@/infrastructure/observability";
+import type { AgentImageAttachment } from "../../application/message-parts";
 
 const fail = (context: string, error: { message: string; code?: string } | null): void => {
   if (error) throw new Error(`${context}: ${error.code ?? "DATABASE_ERROR"}: ${error.message}`);
@@ -15,7 +16,7 @@ type RunState = Partial<AgentRun> & { conversationId?: string; loopCheckpoint?: 
 export class SupabaseAgentRunStore implements AgentRunStore {
   constructor(private readonly client: SupabaseClient) {}
 
-  async createForTask(input: { taskId: string; ownerUserId: string; now: string; goal?: string; clientMessageId?: string }): Promise<AgentRun> {
+  async createForTask(input: { taskId: string; ownerUserId: string; now: string; goal?: string; clientMessageId?: string; attachments?: readonly AgentImageAttachment[] }): Promise<AgentRun> {
     const runId = crypto.randomUUID();
     const state: RunState = { id: runId, taskId: input.taskId, status: "queued", lockVersion: 0, updatedAt: input.now };
     const created = await measure("db.rpc", { rpc: "create_agent_turn_from_task", operation: "create", table: "agent_runs", taskId: input.taskId }, async () => this.client.rpc("create_agent_turn_from_task", {
@@ -25,6 +26,7 @@ export class SupabaseAgentRunStore implements AgentRunStore {
       p_goal: input.goal ?? null,
       p_user_message_id: input.clientMessageId ?? crypto.randomUUID(),
       p_user_message: input.goal ?? "",
+      p_user_message_parts: [{ type: "text", text: input.goal ?? "" }, ...(input.attachments ?? []).map((image) => ({ type: "image", ...image }))].filter((part) => part.type !== "text" || ("text" in part && part.text !== "")),
     }));
     if (created.error?.code === "23505" && created.error.message.includes("agent_runs_one_active_per_task_idx")) throw new Error("CONCURRENT_TURN");
     if (created.error?.message.includes("TURN_NOT_ALLOWED")) throw new Error("CONCURRENT_TURN");

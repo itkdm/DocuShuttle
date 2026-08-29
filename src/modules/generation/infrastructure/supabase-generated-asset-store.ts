@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { GeneratedAssetStorePort } from "../application/generate-image-candidates";
-import type { GeneratedAgentAssetStore, ImageGenerationJob, ImageGenerationJobStore } from "@/modules/agent/application/image-generation";
+import type { AgentImageAssetReader, GeneratedAgentAssetStore, ImageGenerationJob, ImageGenerationJobStore } from "@/modules/agent/application/image-generation";
 
 export type ImageGenerationJobRow = {
   id: string; owner_user_id: string; task_id: string; run_id: string; call_id: string;
@@ -28,7 +28,7 @@ export const toPatch = (patch: Parameters<ImageGenerationJobStore["update"]>[1])
   ...(patch.result !== undefined ? { result: patch.result } : {}), ...(patch.errorCode !== undefined ? { error_code: patch.errorCode } : {}), ...(patch.errorMessage !== undefined ? { error_message: patch.errorMessage } : {}),
 });
 
-export class SupabaseGeneratedAssetStore implements GeneratedAssetStorePort, GeneratedAgentAssetStore {
+export class SupabaseGeneratedAssetStore implements GeneratedAssetStorePort, GeneratedAgentAssetStore, AgentImageAssetReader {
   constructor(private readonly client: SupabaseClient) {}
 
   async create(input: Parameters<GeneratedAssetStorePort["create"]>[0]): Promise<{ id: string }> {
@@ -62,6 +62,12 @@ export class SupabaseGeneratedAssetStore implements GeneratedAssetStorePort, Gen
     const result = await this.client.from("assets").select("object_key, mime_type, sha256, provider").eq("id", input.assetId).eq("task_id", input.taskId).eq("owner_user_id", input.ownerUserId).eq("kind", "generated_image").maybeSingle();
     if (result.error) throw new Error(result.error.message);
     return result.data ? { objectKey: result.data.object_key as string, mimeType: result.data.mime_type as string, sha256: result.data.sha256 as string, provider: result.data.provider as string | undefined } : null;
+  }
+
+  async loadImage(input: Parameters<AgentImageAssetReader["loadImage"]>[0]) {
+    const result = await this.client.from("assets").select("object_key, mime_type, sha256, kind").eq("id", input.assetId).eq("task_id", input.taskId).eq("owner_user_id", input.ownerUserId).in("kind", ["generated_image", "uploaded_image"]).maybeSingle();
+    if (result.error) throw new Error(result.error.message);
+    return result.data ? { objectKey: result.data.object_key as string, mimeType: result.data.mime_type as string, sha256: result.data.sha256 as string, kind: result.data.kind as "generated_image" | "uploaded_image" } : null;
   }
 }
 

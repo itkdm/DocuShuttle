@@ -5,6 +5,7 @@ import type { AgentConversationContext } from "../../application/ports";
 import { createAgentEvent, type AgentEvent } from "../../application/events";
 import { ConcurrentRunUpdateError } from "../../domain/errors";
 import { logger, measure } from "@/infrastructure/observability";
+import type { AgentImageAttachment } from "../../application/message-parts";
 
 export type SupabaseAgentLoopBootstrap = {
   runId: string;
@@ -129,14 +130,14 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     if (result.error) throw new Error(`Unable to persist assistant message: ${result.error.message}`);
   }
 
-  async appendUserMessage(runId: string, message: { id: string; text: string }): Promise<void> {
+  async appendUserMessage(runId: string, message: { id: string; text: string; images?: readonly AgentImageAttachment[] }): Promise<void> {
     const run = await this.client.from("agent_runs").select("state, owner_user_id").eq("id", runId).maybeSingle();
     if (run.error || !run.data) throw new Error("RUN_NOT_FOUND");
     const state = run.data.state as { conversationId?: string };
     if (!state.conversationId) return;
     const result = await this.client.from("messages").upsert({
       id: message.id, owner_user_id: run.data.owner_user_id, conversation_id: state.conversationId,
-      role: "user", parts: [{ type: "text", text: message.text }], run_id: runId,
+      role: "user", parts: [{ type: "text", text: message.text }, ...(message.images ?? []).map((image) => ({ type: "image", ...image }))].filter((part) => part.type !== "text" || ("text" in part && part.text !== "")), run_id: runId,
       message_key: message.id, delivery_status: "sent",
     }, { onConflict: "conversation_id,message_key", ignoreDuplicates: true });
     if (result.error) throw new Error(`Unable to persist user message: ${result.error.message}`);
@@ -230,11 +231,11 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
     return this.resolvePendingInteraction(runId, interactionId, "approval", { callId, decision });
   }
 
-  async resolvePendingUserInput(runId: string, interactionId: string, message: { id: string; text: string }): Promise<AgentLoopCheckpoint | undefined> {
+  async resolvePendingUserInput(runId: string, interactionId: string, message: { id: string; text: string; images?: readonly AgentImageAttachment[] }): Promise<AgentLoopCheckpoint | undefined> {
     return this.resolvePendingInteraction(runId, interactionId, "user_input", message);
   }
 
-  private async resolvePendingInteraction(runId: string, interactionId: string, interactionType: "approval" | "user_input", resolution: { callId: string; decision: "approved" | "rejected" } | { id: string; text: string }): Promise<AgentLoopCheckpoint | undefined> {
+  private async resolvePendingInteraction(runId: string, interactionId: string, interactionType: "approval" | "user_input", resolution: { callId: string; decision: "approved" | "rejected" } | { id: string; text: string; images?: readonly AgentImageAttachment[] }): Promise<AgentLoopCheckpoint | undefined> {
     return measure("agent.interaction.resolve", { runId, interactionId, interactionType, operation: "rpc", rpc: "resolve_agent_loop_interaction" }, async () => {
       const result = await this.client.rpc("resolve_agent_loop_interaction", {
         p_run_id: runId,
@@ -243,7 +244,7 @@ export class SupabaseAgentLoopStore implements AgentLoopStore {
         p_call_id: "callId" in resolution ? resolution.callId : null,
         p_resolution: "callId" in resolution
           ? { interactionId, type: "approval", callId: resolution.callId, decision: resolution.decision }
-          : { interactionId, type: "user_input", messageId: resolution.id, text: resolution.text },
+          : { interactionId, type: "user_input", messageId: resolution.id, text: resolution.text, ...(resolution.images?.length ? { images: resolution.images } : {}) },
       });
       if (result.error) {
         if (result.error.message.includes("INTERACTION_ALREADY_CLAIMED")) return undefined;

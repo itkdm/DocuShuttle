@@ -24,12 +24,14 @@ import type { DocumentLoadState, UploadAsset, VersionItem } from "./types";
 import { resolveAgentRuntimeView } from "./runtime-view-state";
 import { initialConversationLoading, shouldHoldConversationRestore, startProgressiveProjection } from "./progressive-restore";
 import { createApprovalSubmissionGate } from "./approval-submission-gate";
+import type { AgentImageAttachment } from "@/modules/agent/application/message-parts";
 
 const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
   { id: "pending", label: "等待导入文档", time: "当前", actor: "纸上鸭", versionNumber: 0, current: true },
 ];
 const isDocumentMutationTool = (name?: string) => name === "apply_text_change" || name === "apply_text_changes" || name === "replace_document_image";
+const messageImages = (parts: readonly { type?: string; assetId?: unknown; mimeType?: unknown }[]): AgentImageAttachment[] => parts.filter((part): part is { type: "image"; assetId: string; mimeType: AgentImageAttachment["mimeType"] } => part.type === "image" && typeof part.assetId === "string" && ["image/png", "image/jpeg", "image/webp"].includes(String(part.mimeType))).map((part) => ({ assetId: part.assetId, mimeType: part.mimeType }));
 export function Workbench() {
   const pathname = usePathname();
   const router = useRouter();
@@ -166,9 +168,11 @@ export function Workbench() {
       onSuccess: (durable) => {
         setConversationCursor(durable.nextCursor);
         setMessages(durable.messages.flatMap((message) => {
-          const text = message.parts.find((part) => part.type === "text")?.text;
-          if (!text || (message.role !== "user" && message.role !== "assistant")) return [];
-          return [{ id: message.id, role: message.role === "user" ? "user" as const : "agent" as const, text, runId: message.run_id ?? undefined, createdAt: message.created_at, status: message.delivery_status ?? "sent" }];
+          const textPart = message.parts.find((part) => part.type === "text");
+          const text = textPart && "text" in textPart && typeof textPart.text === "string" ? textPart.text : "";
+          const images = messageImages(message.parts);
+          if ((!text && !images.length) || (message.role !== "user" && message.role !== "assistant")) return [];
+          return [{ id: message.id, role: message.role === "user" ? "user" as const : "agent" as const, text, images, runId: message.run_id ?? undefined, createdAt: message.created_at, status: message.delivery_status ?? "sent" }];
         }));
       },
       onFailure: () => undefined,
@@ -295,9 +299,11 @@ export function Workbench() {
     try {
       const page = await loadBrowserConversationMessages(taskId, conversationCursor);
       const older = page.messages.flatMap((message) => {
-        const text = message.parts.find((part) => part.type === "text")?.text;
-        if (!text || (message.role !== "user" && message.role !== "assistant")) return [];
-        return [{ id: message.id, role: message.role === "user" ? "user" as const : "agent" as const, text, runId: message.run_id ?? undefined, createdAt: message.created_at, status: message.delivery_status ?? "sent" }];
+        const textPart = message.parts.find((part) => part.type === "text");
+        const text = textPart && "text" in textPart && typeof textPart.text === "string" ? textPart.text : "";
+        const images = messageImages(message.parts);
+        if ((!text && !images.length) || (message.role !== "user" && message.role !== "assistant")) return [];
+        return [{ id: message.id, role: message.role === "user" ? "user" as const : "agent" as const, text, images, runId: message.run_id ?? undefined, createdAt: message.created_at, status: message.delivery_status ?? "sent" }];
       });
       setMessages((items) => [...older, ...items]);
       setConversationCursor(page.nextCursor);
@@ -348,13 +354,13 @@ export function Workbench() {
     return recovered;
   }
 
-  const runAgent = async (prompt: string) => {
+  const runAgent = async (prompt: string, attachments: readonly AgentImageAttachment[] = []) => {
     if (!workspaceReady || !taskId) {
       setNotice("请先打开一份 DOCX，建立文档工作区");
       return;
     }
     const localMessageId = crypto.randomUUID();
-    setMessages((items) => [...items, { id: localMessageId, role: "user", text: prompt, createdAt: new Date().toISOString(), status: "pending" }]);
+    setMessages((items) => [...items, { id: localMessageId, role: "user", text: prompt, images: attachments, createdAt: new Date().toISOString(), status: "pending" }]);
     setNotice(`纸上鸭正在处理你的请求：“${prompt.slice(0, 24)}${prompt.length > 24 ? "…" : ""}”`);
     const abortController = new AbortController();
     agentAbortRef.current = abortController;
@@ -371,7 +377,7 @@ export function Workbench() {
         setActiveEvents([]);
         setLoopResult(undefined);
       }
-      const activeRun = startsFreshRun ? await createBrowserAgentRun(taskId, prompt, localMessageId) : run;
+      const activeRun = startsFreshRun ? await createBrowserAgentRun(taskId, prompt, localMessageId, attachments) : run;
       activeRunForRecovery = activeRun;
       setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, runId: activeRun.id } : item));
       setRun(activeRun);
@@ -380,7 +386,7 @@ export function Workbench() {
         setActiveEvents((items) => mergeTimelineEvents(items, [event]));
         if (event.type === "model.delta") setNotice("纸上鸭正在回复");
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
-      }, abortController.signal, localMessageId, interactionId);
+      }, abortController.signal, localMessageId, interactionId, attachments);
       applyRuntimeResult(activeRun.id, result);
       setMessages((items) => items.map((item) => item.id === localMessageId ? { ...item, status: result.checkpoint.status === "failed" ? "failed" : "sent" } : item));
       if (result.checkpoint.status === "failed") {

@@ -1,0 +1,12 @@
+{
+  "name": "@paperduck/superdoc-browser-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1"
+  },
+  "dependencies": {
+    "superdoc": "2.10.0",
+    "vite": "7.1.4"
+  }
+}

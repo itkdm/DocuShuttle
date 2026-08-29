@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PaperDuck SuperDoc v2 Browser Spike</title>
+  </head>
+  <body>
+    <header class="toolbar">
+      <div>
+        <strong>SuperDoc v2 Browser Spike</strong>
+        <span id="status">正在初始化…</span>
+      </div>
+      <label class="file-picker">选择 DOCX<input id="file-input" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" /></label>
+      <button id="export-button" type="button" disabled>导出 DOCX</button>
+      <button id="capture-button" type="button" disabled>截图当前页</button>
+    </header>
+    <main id="editor" aria-label="SuperDoc document editor"></main>
+    <output id="diagnostics" aria-live="polite"></output>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

@@ -35,3 +35,5 @@ fixtures/docx-private/
 # local agent workspace data (memory, runtime state, MCP config) — not versioned
 .workbuddy/
 .paperduck/logs/
+tmp/superdoc-spike/
+experiments/superdoc-spike/browser/public/

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { AgentLoopRunner, AgentModelOutputBudgetExceededError, TRANSPORT_INTERRUPTED, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentModelPort, type AgentTool } from "../application/loop";
+import { AgentLoopRunner, AgentModelOutputBudgetExceededError, projectToolOutputForEvent, TRANSPORT_INTERRUPTED, type AgentEffectReceipt, type AgentLoopCheckpoint, type AgentModelPort, type AgentTool } from "../application/loop";
 import type { AgentEvent } from "../application/events";
 import type { AgentConversationContextPort } from "../application/ports";
 
@@ -54,6 +54,22 @@ class MemoryStore {
     return claimed;
   }
 }
+
+describe("public tool event projections", () => {
+  it("keeps generated image references while excluding private transport data", () => {
+    const output = projectToolOutputForEvent("generate_image", { assetId: "asset-1", mimeType: "image/png", sha256: "hash", purpose: "create", referenceCount: 0, objectKey: "PRIVATE", remoteUrl: "PRIVATE", base64: "PRIVATE", bytes: new Uint8Array([1]) });
+    expect(output).toMatchObject({ assetId: "asset-1", purpose: "create", referenceCount: 0 });
+    expect(JSON.stringify(output)).not.toContain("PRIVATE");
+    expect(output).not.toHaveProperty("objectKey");
+    expect(output).not.toHaveProperty("bytes");
+  });
+
+  it("projects inspect image analysis for browser replay", () => {
+    const output = projectToolOutputForEvent("inspect_image", { source: "working-document", nodeId: "node-1", revision: "rev-1", analysis: { summary: "终端截图", type: "截图", style: "深色", visibleText: ["one", "two", "three", "private"] }, generationHints: "PRIVATE" });
+    expect(output).toMatchObject({ source: "working-document", nodeId: "node-1", analysis: { summary: "终端截图", visibleText: ["one", "two", "three"] } });
+    expect(JSON.stringify(output)).not.toContain("PRIVATE");
+  });
+});
 
 class MemoryConversationContext implements AgentConversationContextPort {
   calls = 0;

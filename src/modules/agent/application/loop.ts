@@ -199,6 +199,25 @@ const summarizeTraceValue = (value: unknown): unknown => {
   return { summary: "工具已返回结果", durationMs };
 };
 
+const withDefined = (record: Record<string, unknown>) => Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
+
+export const projectToolOutputForEvent = (toolName: string, output: unknown): unknown => {
+  const record = output && typeof output === "object" && !Array.isArray(output) ? output as Record<string, unknown> : undefined;
+  if (!record) return summarizeTraceValue(output);
+  const durationMs = typeof record.durationMs === "number" ? record.durationMs : undefined;
+  if (toolName === "generate_image") {
+    return withDefined({ summary: "已生成图片", assetId: record.assetId, mimeType: record.mimeType, sha256: record.sha256, purpose: record.purpose, referenceCount: record.referenceCount, durationMs });
+  }
+  if (toolName === "inspect_image") {
+    const analysis = record.analysis && typeof record.analysis === "object" && !Array.isArray(record.analysis) ? record.analysis as Record<string, unknown> : undefined;
+    return withDefined({ summary: "已分析图片", source: record.source, assetId: record.assetId, nodeId: record.nodeId, sourceFileId: record.sourceFileId, revision: record.revision, mimeType: record.mimeType, byteLength: record.byteLength, analysis: analysis && withDefined({ summary: analysis.summary, type: analysis.type, style: analysis.style, visibleText: Array.isArray(analysis.visibleText) ? analysis.visibleText.slice(0, 3) : undefined }), durationMs });
+  }
+  if (toolName === "replace_document_image") {
+    return withDefined({ summary: "已替换文档图片", targetNodeId: record.targetNodeId, assetId: record.assetId, previousRevision: record.previousRevision, revision: record.revision, changedEntries: record.changedEntries, validation: record.validation, durationMs });
+  }
+  return summarizeTraceValue(output);
+};
+
 export class AgentLoopRunner {
   constructor(
     private readonly model: AgentModelPort,
@@ -284,7 +303,7 @@ export class AgentLoopRunner {
     checkpoint.messages.push({ role: "tool", content: failed ? JSON.stringify({ error: failed }) : serializeToolOutput(output), toolCallId: call.id, toolName: call.name });
     const event = failed
       ? createAgentEvent(runId, { type: "tool.failed", callId: call.id, name: call.name, error: failed })
-      : createAgentEvent(runId, { type: "tool.completed", callId: call.id, name: call.name, output: summarizeTraceValue(output) });
+      : createAgentEvent(runId, { type: "tool.completed", callId: call.id, name: call.name, output: projectToolOutputForEvent(call.name, output) });
     checkpoint.status = "running";
     await this.store.save(runId, checkpoint);
     try { await this.store.appendEvents?.(runId, [event]); } catch { this.onEngineeringEvent?.({ event: "agent.event.persist_failed", metadata: { runId, eventId: event.eventId, eventType: event.type } }); }
@@ -432,7 +451,7 @@ export class AgentLoopRunner {
       const activityEvent = timestamped.type === "tool.started"
         ? { ...timestamped, input: summarizeTraceValue(timestamped.input) } as AgentEvent
         : timestamped.type === "tool.completed"
-          ? { ...timestamped, output: summarizeTraceValue(timestamped.output) } as AgentEvent
+          ? { ...timestamped, output: projectToolOutputForEvent(timestamped.name, timestamped.output) } as AgentEvent
           : timestamped;
       events.push(activityEvent);
       this.observe(runId, activityEvent, checkpoint.permissionMode);
@@ -604,7 +623,7 @@ export class AgentLoopRunner {
         const existingReceipt = await this.store.loadEffectReceipt?.(runId, idempotencyKey);
         if (existingReceipt) {
           checkpoint.messages.push({ role: "tool", content: serializeToolOutput(existingReceipt.output), toolCallId: call.id, toolName: call.name });
-          const replayedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: summarizeTraceValue(existingReceipt.output) }, false);
+          const replayedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: projectToolOutputForEvent(call.name, existingReceipt.output) }, false);
           await saveCheckpoint();
           onEvent?.(replayedEvent);
           continue;
@@ -622,7 +641,7 @@ export class AgentLoopRunner {
             ? await this.store.saveEffectReceipt(runId, { idempotencyKey, callId: call.id, toolName: call.name, output, completedAt: new Date().toISOString() })
             : { idempotencyKey, callId: call.id, toolName: call.name, output, completedAt: new Date().toISOString() };
           checkpoint.messages.push({ role: "tool", content: serializeToolOutput(receipt.output), toolCallId: call.id, toolName: call.name });
-          const toolCompletedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: { ...((receipt.output && typeof receipt.output === "object") ? receipt.output : { value: receipt.output }), durationMs: Date.now() - toolStartedAt } }, false);
+          const toolCompletedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: projectToolOutputForEvent(call.name, { ...((receipt.output && typeof receipt.output === "object") ? receipt.output : { value: receipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
           await saveCheckpoint();
           onEvent?.(toolCompletedEvent);
         } catch (error) {
@@ -635,7 +654,7 @@ export class AgentLoopRunner {
           const reconciledReceipt = await this.reconcileEffectReceiptAfterToolError(runId, idempotencyKey);
           if (reconciledReceipt) {
             checkpoint.messages.push({ role: "tool", content: serializeToolOutput(reconciledReceipt.output), toolCallId: call.id, toolName: call.name });
-            const completedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: summarizeTraceValue({ ...((reconciledReceipt.output && typeof reconciledReceipt.output === "object") ? reconciledReceipt.output : { value: reconciledReceipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
+            const completedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: projectToolOutputForEvent(call.name, { ...((reconciledReceipt.output && typeof reconciledReceipt.output === "object") ? reconciledReceipt.output : { value: reconciledReceipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
             await saveCheckpoint();
             onEvent?.(completedEvent);
           } else {
@@ -730,7 +749,7 @@ export class AgentLoopRunner {
       const existingReceipt = await this.store.loadEffectReceipt?.(runId, idempotencyKey);
       if (existingReceipt) {
         checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval: resolved.decision, output: existingReceipt.output }), toolCallId: resolved.callId, toolName: resolved.toolName });
-        const replayedEvent = emit({ type: "tool.completed", callId: resolved.callId, name: resolved.toolName, output: summarizeTraceValue(existingReceipt.output) }, false);
+        const replayedEvent = emit({ type: "tool.completed", callId: resolved.callId, name: resolved.toolName, output: projectToolOutputForEvent(resolved.toolName, existingReceipt.output) }, false);
         checkpoint.pendingResolution = undefined;
         await saveCheckpoint();
         onEvent?.(replayedEvent);
@@ -748,7 +767,7 @@ export class AgentLoopRunner {
           ? await this.store.saveEffectReceipt(runId, { idempotencyKey, callId: resolved.callId, toolName: resolved.toolName, output, completedAt: new Date().toISOString() })
           : { idempotencyKey, callId: resolved.callId, toolName: resolved.toolName, output, completedAt: new Date().toISOString() };
         checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval: resolved.decision, output: receipt.output }), toolCallId: resolved.callId, toolName: resolved.toolName });
-        const completedEvent = emit({ type: "tool.completed", callId: resolved.callId, name: resolved.toolName, output: summarizeTraceValue({ ...((receipt.output && typeof receipt.output === "object") ? receipt.output : { value: receipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
+        const completedEvent = emit({ type: "tool.completed", callId: resolved.callId, name: resolved.toolName, output: projectToolOutputForEvent(resolved.toolName, { ...((receipt.output && typeof receipt.output === "object") ? receipt.output : { value: receipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
         checkpoint.pendingResolution = undefined;
         await saveCheckpoint();
         onEvent?.(completedEvent);
@@ -762,7 +781,7 @@ export class AgentLoopRunner {
         const reconciledReceipt = await this.reconcileEffectReceiptAfterToolError(runId, idempotencyKey);
         if (reconciledReceipt) {
           checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval: resolved.decision, output: reconciledReceipt.output }), toolCallId: resolved.callId, toolName: resolved.toolName });
-          const completedEvent = emit({ type: "tool.completed", callId: resolved.callId, name: resolved.toolName, output: summarizeTraceValue({ ...((reconciledReceipt.output && typeof reconciledReceipt.output === "object") ? reconciledReceipt.output : { value: reconciledReceipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
+          const completedEvent = emit({ type: "tool.completed", callId: resolved.callId, name: resolved.toolName, output: projectToolOutputForEvent(resolved.toolName, { ...((reconciledReceipt.output && typeof reconciledReceipt.output === "object") ? reconciledReceipt.output : { value: reconciledReceipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
           checkpoint.pendingResolution = undefined;
           await saveCheckpoint();
           onEvent?.(completedEvent);

@@ -28,6 +28,7 @@ const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
   { id: "pending", label: "等待导入文档", time: "当前", actor: "纸上鸭", versionNumber: 0, current: true },
 ];
+const isDocumentMutationTool = (name?: string) => name === "apply_text_change" || name === "apply_text_changes" || name === "replace_document_image";
 export function Workbench() {
   const pathname = usePathname();
   const router = useRouter();
@@ -311,6 +312,8 @@ export function Workbench() {
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
         const nextDocument = await loadCurrentTaskDocument(reconcileTaskId, fileName);
         setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes } });
+        const inspection = await inspectBrowserTaskDocument(reconcileTaskId);
+        setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
         await refreshVersions(reconcileTaskId);
       }
       setNotice("连接恢复，已加载本轮最新文档结果");
@@ -366,7 +369,7 @@ export function Workbench() {
       }
       const replies = result.events.flatMap((event) => event.type === "assistant.message" && event.text ? [{ id: `event:${event.eventId}`, text: event.text, createdAt: event.timestamp }] : []);
       if (replies.length) setMessages((items) => [...items, ...replies.map((reply) => ({ ...reply, role: "agent" as const, runId: activeRun.id, status: "sent" as const }))]);
-      const wrote = result.events.some((event) => event.type === "tool.completed" && (event.name === "apply_text_change" || event.name === "apply_text_changes"));
+      const wrote = result.events.some((event) => event.type === "tool.completed" && isDocumentMutationTool(event.name));
       if (wrote && taskId) {
         // A document mutation is not user-visible until the immutable version
         // has been downloaded and parsed by the canvas. Do this before marking

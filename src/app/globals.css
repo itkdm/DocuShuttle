@@ -114,6 +114,13 @@ button:focus-visible, textarea:focus-visible, label:has(input:focus-visible) { o
 .document-column, .canvas-shell { min-width: 0; min-height: 0; height: 100%; }
 .canvas-shell { display: flex; flex-direction: column; background-color: var(--canvas); background-image: radial-gradient(#cacbc0 0.7px, transparent 0.7px); background-size: 12px 12px; }
 .canvas-toolbar { height: 44px; flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center; padding: 0 14px; background: rgba(238,238,229,.9); border-bottom: 1px solid #d1d2c8; }
+.canvas-toolbar-actions { display: flex; align-items: center; gap: 8px; }
+.canvas-edit-button, .canvas-save-button, .canvas-discard-button { border: 1px solid #c5c8bd; border-radius: 7px; padding: 5px 10px; background: #fffef8; color: #3d443c; cursor: pointer; font: inherit; font-size: 12px; }
+.canvas-save-button { background: #3d5143; border-color: #3d5143; color: #fffef8; }
+.canvas-save-button:disabled, .canvas-discard-button:disabled { cursor: default; opacity: .55; }
+.superdoc-editor-shell { min-height: 720px; height: calc(100dvh - 190px); background: #f3f3ed; overflow: auto; }
+.superdoc-toolbar { position: sticky; top: 0; z-index: 2; background: #fffef8; border-bottom: 1px solid #d1d2c8; }
+.superdoc-editor-host { min-height: 650px; padding: 24px; }
 .preview-state { display: flex; align-items: center; gap: 6px; font-size: 9px; color: var(--muted); letter-spacing: .04em; }
 .preview-state i { width: 7px; height: 7px; border-radius: 50%; background: #9d9f97; }.preview-state i.ready { background: var(--green); box-shadow: 0 0 0 3px rgba(65,106,80,.12); }
 .canvas-upload { height: 28px; padding: 0 9px; border: 1px solid #c5c6bc; background: rgba(255,255,250,.8); border-radius: 4px; display: flex; align-items: center; gap: 5px; font-size: 9px; cursor: pointer; }.canvas-upload:hover { border-color: var(--duck-dark); }.canvas-upload input, .canvas-empty input, .canvas-error input { position: absolute; width: 1px; height: 1px; opacity: 0; }

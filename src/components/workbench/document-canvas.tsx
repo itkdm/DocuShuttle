@@ -1,13 +1,21 @@
 import { AlertCircle, FileUp, LoaderCircle, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import type { DocumentLoadState } from "./types";
-import type { DocumentSurfacePort } from "@/modules/documents";
+import type { DocumentEditorPort, DocumentEditorState, DocumentSurfacePort } from "@/modules/documents";
 import { DocxPreviewDocumentSurface } from "./docx-preview-document-surface";
+import { SuperDocDocumentEditor, SuperDocDocumentSurface } from "./superdoc-document-editor";
 
 interface DocumentCanvasProps {
   loadState: DocumentLoadState;
   onChoose: (file?: File) => void;
   onSurfaceReady?: (surface: DocumentSurfacePort | undefined) => void;
+  editing?: boolean;
+  editorState?: DocumentEditorState;
+  editorRef?: MutableRefObject<DocumentEditorPort | undefined>;
+  onEdit?: () => void;
+  onSave?: () => void;
+  onDiscard?: () => void;
+  onEditorStateChange?: (state: DocumentEditorState) => void;
 }
 
 function DocxRenderer({ bytes, revision, onError, surfaceRef, onSurfaceReady }: { bytes: ArrayBuffer; revision?: string; onError: (message: string) => void; surfaceRef?: MutableRefObject<DocumentSurfacePort | undefined>; onSurfaceReady?: (surface: DocumentSurfacePort | undefined) => void }) {
@@ -50,21 +58,60 @@ function DocxRenderer({ bytes, revision, onError, surfaceRef, onSurfaceReady }: 
   return <><div ref={styleRef} />{rendering && <div className="docx-rendering" role="status"><LoaderCircle size={20} /> 正在排版真实 DOCX…</div>}<div ref={bodyRef} className="docx-preview-host" data-testid="docx-preview" /></>;
 }
 
-export function DocumentCanvas({ loadState, onChoose, surfaceRef, onSurfaceReady }: DocumentCanvasProps & { surfaceRef?: MutableRefObject<DocumentSurfacePort | undefined> }) {
+function SuperDocRenderer({ bytes, revision, onError, surfaceRef, editorRef, onSurfaceReady, onEditorStateChange }: { bytes: ArrayBuffer; revision: string; onError: (message: string) => void; surfaceRef?: MutableRefObject<DocumentSurfacePort | undefined>; editorRef?: MutableRefObject<DocumentEditorPort | undefined>; onSurfaceReady?: (surface: DocumentSurfacePort | undefined) => void; onEditorStateChange?: (state: DocumentEditorState) => void }) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    const host = hostRef.current;
+    const toolbar = toolbarRef.current;
+    if (!host || !toolbar) return;
+    host.replaceChildren();
+    toolbar.replaceChildren();
+    const editorDocument = new Blob([bytes.slice(0)], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+    void SuperDocDocumentEditor.mount(host, toolbar, editorDocument, revision, {
+      onStateChange: onEditorStateChange ?? (() => undefined),
+      onError,
+    }).then((editor) => {
+      if (!active) { editor.destroy(); return; }
+      const surface = new SuperDocDocumentSurface(host, editor);
+      if (editorRef) editorRef.current = editor;
+      if (surfaceRef) surfaceRef.current = surface;
+      onSurfaceReady?.(surface);
+      onEditorStateChange?.(editor.getState());
+    }).catch((error: unknown) => { if (active) onError(error instanceof Error ? error.message : "SuperDoc 编辑器初始化失败"); });
+    return () => {
+      active = false;
+      editorRef?.current?.destroy();
+      if (editorRef) editorRef.current = undefined;
+      if (surfaceRef) surfaceRef.current = undefined;
+      onSurfaceReady?.(undefined);
+      host.replaceChildren();
+      toolbar.replaceChildren();
+    };
+  }, [bytes, editorRef, onError, onEditorStateChange, onSurfaceReady, revision, surfaceRef]);
+
+  return <div className="superdoc-editor-shell"><div ref={toolbarRef} className="superdoc-toolbar" data-testid="superdoc-toolbar" /><div ref={hostRef} className="superdoc-editor-host" data-testid="superdoc-editor" /></div>;
+}
+
+export function DocumentCanvas({ loadState, onChoose, surfaceRef, onSurfaceReady, editing = false, editorState, editorRef, onEdit, onSave, onDiscard, onEditorStateChange }: DocumentCanvasProps & { surfaceRef?: MutableRefObject<DocumentSurfacePort | undefined> }) {
   const [renderError, setRenderError] = useState<string | null>(null);
   const error = loadState.status === "error" ? loadState.message : renderError;
 
   return (
     <section className="canvas-shell" aria-label="Working Document 文档画布">
       <div className="canvas-toolbar">
-        <div className="preview-state"><i className={loadState.status === "ready" ? "ready" : ""} />{loadState.status === "ready" ? "文档预览" : loadState.status === "loading" ? "正在读取" : "尚未载入文档"}</div>
-        <label className="canvas-upload"><input id="canvas-upload-docx" name="docx" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => onChoose(event.target.files?.[0])} /><FileUp size={14} />{loadState.status === "ready" ? "更换文档" : "选择 DOCX"}</label>
+        <div className="preview-state"><i className={loadState.status === "ready" ? "ready" : ""} />{editing ? "正在编辑" : loadState.status === "ready" ? "文档预览" : loadState.status === "loading" ? "正在读取" : "尚未载入文档"}</div>
+        {!editing && <div className="canvas-toolbar-actions"><label className="canvas-upload"><input id="canvas-upload-docx" name="docx" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => onChoose(event.target.files?.[0])} /><FileUp size={14} />{loadState.status === "ready" ? "更换文档" : "选择 DOCX"}</label>{loadState.status === "ready" && <button type="button" className="canvas-edit-button" onClick={onEdit}>编辑</button>}</div>}
+        {editing && <div className="canvas-toolbar-actions"><button type="button" className="canvas-discard-button" onClick={onDiscard} disabled={!editorState?.ready}>放弃修改</button><button type="button" className="canvas-save-button" onClick={onSave} disabled={!editorState?.ready || !editorState.dirty}>{editorState?.dirty ? "保存" : "已保存"}</button></div>}
       </div>
       <div className="paper-stage">
         {loadState.status === "empty" && <div className="canvas-empty"><span className="empty-duck">鸭</span><span className="eyebrow">REAL DOCX WORKSPACE</span><h1>把一份真实 Word 放到桌上</h1><p>上传会新建一个任务，地址会变成当前任务。刷新首页保持空白；要继续上次的文档和对话，请从左侧打开历史任务。</p><label><input id="canvas-empty-docx" name="docx" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => onChoose(event.target.files?.[0])} /><FileUp size={17} /> 打开 .docx</label><small>最大 20 MB · 不支持旧版 .doc</small></div>}
         {loadState.status === "loading" && <div className="canvas-loading" role="status"><LoaderCircle size={26} /><strong>正在检查并打开</strong><span>{loadState.fileName}</span></div>}
         {error && <div className="canvas-error" role="alert"><AlertCircle size={28} /><strong>这份文档暂时打不开</strong><p>{error}</p><label><input id="canvas-retry-docx" name="docx" type="file" accept=".docx" onChange={(event) => onChoose(event.target.files?.[0])} /><RotateCcw size={15} /> 选择其他文件</label></div>}
-        {loadState.status === "ready" && !error && <div className="real-document-wrap">
+        {loadState.status === "ready" && !error && editing && <SuperDocRenderer bytes={loadState.document.bytes} revision={loadState.document.revision ?? ""} onError={setRenderError} surfaceRef={surfaceRef} editorRef={editorRef} onSurfaceReady={onSurfaceReady} onEditorStateChange={onEditorStateChange} />}
+        {loadState.status === "ready" && !error && !editing && <div className="real-document-wrap">
           <DocxRenderer bytes={loadState.document.bytes} revision={loadState.document.revision} onError={setRenderError} surfaceRef={surfaceRef} onSurfaceReady={onSurfaceReady} />
         </div>}
       </div>

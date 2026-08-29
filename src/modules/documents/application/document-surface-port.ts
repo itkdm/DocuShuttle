@@ -25,7 +25,7 @@ export type DocumentVisibleCapture = {
 /** Browser-neutral surface contract; concrete DOM/document engines stay in adapters. */
 export interface DocumentSurfacePort {
   getState(): DocumentSurfaceState;
-  capturePage(pageNumber: number): Promise<DocumentPageCapture>;
+  capturePage?(pageNumber: number): Promise<DocumentPageCapture>;
   captureVisible(): Promise<DocumentVisibleCapture>;
   navigate?(pageNumber: number): Promise<void>;
   setZoom?(zoom: number): Promise<void>;

@@ -1,13 +1,16 @@
 import { AlertCircle, FileUp, LoaderCircle, RotateCcw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import type { DocumentLoadState } from "./types";
+import type { DocumentSurfacePort } from "@/modules/documents";
+import { DocxPreviewDocumentSurface } from "./docx-preview-document-surface";
 
 interface DocumentCanvasProps {
   loadState: DocumentLoadState;
   onChoose: (file?: File) => void;
+  onSurfaceReady?: (surface: DocumentSurfacePort | undefined) => void;
 }
 
-function DocxRenderer({ bytes, onError }: { bytes: ArrayBuffer; onError: (message: string) => void }) {
+function DocxRenderer({ bytes, revision, onError, surfaceRef, onSurfaceReady }: { bytes: ArrayBuffer; revision?: string; onError: (message: string) => void; surfaceRef?: MutableRefObject<DocumentSurfacePort | undefined>; onSurfaceReady?: (surface: DocumentSurfacePort | undefined) => void }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const styleRef = useRef<HTMLDivElement>(null);
   const [rendering, setRendering] = useState(true);
@@ -30,6 +33,9 @@ function DocxRenderer({ bytes, onError }: { bytes: ArrayBuffer; onError: (messag
       .then(() => {
         if (active) {
           setRendering(false);
+          const surfaceRoot = body.closest<HTMLElement>(".paper-stage") ?? body.parentElement;
+          if (surfaceRef && surfaceRoot) surfaceRef.current = new DocxPreviewDocumentSurface(surfaceRoot, { ready: true, renderedRevision: revision, dirty: false, pageCount: 1 });
+          onSurfaceReady?.(surfaceRef?.current);
           if (process.env.NODE_ENV !== "production") void fetch("/api/dev/logs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ events: [{ event: "client.docx.render.completed", durationMs: performance.now() - renderStarted, bytes: bytes.byteLength }] }), keepalive: true }).catch(() => undefined);
         }
       })
@@ -38,13 +44,13 @@ function DocxRenderer({ bytes, onError }: { bytes: ArrayBuffer; onError: (messag
         const detail = error instanceof Error ? error.message : "未知渲染错误";
         onError(`DOCX 无法渲染：${detail}`);
       });
-    return () => { active = false; };
-  }, [bytes, onError]);
+    return () => { active = false; if (surfaceRef) surfaceRef.current = undefined; onSurfaceReady?.(undefined); };
+  }, [bytes, onError, onSurfaceReady, revision, surfaceRef]);
 
   return <><div ref={styleRef} />{rendering && <div className="docx-rendering" role="status"><LoaderCircle size={20} /> 正在排版真实 DOCX…</div>}<div ref={bodyRef} className="docx-preview-host" data-testid="docx-preview" /></>;
 }
 
-export function DocumentCanvas({ loadState, onChoose }: DocumentCanvasProps) {
+export function DocumentCanvas({ loadState, onChoose, surfaceRef, onSurfaceReady }: DocumentCanvasProps & { surfaceRef?: MutableRefObject<DocumentSurfacePort | undefined> }) {
   const [renderError, setRenderError] = useState<string | null>(null);
   const error = loadState.status === "error" ? loadState.message : renderError;
 
@@ -59,7 +65,7 @@ export function DocumentCanvas({ loadState, onChoose }: DocumentCanvasProps) {
         {loadState.status === "loading" && <div className="canvas-loading" role="status"><LoaderCircle size={26} /><strong>正在检查并打开</strong><span>{loadState.fileName}</span></div>}
         {error && <div className="canvas-error" role="alert"><AlertCircle size={28} /><strong>这份文档暂时打不开</strong><p>{error}</p><label><input id="canvas-retry-docx" name="docx" type="file" accept=".docx" onChange={(event) => onChoose(event.target.files?.[0])} /><RotateCcw size={15} /> 选择其他文件</label></div>}
         {loadState.status === "ready" && !error && <div className="real-document-wrap">
-          <DocxRenderer bytes={loadState.document.bytes} onError={setRenderError} />
+          <DocxRenderer bytes={loadState.document.bytes} revision={loadState.document.revision} onError={setRenderError} surfaceRef={surfaceRef} onSurfaceReady={onSurfaceReady} />
         </div>}
       </div>
     </section>

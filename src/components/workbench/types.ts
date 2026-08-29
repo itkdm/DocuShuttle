@@ -3,6 +3,7 @@ export interface UploadAsset { kind: "template" | "example"; name: string; size:
 export interface LoadedDocument {
   file: File;
   bytes: ArrayBuffer;
+  revision?: string;
 }
 export type DocumentLoadState =
   | { status: "empty" }

@@ -25,7 +25,7 @@ export interface GeneratedAgentAssetStore {
   load(input: { assetId: string; ownerUserId: string; taskId: string }): Promise<{ objectKey: string; mimeType: string; sha256: string; provider?: string } | null>;
 }
 export interface AgentImageAssetReader {
-  loadImage(input: { assetId: string; ownerUserId: string; taskId: string }): Promise<{ objectKey: string; mimeType: string; sha256: string; kind: "generated_image" | "uploaded_image" } | null>;
+  loadImage(input: { assetId: string; ownerUserId: string; taskId: string }): Promise<{ objectKey: string; mimeType: string; sha256: string; kind: "generated_image" | "uploaded_image" | "preview" } | null>;
 }
 
 const referenceSchema = z.discriminatedUnion("source", [

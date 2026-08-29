@@ -65,9 +65,9 @@ export class SupabaseGeneratedAssetStore implements GeneratedAssetStorePort, Gen
   }
 
   async loadImage(input: Parameters<AgentImageAssetReader["loadImage"]>[0]) {
-    const result = await this.client.from("assets").select("object_key, mime_type, sha256, kind").eq("id", input.assetId).eq("task_id", input.taskId).eq("owner_user_id", input.ownerUserId).in("kind", ["generated_image", "uploaded_image"]).maybeSingle();
+    const result = await this.client.from("assets").select("object_key, mime_type, sha256, kind").eq("id", input.assetId).eq("task_id", input.taskId).eq("owner_user_id", input.ownerUserId).in("kind", ["generated_image", "uploaded_image", "preview"]).maybeSingle();
     if (result.error) throw new Error(result.error.message);
-    return result.data ? { objectKey: result.data.object_key as string, mimeType: result.data.mime_type as string, sha256: result.data.sha256 as string, kind: result.data.kind as "generated_image" | "uploaded_image" } : null;
+    return result.data ? { objectKey: result.data.object_key as string, mimeType: result.data.mime_type as string, sha256: result.data.sha256 as string, kind: result.data.kind as "generated_image" | "uploaded_image" | "preview" } : null;
   }
 }
 

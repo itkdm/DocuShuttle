@@ -25,8 +25,11 @@ export class CommitManualDocumentEdit {
     const current = await this.documents.load({ taskId: input.taskId, ownerUserId: raw.ownerUserId });
     if (!current) throw new ManualEditError("DOCUMENT_NOT_FOUND", "Working document was not found.");
     if (current.revision !== input.expectedRevision) throw new ManualEditError("DOCUMENT_REVISION_MISMATCH", "The document changed while it was being edited.");
-    const unsupported = await inspectManualEditCapabilities(input.bytes);
-    if (unsupported.length) throw new ManualEditError("MANUAL_EDIT_UNSUPPORTED_FEATURE", `Manual editing does not support: ${unsupported.join(", ")}.`);
+    const sourceBytes = await this.storage.get(current.objectKey);
+    const sourceUnsupported = await inspectManualEditCapabilities(sourceBytes);
+    if (sourceUnsupported.length) throw new ManualEditError("MANUAL_EDIT_UNSUPPORTED_FEATURE", `Manual editing does not support: ${sourceUnsupported.join(", ")}.`);
+    const outputUnsupported = await inspectManualEditCapabilities(input.bytes);
+    if (outputUnsupported.length) throw new ManualEditError("MANUAL_EDIT_UNSUPPORTED_FEATURE", `Manual editing does not support: ${outputUnsupported.join(", ")}.`);
     const validation = await this.engine.validate(input.bytes);
     const reopened = await this.engine.inspect(input.bytes);
     if (reopened.manifest.revision !== validation.manifest.revision) throw new ManualEditError("MANUAL_EDIT_VALIDATION_MISMATCH", "The edited document failed reopen validation.");

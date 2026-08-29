@@ -1,5 +1,5 @@
 import { toBlob } from "html-to-image";
-import type { SuperDoc } from "superdoc";
+import { defineSuperDocExtension, type SuperDoc, type SuperDocMutationEvent } from "superdoc";
 import "superdoc/style.css";
 
 import type { DocumentEditorPort, DocumentEditorState, DocumentSurfacePort, DocumentSurfaceState, DocumentVisibleCapture, ExportedDocument } from "@/modules/documents";
@@ -12,6 +12,26 @@ export type SuperDocEditorCallbacks = {
   onStateChange: (state: DocumentEditorState) => void;
   onError: (message: string) => void;
 };
+
+function createMutationExtension(onMutation: (event: SuperDocMutationEvent) => void) {
+  return defineSuperDocExtension({
+    id: "paperduck.manual-edit",
+    activate(context) {
+      context.onMutation({ origin: "local", sourceComplete: true }, (event) => {
+        if (!event.affects.size) return;
+        if (process.env.NODE_ENV !== "production") {
+          console.info("document.editor.mutation", {
+            id: event.id,
+            origin: event.origin,
+            affects: [...event.affects],
+            sourceComplete: context.getSnapshot().sourceComplete,
+          });
+        }
+        onMutation(event);
+      });
+    },
+  });
+}
 
 /** Adapter containing all SuperDoc knowledge for the browser integration. */
 export class SuperDocDocumentEditor implements DocumentEditorPort {
@@ -35,9 +55,9 @@ export class SuperDocDocumentEditor implements DocumentEditorPort {
       selector: host,
       document,
       documentMode: "editing",
+      extensions: [createMutationExtension(() => editor.updateState({ dirty: true }))],
       ui: { toolbar: { container: toolbar }, comments: false },
       onReady: () => editor.updateState({ ready: true }),
-      onEditorUpdate: () => editor.updateState({ dirty: true }),
       onContentError: ({ error }) => editor.reportError(error),
       onException: ({ error }) => editor.reportError(error),
     });

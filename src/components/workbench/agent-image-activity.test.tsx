@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AgentImageActivity } from "./agent-image-activity";
@@ -22,11 +22,16 @@ describe("Agent image activity", () => {
   });
 
   it("keeps inspect summaries human-readable and hides generation hints from the main view", () => {
-    render(<AgentImageActivity taskId="task-1" activity={activity({ name: "inspect_image", output: { source: "asset", assetId: "asset-1", analysis: { summary: "深色终端截图", type: "终端截图", style: "深色" , generationHints: "internal prompt" }, } })} deciding={false} />);
-    expect(screen.getByText("深色终端截图")).toBeTruthy();
+    render(<AgentImageActivity taskId="task-1" activity={activity({ name: "inspect_image", output: { source: "asset", assetId: "asset-1", analysis: { summary: "深色终端截图", type: "终端截图", style: "深色", visibleText: ["one"] }, } })} deciding={false} />);
     expect(screen.getByText("终端截图 · 深色")).toBeTruthy();
+    expect(screen.queryByText("深色终端截图")).toBeNull();
+    expect(screen.queryByText("one")).toBeNull();
     expect(screen.queryByText("internal prompt")).toBeNull();
-    expect(screen.getByText("工具详情")).toBeTruthy();
+    expect(screen.getByText("技术详情")).toBeTruthy();
+    fireEvent.click(screen.getByText("技术详情"));
+    fireEvent.click(screen.getByText("查看原始安全数据"));
+    expect(screen.getByText(/"summary":\s*"深色终端截图"/)).toBeTruthy();
+    expect(screen.getByText(/"one"/)).toBeTruthy();
   });
 
   it("renders replace approval with before/after previews and existing decisions", () => {

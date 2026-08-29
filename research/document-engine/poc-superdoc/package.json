@@ -10,12 +10,13 @@
     "inspect": "node scripts/inspect-api.mjs",
     "inspect:targets": "node scripts/inspect-targets.mjs",
     "inspect:images": "node scripts/inspect-images.mjs",
+    "audit:notes": "node scripts/semantic-note-audit.mjs",
     "test:roundtrip": "node scripts/roundtrip.mjs",
     "test:mutations": "node scripts/mutations.mjs",
     "test:package-diff": "node scripts/package-diff.mjs"
   },
   "dependencies": {
-    "@superdoc/sdk": "2.5.0"
+    "@superdoc/sdk": "2.7.0"
   },
   "devDependencies": {
     "adm-zip": "0.5.16"

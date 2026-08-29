@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { SuperDocClient } from '@superdoc/sdk';
+import packageJson from '../package.json' with { type: 'json' };
+
+const require = createRequire(import.meta.url);
+const runtimeSdkVersion = require('../node_modules/@superdoc/sdk/package.json').version;
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '../../../..');
@@ -70,7 +75,7 @@ try {
 }
 
 const reportPath = path.join(outputDir, 'roundtrip-report.json');
-await writeFile(reportPath, JSON.stringify({ sdkVersion: '2.5.0', results }, null, 2));
+await writeFile(reportPath, JSON.stringify({ declaredSdkVersion: packageJson.dependencies['@superdoc/sdk'], runtimeSdkVersion, results }, null, 2));
 console.log(`Report: ${reportPath}`);
 
 if (results.some((result) => !result.ok)) process.exitCode = 1;

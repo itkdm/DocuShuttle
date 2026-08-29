@@ -6,6 +6,7 @@
     "dev": "vite --host 127.0.0.1"
   },
   "dependencies": {
+    "html-to-image": "1.11.13",
     "superdoc": "2.10.0",
     "vite": "7.1.4"
   }

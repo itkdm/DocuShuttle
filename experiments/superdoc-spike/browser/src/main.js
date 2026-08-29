@@ -1,4 +1,5 @@
 import { SuperDoc } from 'superdoc';
+import { toBlob } from 'html-to-image';
 import 'superdoc/style.css';
 import './style.css';
 
@@ -45,6 +46,46 @@ function mount(documentSource) {
   });
 }
 
+const pageElement = (pageNumber) =>
+  editor.querySelector(`[data-page-number="${pageNumber}"]`);
+
+async function capturePage(pageNumber) {
+  const page = pageElement(pageNumber);
+  if (!page) throw new Error(`page ${pageNumber} was not found`);
+  const images = [...page.querySelectorAll('img')];
+  const originalSources = images.map((image) => image.getAttribute('src'));
+  try {
+    await Promise.all(images.map(async (image) => {
+      const source = image.getAttribute('src');
+      if (!source || source.startsWith('data:')) return;
+      const response = await fetch(source);
+      if (!response.ok) throw new Error(`could not read image resource (${response.status})`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      let binary = '';
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      const contentType = response.headers.get('content-type') || 'image/png';
+      image.setAttribute('src', `data:${contentType};base64,${btoa(binary)}`);
+    }));
+    const blob = await toBlob(page, {
+      backgroundColor: '#ffffff',
+      cacheBust: true,
+      pixelRatio: 1,
+    });
+    if (!(blob instanceof Blob) || blob.size === 0 || blob.type !== 'image/png') {
+      throw new Error('page capture did not produce a non-empty PNG Blob');
+    }
+    return blob;
+  } finally {
+    images.forEach((image, index) => {
+      const source = originalSources[index];
+      if (source === null) image.removeAttribute('src');
+      else image.setAttribute('src', source);
+    });
+  }
+}
+
+window.__superdocSpike = { capturePage };
+
 fileInput.addEventListener('change', () => {
   const file = fileInput.files?.[0];
   if (file) mount(file);
@@ -72,13 +113,26 @@ exportButton.addEventListener('click', async () => {
 });
 
 captureButton.addEventListener('click', async () => {
-  const page = editor.querySelector('[data-page-number="1"], .superdoc-page, .page');
-  if (!page) {
-    report('未发现稳定的公开 page boundary；当前 DOM 探测未找到页面元素。');
-    return;
+  captureButton.disabled = true;
+  try {
+    const pageNumbers = [...editor.querySelectorAll('[data-page-number]')]
+      .map((element) => Number(element.getAttribute('data-page-number')))
+      .filter(Number.isInteger);
+    const middlePage = pageNumbers[Math.floor(pageNumbers.length / 2)] ?? pageNumbers[0];
+    const captures = [];
+    for (const pageNumber of [...new Set([pageNumbers[0], middlePage])]) {
+      const blob = await capturePage(pageNumber);
+      window.__superdocSpike[`page${pageNumber}`] = blob;
+      captures.push(`page ${pageNumber}: ${blob.size} bytes ${blob.type}`);
+    }
+    report(`JS PNG capture 成功（非 DevTools）：${captures.join('；')}`);
+    console.info('SuperDoc programmatic page capture completed', captures);
+  } catch (error) {
+    report(`JS PNG capture 失败：${error?.message ?? error}`);
+    console.error('SuperDoc programmatic page capture error', error);
+  } finally {
+    captureButton.disabled = false;
   }
-  report(`发现页面候选元素：${page.tagName.toLowerCase()}，class=${page.className || '(none)'}；该 selector 仅用于 Spike 探测。`);
-  console.info('SuperDoc page capture candidate', { tag: page.tagName, className: page.className, rect: page.getBoundingClientRect().toJSON() });
 });
 
 setStatus('请选择或加载真实 DOCX');

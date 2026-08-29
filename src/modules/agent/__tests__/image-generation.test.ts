@@ -5,6 +5,7 @@ import type { ImageGenerationPort } from "@/modules/generation/ports";
 import type { PrivateObjectStoragePort } from "@/modules/storage/ports";
 
 const bytes = new Uint8Array([1, 2, 3]);
+const hashLogical = async (value: unknown) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)))), (item) => item.toString(16).padStart(2, "0")).join("");
 const storage = () => ({ put: vi.fn(), get: vi.fn(), remove: vi.fn(), createSignedUpload: vi.fn(), createSignedDownload: vi.fn(), ensureObject: vi.fn() }) as unknown as PrivateObjectStoragePort;
 const jobStore = (options?: { failCompletedUpdate?: boolean }) => { const jobs = new Map<string, ImageGenerationJob>(); let failCompletedUpdate = options?.failCompletedUpdate ?? false; return { jobs, async createOrGet(input: Omit<ImageGenerationJob, "status" | "createdAt" | "updatedAt">) { const existing = jobs.get(input.idempotencyKey); if (existing) return existing; const job: ImageGenerationJob = { ...input, status: "created" }; jobs.set(input.idempotencyKey, job); return job; }, async get(key: string) { return jobs.get(key); }, async claimForSubmission(id: string) { const job = [...jobs.values()].find((value) => value.id === id); if (!job || job.status !== "created") return false; job.status = "submitting"; return true; }, async update(id: string, patch: Partial<Pick<ImageGenerationJob, "status" | "providerTaskId" | "result" | "errorCode" | "errorMessage">>) { const job = [...jobs.values()].find((value) => value.id === id); if (!job) throw new Error("missing job"); if (failCompletedUpdate && patch.status === "completed") { failCompletedUpdate = false; throw new Error("response lost"); } Object.assign(job, patch); return job; } }; };
 
@@ -41,6 +42,38 @@ describe("Agent image generation", () => {
     expect(result).toMatchObject({ assetId: "asset" });
     expect(provider.submit).not.toHaveBeenCalled();
     expect(provider.poll).toHaveBeenCalledWith("provider-task", undefined);
+  });
+
+  it("keeps a submitted job durable when polling is externally aborted", async () => {
+    const jobs = jobStore();
+    const created = await jobs.createOrGet({ id: "job", ownerUserId: "owner", taskId: "task", runId: "run", callId: "call", idempotencyKey: "key", requestHash: "6e5398aeecabb7e36f46b28ebd2f026868067ef91ffd9f6e8ac5798db06d92a4", provider: "fake", candidateAssetId: "asset", safeRequest: {} });
+    await jobs.update(created.id, { status: "submitted", providerTaskId: "provider-task" });
+    let pollCalls = 0;
+    const provider: ImageGenerationPort = { provider: "fake", submit: vi.fn(), poll: vi.fn(async (_taskId, signal) => { pollCalls += 1; if (pollCalls === 1) return new Promise<never>((_resolve, reject) => { const rejectAborted = () => reject(new DOMException("aborted", "AbortError")); if (signal?.aborted) rejectAborted(); else signal?.addEventListener("abort", rejectAborted, { once: true }); }); return { status: "completed" as const, providerTaskId: "provider-task", images: [{ mimeType: "image/png", bytes }] }; }), generate: vi.fn() };
+    const controller = new AbortController();
+    const service = new AgentImageGenerationService(provider, jobs, { ensureGenerated: vi.fn(async ({ id }) => ({ id })), load: vi.fn(async () => null) }, storage(), { resolve: vi.fn() }, { fetch: vi.fn() }, "owner", "task", "run", "call", "key");
+    const execution = service.execute({ prompt: "x", purpose: "create", quality: "standard" }, controller.signal);
+    controller.abort(new Error("transport interrupted"));
+    await expect(execution).rejects.toThrow("transport interrupted");
+    expect((await jobs.get("key"))?.status).toBe("submitted");
+    expect((await jobs.get("key"))?.providerTaskId).toBe("provider-task");
+    const result = await service.execute({ prompt: "x", purpose: "create", quality: "standard" });
+    expect(result).toMatchObject({ assetId: "asset" });
+    expect(provider.submit).not.toHaveBeenCalled();
+    expect(provider.poll).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves logical reference count during submitted recovery", async () => {
+    const jobs = jobStore();
+    const logicalRequest: { prompt: string; purpose: "similar"; quality: "standard"; references: [{ source: "working-document"; nodeId: string }] } = { prompt: "x", purpose: "similar", quality: "standard", references: [{ source: "working-document", nodeId: "node-1" }] };
+    await jobs.createOrGet({ id: "job", ownerUserId: "owner", taskId: "task", runId: "run", callId: "call", idempotencyKey: "key", requestHash: await hashLogical(logicalRequest), provider: "fake", candidateAssetId: "asset", safeRequest: { ...logicalRequest, references: [{ ...logicalRequest.references[0], revision: "A", fingerprint: "A" }] } });
+    await jobs.update("job", { status: "submitted", providerTaskId: "provider-task" });
+    const resolver = vi.fn(async () => { throw new Error("MUST_NOT_RESOLVE"); });
+    const provider: ImageGenerationPort = { provider: "fake", submit: vi.fn(), poll: vi.fn(async () => ({ status: "completed" as const, providerTaskId: "provider-task", images: [{ mimeType: "image/png", bytes }] })), generate: vi.fn() };
+    const result = await new AgentImageGenerationService(provider, jobs, { ensureGenerated: vi.fn(async ({ id }) => ({ id })), load: vi.fn(async () => null) }, storage(), { resolve: resolver }, { fetch: vi.fn() }, "owner", "task", "run", "call", "key").execute(logicalRequest);
+    expect(result).toMatchObject({ referenceCount: 1 });
+    expect(resolver).not.toHaveBeenCalled();
+    expect(provider.submit).not.toHaveBeenCalled();
   });
 
   it("replays a completed job without resolving mutable references", async () => {

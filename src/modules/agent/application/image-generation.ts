@@ -81,7 +81,7 @@ export class AgentImageGenerationService {
         await this.jobs.update(job.id, { status: ambiguous ? "ambiguous" : "failed", errorCode: ambiguous ? "IMAGE_GENERATION_SUBMISSION_AMBIGUOUS" : "IMAGE_GENERATION_FAILED", errorMessage: error instanceof Error ? error.message : "Image submission failed" });
         throw error;
       }
-      if (submitted.status === "completed") return this.persistCompletedImage(job, input, refs.length, submitted.images?.[0], signal);
+        if (submitted.status === "completed") return this.persistCompletedImage(job, input, logicalRequest.references.length, submitted.images?.[0], signal);
       if (!submitted.providerTaskId) {
         await this.jobs.update(job.id, { status: "ambiguous", errorCode: "IMAGE_GENERATION_SUBMISSION_AMBIGUOUS", errorMessage: "Provider submission returned no task id" });
         throw new Error("IMAGE_GENERATION_SUBMISSION_AMBIGUOUS");
@@ -92,17 +92,17 @@ export class AgentImageGenerationService {
     let polled;
     for (;;) {
       try { polled = await this.provider.poll(completed.providerTaskId, signal); break; }
-      catch (error) { if (!(error && typeof error === "object" && "retryable" in error && (error as { retryable?: boolean }).retryable)) { await this.jobs.update(job.id, { status: "failed", errorCode: "IMAGE_GENERATION_POLL_FAILED", errorMessage: error instanceof Error ? error.message : "Image polling failed" }); throw error; } await abortableDelay(2_000, signal); }
+      catch (error) { if (signal?.aborted) throw signal.reason ?? error; if (!(error && typeof error === "object" && "retryable" in error && (error as { retryable?: boolean }).retryable)) { await this.jobs.update(job.id, { status: "failed", errorCode: "IMAGE_GENERATION_POLL_FAILED", errorMessage: error instanceof Error ? error.message : "Image polling failed" }); throw error; } await abortableDelay(2_000, signal); }
     }
     while (polled.status === "pending") {
       await abortableDelay(2_000, signal);
-      try { polled = await this.provider.poll(completed.providerTaskId, signal); } catch (error) { if (!(error && typeof error === "object" && "retryable" in error && (error as { retryable?: boolean }).retryable)) { await this.jobs.update(job.id, { status: "failed", errorCode: "IMAGE_GENERATION_POLL_FAILED", errorMessage: error instanceof Error ? error.message : "Image polling failed" }); throw error; } }
+      try { polled = await this.provider.poll(completed.providerTaskId, signal); } catch (error) { if (signal?.aborted) throw signal.reason ?? error; if (!(error && typeof error === "object" && "retryable" in error && (error as { retryable?: boolean }).retryable)) { await this.jobs.update(job.id, { status: "failed", errorCode: "IMAGE_GENERATION_POLL_FAILED", errorMessage: error instanceof Error ? error.message : "Image polling failed" }); throw error; } }
     }
     if (polled.status === "failed") { await this.jobs.update(job.id, { status: "failed", errorCode: "IMAGE_GENERATION_FAILED", errorMessage: polled.error }); throw new Error(polled.error ?? "IMAGE_GENERATION_FAILED"); }
     const image = polled.images?.[0]; if (!image) throw new Error("IMAGE_GENERATION_EMPTY_RESULT");
     const binary = image.bytes ? { bytes: image.bytes, mimeType: image.mimeType } : image.remoteUrl ? await this.fetcher.fetch(image.remoteUrl, signal) : undefined; if (!binary) throw new Error("IMAGE_GENERATION_EMPTY_RESULT");
     if (!allowed.has(binary.mimeType) || binary.bytes.byteLength > 20 * 1024 * 1024) throw new Error("IMAGE_GENERATION_TYPE_UNSUPPORTED");
-    return this.persistCompletedImage(job, input, refs.length, { ...image, bytes: binary.bytes, mimeType: binary.mimeType }, signal);
+    return this.persistCompletedImage(job, input, logicalRequest.references.length, { ...image, bytes: binary.bytes, mimeType: binary.mimeType }, signal);
   }
   private async persistCompletedImage(job: ImageGenerationJob, input: z.infer<typeof generateImageSchema>, referenceCount: number, image: { bytes?: Uint8Array; mimeType: string; remoteUrl?: string; providerRequestId?: string } | undefined, signal?: AbortSignal) {
     if (!image) throw new Error("IMAGE_GENERATION_EMPTY_RESULT");

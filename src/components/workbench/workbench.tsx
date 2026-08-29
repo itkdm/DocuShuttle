@@ -26,7 +26,8 @@ import { initialConversationLoading, shouldHoldConversationRestore, startProgres
 import { createApprovalSubmissionGate } from "./approval-submission-gate";
 import { shouldPreserveSubmittedUserReply } from "./user-input-recovery";
 import type { AgentImageAttachment } from "@/modules/agent/application/message-parts";
-import type { DocumentSurfacePort } from "@/modules/documents";
+import { ManualEditRequestError, saveBrowserManualDocumentEdit } from "@/modules/documents";
+import type { DocumentEditorPort, DocumentEditorState, DocumentSurfacePort } from "@/modules/documents";
 
 const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
@@ -68,6 +69,10 @@ export function Workbench() {
   const [run, setRun] = useState<AgentRun>();
   const agentAbortRef = useRef<AbortController | undefined>(undefined);
   const surfaceRef = useRef<DocumentSurfacePort | undefined>(undefined);
+  const editorRef = useRef<DocumentEditorPort | undefined>(undefined);
+  const [manualEditing, setManualEditing] = useState(false);
+  const [editorState, setEditorState] = useState<DocumentEditorState>({ ready: false, dirty: false, baseRevision: "" });
+  const [manualSaving, setManualSaving] = useState(false);
   const clientToolSubmissionRef = useRef<string | undefined>(undefined);
   const [surfaceReadyVersion, setSurfaceReadyVersion] = useState(0);
   const handleSurfaceReady = useCallback(() => setSurfaceReadyVersion((version) => version + 1), []);
@@ -82,6 +87,11 @@ export function Workbench() {
   const approvalSubmissionGateRef = useRef(createApprovalSubmissionGate());
   const taskListRequestRef = useRef<Promise<TaskPage> | undefined>(undefined);
   const runtimeView = resolveAgentRuntimeView({ run, checkpoint: loopResult?.checkpoint });
+  const hasActiveAgent = ["queued", "running", "awaiting_approval", "awaiting_user", "awaiting_client"].includes(runtimeView.runtimeStatus);
+  const confirmDiscardManualEdits = useCallback(() => {
+    if (!manualEditing || !editorState.dirty) return true;
+    return window.confirm("当前文档有未保存修改，确定放弃吗？");
+  }, [editorState.dirty, manualEditing]);
   const conversationRestoring = shouldHoldConversationRestore({
     routeTaskId,
     conversationLoading,
@@ -97,6 +107,10 @@ export function Workbench() {
   }, [setActiveEvents, setLoopResult]);
 
   const resetWorkspace = useCallback(() => {
+    editorRef.current?.destroy();
+    editorRef.current = undefined;
+    setManualEditing(false);
+    setEditorState({ ready: false, dirty: false, baseRevision: "" });
     loadedTaskIdRef.current = undefined;
     setAssets(initialAssets);
     setSourceState(emptySourceRegistrationState());
@@ -431,7 +445,51 @@ export function Workbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyRuntimeResult, documentLoad, loopResult, run, surfaceReadyVersion, taskId, workspaceReady]);
 
+  useEffect(() => {
+    if (!manualEditing || !editorState.dirty) return;
+    const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => window.removeEventListener("beforeunload", beforeUnload);
+  }, [editorState.dirty, manualEditing]);
+
+  const beginManualEdit = useCallback(() => {
+    if (hasActiveAgent) { setNotice("Agent 正在运行，请等待本轮结束后再编辑"); return; }
+    if (documentLoad.status !== "ready" || !workspaceReady) { setNotice("请先打开一份已保存的 DOCX"); return; }
+    setEditorState({ ready: false, dirty: false, baseRevision: documentLoad.document.revision ?? "" });
+    setManualEditing(true);
+  }, [documentLoad, hasActiveAgent, workspaceReady]);
+
+  const discardManualEdit = useCallback(() => {
+    if (!confirmDiscardManualEdits()) return;
+    editorRef.current?.destroy();
+    editorRef.current = undefined;
+    setManualEditing(false);
+    setEditorState({ ready: false, dirty: false, baseRevision: "" });
+    setNotice("已放弃未保存的手动修改");
+  }, [confirmDiscardManualEdits]);
+
+  const saveManualEdit = useCallback(async () => {
+    if (!taskId || documentLoad.status !== "ready" || !editorRef.current || !editorState.dirty || manualSaving) return;
+    setManualSaving(true);
+    try {
+      const exported = await editorRef.current.exportDocument();
+      const fileName = documentLoad.document.file.name;
+      const result = await saveBrowserManualDocumentEdit({ taskId, expectedRevision: editorState.baseRevision, file: exported.blob, fileName });
+      const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
+      setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
+      const inspection = await inspectBrowserTaskDocument(taskId);
+      setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
+      await refreshVersions(taskId);
+      editorRef.current?.destroy(); editorRef.current = undefined;
+      setManualEditing(false); setEditorState({ ready: false, dirty: false, baseRevision: result.revision });
+      setNotice(result.noChange ? "没有检测到文档变化" : "手动修改已保存为新版本");
+    } catch (error) {
+      setNotice(error instanceof ManualEditRequestError && error.status === 409 ? "文档已在其他位置更新，当前修改尚未保存" : error instanceof Error ? error.message : "手动编辑保存失败");
+    } finally { setManualSaving(false); }
+  }, [documentLoad, editorState, manualSaving, taskId]);
+
   const runAgent = async (prompt: string, attachments: readonly AgentImageAttachment[] = [], lifecycle?: { accepted: () => void; failed: () => void }) => {
+    if (manualEditing) { setNotice("请先保存或放弃手动修改，再运行 Agent"); return; }
     if (!workspaceReady || !taskId) {
       setNotice("请先打开一份 DOCX，建立文档工作区");
       return;
@@ -582,17 +640,20 @@ export function Workbench() {
   };
 
   const startNewTask = () => {
+    if (!confirmDiscardManualEdits()) return;
     resetWorkspace();
     if (pathname !== "/") router.push("/");
   };
 
   const openTask = (id: string) => {
     if (id === routeTaskId) return;
+    if (!confirmDiscardManualEdits()) return;
     router.push(taskUrl(id));
   };
 
   const upload = async (kind: UploadAsset["kind"], file?: File) => {
     if (!file) return;
+    if (!confirmDiscardManualEdits()) return;
     const isTemplate = kind === "template";
     const creatingNewTask = !taskId;
     const maySeedWorkingDocument = isTemplate || !sourceState.workingDocumentId;
@@ -722,7 +783,7 @@ export function Workbench() {
 
       <div className={`workspace-grid ${leftOpen ? "has-left" : ""} ${rightOpen ? "has-right" : ""}`}>
         {leftOpen ? <OutlinePanel assets={assets} onCollapse={() => setLeftOpen(false)} onUpload={upload} documentReady={documentLoad.status === "ready"} paragraphCount={paragraphCount} tableCellCount={tableCellCount} imageCount={imageNodes.length} tasks={tasks} activeTaskId={taskId} onSelectTask={openTask} onCreateTask={startNewTask} onLoadMoreTasks={loadMoreTasks} hasMoreTasks={nextTaskOffset !== null} loadingMoreTasks={loadingMoreTasks} loadingTasks={loadingTasks} /> : <button className="edge-tab left" onClick={() => setLeftOpen(true)} aria-label="展开文档结构"><PanelLeftOpen size={17} /><span>结构</span></button>}
-        <div id="document-canvas" className="document-column"><DocumentCanvas key={documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}-${documentLoad.document.revision ?? ""}` : documentLoad.status} loadState={documentLoad} onChoose={chooseWorkingDocument} surfaceRef={surfaceRef} onSurfaceReady={handleSurfaceReady} /></div>
+        <div id="document-canvas" className="document-column"><DocumentCanvas key={`${documentLoad.status === "ready" ? `${documentLoad.document.file.name}-${documentLoad.document.bytes.byteLength}-${documentLoad.document.revision ?? ""}` : documentLoad.status}-${manualEditing ? "editor" : "preview"}`} loadState={documentLoad} onChoose={chooseWorkingDocument} surfaceRef={surfaceRef} editing={manualEditing} editorState={editorState} editorRef={editorRef} onEdit={beginManualEdit} onSave={() => void saveManualEdit()} onDiscard={discardManualEdit} onEditorStateChange={setEditorState} onSurfaceReady={handleSurfaceReady} /></div>
         {rightOpen ? <AgentPanel taskId={taskId} runtimeView={runtimeView} run={run} activeEvents={activeEvents} historicalEvents={historicalEvents} onLoopApproval={decideLoop} messages={messages} onCollapse={() => setRightOpen(false)} onRun={runAgent} onCancel={cancelRun} workspaceReady={workspaceReady} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} onLoadEarlier={loadEarlierConversationMessages} hasEarlierMessages={Boolean(conversationCursor)} loadingEarlierMessages={loadingEarlierMessages} conversationLoading={conversationRestoring} approvalSubmitting={approvalSubmitting} /> : <button className="edge-tab right" onClick={() => setRightOpen(true)} aria-label="展开 Agent 面板"><PanelRightOpen size={17} /><span>Agent</span></button>}
       </div>
 

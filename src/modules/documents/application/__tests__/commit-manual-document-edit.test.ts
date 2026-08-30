@@ -5,6 +5,7 @@ import { CommitManualDocumentEdit, MANUAL_EDIT_DOCX_MIME } from "../commit-manua
 const inspection = (revision: string) => ({ manifest: { revision, entries: [], nodes: [] }, capabilities: { replaceText: true, setCellText: true, replaceImage: true, trackedChanges: false }, diagnostics: [], paragraphs: [], tableCells: [], images: [] } as const);
 async function bytes() { const zip = new JSZip(); zip.file("word/document.xml", "<w:document><w:body><w:p>changed</w:p></w:body></w:document>"); return new Uint8Array(await zip.generateAsync({ type: "uint8array" })); }
 async function unsupportedSourceBytes() { const zip = new JSZip(); zip.file("word/document.xml", "<w:document><w:body><w:p><w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p></w:body></w:document>"); zip.file("word/footnotes.xml", "<w:footnotes><w:footnote w:id=\"1\"><w:p>note</w:p></w:footnote></w:footnotes>"); return new Uint8Array(await zip.generateAsync({ type: "uint8array" })); }
+async function embeddedObjectSourceBytes() { const zip = new JSZip(); zip.file("word/document.xml", "<w:document><w:body><w:p><w:r><w:object><v:shape><v:imagedata/></v:shape><o:OLEObject Type=\"Embed\"/></w:object></w:r></w:p></w:body></w:document>"); return new Uint8Array(await zip.generateAsync({ type: "uint8array" })); }
 const input = async (revision: string) => ({ taskId: "11111111-1111-4111-8111-111111111111", ownerUserId: "user-1", expectedRevision: revision, bytes: await bytes(), mimeType: MANUAL_EDIT_DOCX_MIME, fileName: "edited.docx" });
 
 function harness(result: "success" | "conflict" | "error" = "success", source: "clean" | "unsupported" = "clean") {
@@ -30,6 +31,12 @@ describe("CommitManualDocumentEdit", () => {
 
   it("rejects an unsupported authoritative source even when exported output is clean", async () => {
     const h = harness("success", "unsupported");
+    await expect(h.useCase.execute(await input("a".repeat(64)))).rejects.toMatchObject({ code: "MANUAL_EDIT_UNSUPPORTED_FEATURE" });
+    expect(h.versions.commit).not.toHaveBeenCalled(); expect(h.storage.put).not.toHaveBeenCalled();
+  });
+
+  it("rejects an embedded-object source before creating a version", async () => {
+    const h = harness(); h.storage.get.mockResolvedValue(await embeddedObjectSourceBytes());
     await expect(h.useCase.execute(await input("a".repeat(64)))).rejects.toMatchObject({ code: "MANUAL_EDIT_UNSUPPORTED_FEATURE" });
     expect(h.versions.commit).not.toHaveBeenCalled(); expect(h.storage.put).not.toHaveBeenCalled();
   });

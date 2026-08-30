@@ -21,7 +21,7 @@ import { taskIdFromPathname, taskUrl } from "@/modules/tasks/task-url";
 import { ensureAnonymousSession } from "@/infrastructure/supabase/browser";
 import type { AgentRun } from "@/modules/agent";
 import type { AgentPermissionMode } from "@/modules/agent/application/loop";
-import { inspectManualEditCapabilities } from "@/modules/documents/application/manual-edit-capability";
+import { inspectManualEditCapabilities, manualEditUnsupportedNotice } from "@/modules/documents/application/manual-edit-capability";
 import type { DocumentLoadState, UploadAsset, VersionItem } from "./types";
 import { resolveAgentRuntimeView } from "./runtime-view-state";
 import { initialConversationLoading, shouldHoldConversationRestore, startProgressiveProjection } from "./progressive-restore";
@@ -458,8 +458,7 @@ export function Workbench() {
     if (documentLoad.status !== "ready" || !workspaceReady) { setNotice("请先打开一份已保存的 DOCX"); return; }
     const unsupported = await inspectManualEditCapabilities(new Uint8Array(documentLoad.document.bytes));
     if (unsupported.length) {
-      const labels = { footnote: "脚注", endnote: "尾注", tracked_changes: "修订" } as const;
-      setNotice(`这份文档包含当前手动编辑模式尚未安全支持的功能：${unsupported.map((feature) => labels[feature]).join("、")}`);
+      setNotice(manualEditUnsupportedNotice(unsupported));
       return;
     }
     setEditorState({ ready: false, dirty: false, baseRevision: documentLoad.document.revision ?? "" });

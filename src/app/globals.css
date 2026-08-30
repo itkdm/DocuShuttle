@@ -121,6 +121,7 @@ button:focus-visible, textarea:focus-visible, label:has(input:focus-visible) { o
 .superdoc-editor-shell { min-height: 720px; height: calc(100dvh - 190px); background: #f3f3ed; overflow: auto; }
 .superdoc-toolbar { position: sticky; top: 0; z-index: 2; background: #fffef8; border-bottom: 1px solid #d1d2c8; }
 .superdoc-editor-host { min-height: 650px; padding: 24px; }
+.superdoc-viewer-host { min-height: 100%; width: 100%; }
 .preview-state { display: flex; align-items: center; gap: 6px; font-size: 9px; color: var(--muted); letter-spacing: .04em; }
 .preview-state i { width: 7px; height: 7px; border-radius: 50%; background: #9d9f97; }.preview-state i.ready { background: var(--green); box-shadow: 0 0 0 3px rgba(65,106,80,.12); }
 .canvas-upload { height: 28px; padding: 0 9px; border: 1px solid #c5c6bc; background: rgba(255,255,250,.8); border-radius: 4px; display: flex; align-items: center; gap: 5px; font-size: 9px; cursor: pointer; }.canvas-upload:hover { border-color: var(--duck-dark); }.canvas-upload input, .canvas-empty input, .canvas-error input { position: absolute; width: 1px; height: 1px; opacity: 0; }

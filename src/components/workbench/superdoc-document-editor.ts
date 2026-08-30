@@ -99,7 +99,7 @@ export class SuperDocDocumentSurface implements DocumentSurfacePort {
 
   getState(): DocumentSurfaceState {
     const editorState = this.editor.getState();
-    return { ready: editorState.ready, dirty: editorState.dirty, renderedRevision: editorState.baseRevision, pageCount: 1 };
+    return { ready: editorState.ready, dirty: editorState.dirty, renderedRevision: editorState.baseRevision };
   }
 
   async captureVisible(): Promise<DocumentVisibleCapture> {

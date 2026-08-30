@@ -2,7 +2,7 @@ export type DocumentSurfaceState = {
   ready: boolean;
   renderedRevision?: string;
   dirty: boolean;
-  pageCount: number;
+  pageCount?: number;
   currentPage?: number;
 };
 

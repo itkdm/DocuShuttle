@@ -27,6 +27,14 @@ async function protectedRelationshipSource(): Promise<Uint8Array> {
   });
 }
 
+async function protectedSourceRelationshipPackage(): Promise<Uint8Array> {
+  return createDocx({
+    "customXml/item1.xml": "<custom/>\n",
+    "customXml/item2.xml": "<custom-target/>\n",
+    "customXml/_rels/item1.xml.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rIdCustom\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml\" Target=\"item2.xml\"/></Relationships>",
+  });
+}
+
 async function report(sourceBytes: Uint8Array, outputBytes: Uint8Array) {
   return sentinel.verify({ sourceBytes, outputBytes });
 }
@@ -99,8 +107,16 @@ describe("OoxmlRoundTripPreservationSentinel", () => {
     const source = await createDocx();
     const output = await rewrite(source, async (zip) => {
       zip.file("word/media/image2.png", originalImage);
-      zip.file("word/_rels/document.xml.rels", (await entryText(zip, "word/_rels/document.xml.rels")).replace("Target=\"media/image1.png\"", "Target=\"media/image2.png\""));
+      zip.file("word/_rels/document.xml.rels", (await entryText(zip, "word/_rels/document.xml.rels")).replace("</Relationships>", '<Relationship Id="rIdImage2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image2.png"/></Relationships>'));
     });
     await expect(report(source, output)).resolves.toMatchObject({ safe: true, issues: [] });
+  });
+
+  it("rejects a relationship added to a protected source part", async () => {
+    const source = await protectedSourceRelationshipPackage();
+    const output = await rewrite(source, async (zip) => {
+      zip.file("customXml/_rels/item1.xml.rels", (await entryText(zip, "customXml/_rels/item1.xml.rels")).replace("</Relationships>", '<Relationship Id="rIdAdded" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="item2.xml"/></Relationships>'));
+    });
+    await expect(report(source, output)).resolves.toMatchObject({ safe: false, issues: expect.arrayContaining([expect.objectContaining({ code: "ROUND_TRIP_RELATIONSHIP_ADDED", entry: "customXml/item1.xml relationships", relationshipId: "rIdAdded" })]) });
   });
 });

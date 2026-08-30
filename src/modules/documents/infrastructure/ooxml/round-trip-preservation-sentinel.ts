@@ -22,6 +22,16 @@ const issue = (
   value: DocumentRoundTripPreservationIssue,
 ): DocumentRoundTripPreservationIssue => value;
 
+function relationshipSignature(relationship: OpcRelationship): string {
+  return JSON.stringify([
+    relationship.id,
+    relationship.type,
+    relationship.target,
+    relationship.targetMode,
+    relationship.resolvedPart,
+  ]);
+}
+
 function protectedParts(source: LoadedPackage): ReadonlySet<string> {
   return new Set([...source.entries.keys()].filter((path) => !managedPart(path)));
 }
@@ -99,6 +109,20 @@ function compareRelationshipSet(
         relationshipId: relationship.id,
         relationshipType: relationship.type,
         reason: "protected relationship target or type changed",
+      }));
+    }
+  }
+  if (sourceIsProtected) {
+    const originalRelationships = new Set(sourceRelationships.map((relationship) => relationshipSignature(relationship)));
+    const entry = sourcePart ? `${sourcePart} relationships` : "_rels/.rels";
+    for (const relationship of output.graph.relationshipsFor(sourcePart)) {
+      if (originalRelationships.has(relationshipSignature(relationship))) continue;
+      issues.push(issue({
+        code: "ROUND_TRIP_RELATIONSHIP_ADDED",
+        entry,
+        relationshipId: relationship.id,
+        relationshipType: relationship.type,
+        reason: "output added a relationship to a protected source part",
       }));
     }
   }

@@ -36,6 +36,9 @@ export class CommitManualDocumentEdit {
       throw new ManualEditError("MANUAL_EDIT_ROUND_TRIP_UNSAFE", "这次修改无法安全保存，因为编辑器可能会丢失文档中的部分原有内容。原文档没有被修改，本次编辑尚未保存。");
     }
     const validation = await this.engine.validate(input.bytes);
+    if (validation.validation?.valid !== true) {
+      throw new ManualEditError("MANUAL_EDIT_VALIDATION_FAILED", "这次修改生成的文档没有通过完整性检查，原文档没有被修改，本次编辑尚未保存。");
+    }
     const reopened = await this.engine.inspect(input.bytes);
     if (reopened.manifest.revision !== validation.manifest.revision) throw new ManualEditError("MANUAL_EDIT_VALIDATION_MISMATCH", "The edited document failed reopen validation.");
     const revision = validation.manifest.revision;

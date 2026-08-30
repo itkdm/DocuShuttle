@@ -5,6 +5,7 @@ export type DocumentRoundTripIssueCode =
   | "ROUND_TRIP_UNSUPPORTED_PART_ADDED"
   | "ROUND_TRIP_RELATIONSHIP_LOST"
   | "ROUND_TRIP_RELATIONSHIP_CHANGED"
+  | "ROUND_TRIP_RELATIONSHIP_ADDED"
   | "ROUND_TRIP_PACKAGE_INVALID";
 
 export interface DocumentRoundTripPreservationIssue {

@@ -3,6 +3,7 @@ import type { DocumentEnginePort } from "./document-engine-port";
 import { inspectManualEditCapabilities, type ManualDocumentEditCapability } from "./manual-edit-capability";
 import type { PrivateObjectStoragePort } from "@/modules/storage/ports";
 import { buildTaskObjectKey } from "@/modules/storage/object-key";
+import type { DocumentRoundTripSentinelPort } from "./document-round-trip-sentinel-port";
 
 export const MANUAL_EDIT_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" as const;
 const MAX_BYTES = 20 * 1024 * 1024;
@@ -17,7 +18,7 @@ export interface ManualEditVersionPort { commit(input: { documentId: string; exp
 export class ManualEditError extends Error { constructor(public readonly code: string, message: string) { super(message); this.name = "ManualEditError"; } }
 
 export class CommitManualDocumentEdit {
-  constructor(private readonly documents: ManualEditDocumentPort, private readonly versions: ManualEditVersionPort, private readonly storage: PrivateObjectStoragePort, private readonly engine: DocumentEnginePort) {}
+  constructor(private readonly documents: ManualEditDocumentPort, private readonly versions: ManualEditVersionPort, private readonly storage: PrivateObjectStoragePort, private readonly engine: DocumentEnginePort, private readonly sentinel: DocumentRoundTripSentinelPort) {}
 
   async execute(raw: ManualEditInput) {
     const input = manualEditInputSchema.parse(raw);
@@ -30,6 +31,10 @@ export class CommitManualDocumentEdit {
     if (sourceUnsupported.length) throw new ManualEditError("MANUAL_EDIT_UNSUPPORTED_FEATURE", `Manual editing does not support: ${sourceUnsupported.join(", ")}.`);
     const outputUnsupported = await inspectManualEditCapabilities(input.bytes);
     if (outputUnsupported.length) throw new ManualEditError("MANUAL_EDIT_UNSUPPORTED_FEATURE", `Manual editing does not support: ${outputUnsupported.join(", ")}.`);
+    const preservation = await this.sentinel.verify({ sourceBytes, outputBytes: input.bytes });
+    if (!preservation.safe) {
+      throw new ManualEditError("MANUAL_EDIT_ROUND_TRIP_UNSAFE", "这次修改无法安全保存，因为编辑器可能会丢失文档中的部分原有内容。原文档没有被修改，本次编辑尚未保存。");
+    }
     const validation = await this.engine.validate(input.bytes);
     const reopened = await this.engine.inspect(input.bytes);
     if (reopened.manifest.revision !== validation.manifest.revision) throw new ManualEditError("MANUAL_EDIT_VALIDATION_MISMATCH", "The edited document failed reopen validation.");

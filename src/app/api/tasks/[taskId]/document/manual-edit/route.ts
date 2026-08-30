@@ -5,6 +5,7 @@ import { logger } from "@/infrastructure/observability";
 import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { CommitManualDocumentEdit, MANUAL_EDIT_DOCX_MIME, ManualEditError } from "@/modules/documents";
 import { OoxmlPreservationKernel } from "@/modules/documents/infrastructure/ooxml/ooxml-preservation-kernel";
+import { OoxmlRoundTripPreservationSentinel } from "@/modules/documents/infrastructure/ooxml/round-trip-preservation-sentinel";
 import { SupabaseStorageAdapter } from "@/modules/storage/adapters/supabase-storage";
 import { SupabaseUserDocumentVersionCommit, SupabaseWorkingDocumentSnapshot } from "@/modules/generation/infrastructure/supabase-image-application";
 
@@ -23,6 +24,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ tas
       new SupabaseUserDocumentVersionCommit(client),
       new SupabaseStorageAdapter(client),
       new OoxmlPreservationKernel(),
+      new OoxmlRoundTripPreservationSentinel(),
     ).execute({ taskId, ownerUserId: userId, expectedRevision, bytes: new Uint8Array(await file.arrayBuffer()), mimeType: file.type as typeof MANUAL_EDIT_DOCX_MIME, fileName: file.name });
     return NextResponse.json(result, { status: result.noChange ? 200 : 201 });
   } catch (error) {

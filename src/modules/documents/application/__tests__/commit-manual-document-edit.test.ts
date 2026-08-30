@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import { describe, expect, it, vi } from "vitest";
 import { CommitManualDocumentEdit, MANUAL_EDIT_DOCX_MIME } from "../commit-manual-document-edit";
+import type { DocumentRoundTripSentinelPort } from "../document-round-trip-sentinel-port";
 
 const inspection = (revision: string) => ({ manifest: { revision, entries: [], nodes: [] }, capabilities: { replaceText: true, setCellText: true, replaceImage: true, trackedChanges: false }, diagnostics: [], paragraphs: [], tableCells: [], images: [] } as const);
 async function bytes() { const zip = new JSZip(); zip.file("word/document.xml", "<w:document><w:body><w:p>changed</w:p></w:body></w:document>"); return new Uint8Array(await zip.generateAsync({ type: "uint8array" })); }
@@ -13,7 +14,8 @@ function harness(result: "success" | "conflict" | "error" = "success", source: "
   const versions = { commit: vi.fn(async () => result === "conflict" ? { kind: "revision-conflict" as const, actualRevision: "other" } : result === "error" ? Promise.reject(new Error("response lost")) : { versionId: "v1", versionNumber: 2 }) };
   const documents = { load: vi.fn(async () => ({ documentId: "d1", objectKey: "old", revision: "a".repeat(64) })) };
   const engine = { validate: vi.fn(async () => inspection("b".repeat(64))), inspect: vi.fn(async () => inspection("b".repeat(64))), mutate: vi.fn() };
-  return { storage, versions, documents, engine, useCase: new CommitManualDocumentEdit(documents, versions, storage, engine) };
+  const sentinel: DocumentRoundTripSentinelPort = { verify: vi.fn(async () => ({ safe: true, issues: [] })) };
+  return { storage, versions, documents, engine, sentinel, useCase: new CommitManualDocumentEdit(documents, versions, storage, engine, sentinel) };
 }
 
 describe("CommitManualDocumentEdit", () => {
@@ -45,7 +47,21 @@ describe("CommitManualDocumentEdit", () => {
     const h = harness();
     const output = await unsupportedSourceBytes();
     await expect(h.useCase.execute({ ...(await input("a".repeat(64))), bytes: output })).rejects.toMatchObject({ code: "MANUAL_EDIT_UNSUPPORTED_FEATURE" });
-    expect(h.versions.commit).not.toHaveBeenCalled(); expect(h.storage.put).not.toHaveBeenCalled();
+    expect(h.sentinel.verify).not.toHaveBeenCalled(); expect(h.versions.commit).not.toHaveBeenCalled(); expect(h.storage.put).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsafe round trip before engine validation or persistence", async () => {
+    const h = harness();
+    vi.mocked(h.sentinel.verify).mockResolvedValue({ safe: false, issues: [{ code: "ROUND_TRIP_PART_MISSING", entry: "customXml/item1.bin", reason: "protected source part is missing from output" }] });
+    await expect(h.useCase.execute(await input("a".repeat(64)))).rejects.toMatchObject({ code: "MANUAL_EDIT_ROUND_TRIP_UNSAFE" });
+    expect(h.engine.validate).not.toHaveBeenCalled(); expect(h.engine.inspect).not.toHaveBeenCalled();
+    expect(h.storage.put).not.toHaveBeenCalled(); expect(h.versions.commit).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke the sentinel after a source capability failure", async () => {
+    const h = harness("success", "unsupported");
+    await expect(h.useCase.execute(await input("a".repeat(64)))).rejects.toMatchObject({ code: "MANUAL_EDIT_UNSUPPORTED_FEATURE" });
+    expect(h.sentinel.verify).not.toHaveBeenCalled();
   });
 
   it("does not read source bytes after a source revision mismatch", async () => {

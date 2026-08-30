@@ -6,6 +6,7 @@ import { DocxPreviewDocumentSurface } from "./docx-preview-document-surface";
 import { SuperDocDocumentEditor, SuperDocDocumentSurface } from "./superdoc-document-editor";
 import { SuperDocDocumentViewer } from "./superdoc-document-viewer";
 import { resolveDocumentSurfacePreference, type DocumentSurfacePreference } from "./document-surface-preference";
+import { createReadOnlyPreviewProjection } from "@/modules/documents/infrastructure/ooxml/preview-projection";
 
 interface DocumentCanvasProps {
   taskId?: string;
@@ -19,6 +20,12 @@ interface DocumentCanvasProps {
   onSave?: () => void;
   onDiscard?: () => void;
   onEditorStateChange?: (state: DocumentEditorState) => void;
+}
+
+function asArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(copy).set(bytes);
+  return copy;
 }
 
 function DocxRenderer({ bytes, revision, taskId, onError, surfaceRef, onSurfaceReady }: { bytes: ArrayBuffer; revision?: string; taskId?: string; onError: (message: string) => void; surfaceRef?: MutableRefObject<DocumentSurfacePort | undefined>; onSurfaceReady?: (surface: DocumentSurfacePort | undefined) => void }) {
@@ -37,12 +44,12 @@ function DocxRenderer({ bytes, revision, taskId, onError, surfaceRef, onSurfaceR
     const surfaceStartedAt = performance.now();
     recordSurfaceEvent("document.surface.mount.started", { engine: "docx-preview", taskId, revision, bytes: bytes.byteLength });
     const renderStarted = performance.now();
-    import("docx-preview")
-      .then(({ renderAsync }) => renderAsync(bytes.slice(0), body, styles, {
+    void createReadOnlyPreviewProjection(new Uint8Array(bytes.slice(0)))
+      .then(({ bytes: projectedBytes }) => import("docx-preview").then(({ renderAsync }) => renderAsync(asArrayBuffer(projectedBytes), body, styles, {
         className: "paperduck-docx", inWrapper: true, breakPages: true,
         ignoreWidth: false, ignoreHeight: false, ignoreFonts: false,
         useBase64URL: true, renderHeaders: true, renderFooters: true,
-      }))
+      })))
       .then(() => {
         if (active) {
           setRendering(false);
@@ -119,7 +126,6 @@ function SuperDocViewerRenderer({ bytes, revision, taskId, onError, surfaceRef, 
     const surfaceStartedAt = performance.now();
     recordSurfaceEvent("document.surface.mount.started", { engine: "superdoc", taskId, revision, bytes: bytes.byteLength });
     stage.replaceChildren();
-    const documentBlob = new Blob([bytes.slice(0)], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
     const publishReady = (viewer: SuperDocDocumentViewer) => {
       if (!active || readyPublished || !viewer.getState().ready) return;
       readyPublished = true;
@@ -127,9 +133,15 @@ function SuperDocViewerRenderer({ bytes, revision, taskId, onError, surfaceRef, 
       recordSurfaceEvent("document.surface.ready", { engine: "superdoc", taskId, revision, bytes: bytes.byteLength, durationMs: performance.now() - surfaceStartedAt });
       onSurfaceReady?.(viewer);
     };
-    void SuperDocDocumentViewer.mount(stage, documentBlob, revision, { onReady: () => {
-      if (viewerInstance) publishReady(viewerInstance);
-    }, onError }).then((viewer) => {
+    void createReadOnlyPreviewProjection(new Uint8Array(bytes.slice(0)))
+      .then(({ bytes: projectedBytes }) => {
+        if (!active) return undefined;
+        const documentBlob = new Blob([asArrayBuffer(projectedBytes)], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+        return SuperDocDocumentViewer.mount(stage, documentBlob, revision, { onReady: () => {
+          if (viewerInstance) publishReady(viewerInstance);
+        }, onError });
+      }).then((viewer) => {
+      if (!viewer) return;
       viewerInstance = viewer;
       if (!active) viewer.destroy();
       else publishReady(viewer);

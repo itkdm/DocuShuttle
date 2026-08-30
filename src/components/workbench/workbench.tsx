@@ -19,7 +19,7 @@ import { listBrowserTasks, loadBrowserTaskWorkspace, type TaskPage } from "@/mod
 import type { TaskSummary } from "@/modules/tasks/domain";
 import { taskIdFromPathname, taskUrl } from "@/modules/tasks/task-url";
 import { ensureAnonymousSession } from "@/infrastructure/supabase/browser";
-import type { AgentRun } from "@/modules/agent";
+import type { AgentEvent, AgentRun } from "@/modules/agent";
 import type { AgentPermissionMode } from "@/modules/agent/application/loop";
 import { inspectManualEditCapabilities, manualEditUnsupportedNotice } from "@/modules/documents/application/manual-edit-capability";
 import type { DocumentLoadState, UploadAsset, VersionItem } from "./types";
@@ -31,12 +31,14 @@ import type { AgentImageAttachment } from "@/modules/agent/application/message-p
 import { ManualEditRequestError, saveBrowserManualDocumentEdit } from "@/modules/documents/browser/manual-edit";
 import type { DocumentEditorPort, DocumentEditorState, DocumentSurfacePort } from "@/modules/documents";
 import { createDocumentClientToolDispatcher } from "./document-client-tool-dispatcher";
+import { createLatestDocumentReconcileScheduler, documentMutationRevisionFromEvent } from "./live-document-reconcile";
 
 const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
   { id: "pending", label: "等待导入文档", time: "当前", actor: "纸上鸭", versionNumber: 0, current: true },
 ];
 const isDocumentMutationTool = (name?: string) => name === "apply_text_change" || name === "apply_text_changes" || name === "replace_document_image";
+const latestDocumentMutationRevision = (events: readonly AgentEvent[]) => events.reduce<string | undefined>((revision, event) => documentMutationRevisionFromEvent(event) ?? revision, undefined);
 const messageImages = (parts: readonly { type?: string; assetId?: unknown; mimeType?: unknown }[]): AgentImageAttachment[] => parts.filter((part): part is { type: "image"; assetId: string; mimeType: AgentImageAttachment["mimeType"] } => part.type === "image" && typeof part.assetId === "string" && ["image/png", "image/jpeg", "image/webp"].includes(String(part.mimeType))).map((part) => ({ assetId: part.assetId, mimeType: part.mimeType }));
 export function Workbench() {
   const pathname = usePathname();
@@ -51,6 +53,11 @@ export function Workbench() {
   const [documentLoad, setDocumentLoad] = useState<DocumentLoadState>(() => (
     routeTaskId ? { status: "loading", fileName: "正在打开任务" } : { status: "empty" }
   ));
+  const currentDocumentRevisionRef = useRef<string | undefined>(undefined);
+  const setDocumentLoadAndRevision = useCallback((next: DocumentLoadState) => {
+    currentDocumentRevisionRef.current = next.status === "ready" ? next.document.revision : undefined;
+    setDocumentLoad(next);
+  }, []);
   const [versions, setVersions] = useState(initialVersions);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [notice, setNotice] = useState("请选择真实 DOCX；首页保持空白，打开历史任务才会恢复文档和对话");
@@ -85,6 +92,14 @@ export function Workbench() {
   const approvalSubmissionGateRef = useRef(createApprovalSubmissionGate());
   const taskListRequestRef = useRef<Promise<TaskPage> | undefined>(undefined);
   const runtimeView = resolveAgentRuntimeView({ run, checkpoint: loopResult?.checkpoint });
+  const liveDocumentContextRef = useRef<{ taskId?: string; fileName: string; workspaceReady: boolean }>({ fileName: "paperduck.docx", workspaceReady: false });
+  liveDocumentContextRef.current = {
+    taskId,
+    fileName: documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx",
+    workspaceReady,
+  };
+  const latestLiveRevisionRef = useRef<string | undefined>(undefined);
+  const liveMutationToolNamesRef = useRef(new Map<string, string>());
   const hasActiveAgent = ["queued", "running", "awaiting_approval", "awaiting_user", "awaiting_client"].includes(runtimeView.runtimeStatus);
   const confirmDiscardManualEdits = useCallback(() => {
     if (!manualEditing || !editorState.dirty) return true;
@@ -112,7 +127,7 @@ export function Workbench() {
     loadedTaskIdRef.current = undefined;
     setAssets(initialAssets);
     setSourceState(emptySourceRegistrationState());
-    setDocumentLoad({ status: "empty" });
+    setDocumentLoadAndRevision({ status: "empty" });
     setVersions(initialVersions);
     setTaskId(undefined);
     setWorkspaceReady(false);
@@ -128,7 +143,9 @@ export function Workbench() {
     setActiveEvents([]);
     setHistoricalEvents([]);
     setNotice("请选择真实 DOCX，或从左侧打开一个历史任务");
-  }, [setMessages, setLoopResult, setActiveEvents, setHistoricalEvents]);
+    latestLiveRevisionRef.current = undefined;
+    liveMutationToolNamesRef.current.clear();
+  }, [setMessages, setLoopResult, setActiveEvents, setHistoricalEvents, setDocumentLoadAndRevision]);
 
   const refreshTaskList = async () => {
     if (taskListRequestRef.current) {
@@ -204,7 +221,7 @@ export function Workbench() {
     }, () => !abort.signal.aborted);
     void (async () => {
       try {
-        setDocumentLoad({ status: "loading", fileName: "正在打开任务" });
+        setDocumentLoadAndRevision({ status: "loading", fileName: "正在打开任务" });
         setNotice("正在打开这个任务的最新文档和对话");
         const workspace = await loadBrowserTaskWorkspace(routeTaskId);
         if (abort.signal.aborted) return;
@@ -225,6 +242,8 @@ export function Workbench() {
             : []
         )));
         setTaskId(workspace.task.id);
+        latestLiveRevisionRef.current = undefined;
+        liveMutationToolNamesRef.current.clear();
         setWorkspaceReady(Boolean(workspace.workingDocumentId));
         setLoopResult(undefined);
         setActiveEvents([]);
@@ -237,8 +256,8 @@ export function Workbench() {
         const isCurrentProjection = () => !abort.signal.aborted && loadedTaskIdRef.current === workspace.task.id;
         if (workspace.workingDocumentId) {
           startProgressiveProjection({ load: () => loadCurrentTaskDocument(workspace.task.id, workspace.fileName), onSuccess: (document) => {
-            setDocumentLoad({ status: "ready", document: { file: document.file, bytes: document.bytes, revision: document.version.revision } });
-          }, onFailure: (error) => setDocumentLoad({ status: "error", message: error instanceof Error ? error.message : "文档打开失败" }) }, isCurrentProjection);
+            setDocumentLoadAndRevision({ status: "ready", document: { file: document.file, bytes: document.bytes, revision: document.version.revision } });
+          }, onFailure: (error) => setDocumentLoadAndRevision({ status: "error", message: error instanceof Error ? error.message : "文档打开失败" }) }, isCurrentProjection);
           startProgressiveProjection({ load: () => inspectBrowserTaskDocument(workspace.task.id), onSuccess: (inspection) => {
             setImageNodes(inspection.images);
             setParagraphCount(inspection.counts.paragraphs);
@@ -255,7 +274,7 @@ export function Workbench() {
             })));
           } }, isCurrentProjection);
         } else {
-          setDocumentLoad({ status: "empty" });
+          setDocumentLoadAndRevision({ status: "empty" });
           setVersions(initialVersions);
         }
 
@@ -284,7 +303,7 @@ export function Workbench() {
         setConversationLoading(false);
         historicalTimelineReadyRef.current = true;
         setHistoricalTimelineReady(true);
-        setDocumentLoad({ status: "error", message: error instanceof Error ? error.message : "任务打开失败" });
+        setDocumentLoadAndRevision({ status: "error", message: error instanceof Error ? error.message : "任务打开失败" });
         setNotice(error instanceof Error ? `无法打开任务：${error.message}` : "无法打开任务");
       }
     })();
@@ -334,8 +353,9 @@ export function Workbench() {
     }
   }
 
-  async function refreshVersions(id: string) {
+  async function refreshVersions(id: string, isCurrent: () => boolean = () => true) {
     const history = await loadBrowserDocumentVersions(id);
+    if (!isCurrent()) return;
     setVersions(history.versions.map((version) => ({
       id: version.id,
       versionNumber: version.version_number,
@@ -348,18 +368,83 @@ export function Workbench() {
 
   async function reconcileCurrentDocumentIfChanged(id: string, fileName: string) {
     const nextDocument = await loadCurrentTaskDocument(id, fileName);
-    const currentRevision = documentLoad.status === "ready" ? documentLoad.document.revision : undefined;
+    const currentRevision = currentDocumentRevisionRef.current;
     if (!shouldReloadDocumentForRevision(currentRevision, nextDocument.version.revision)) return false;
 
-    setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
+    setDocumentLoadAndRevision({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
     const inspection = await inspectBrowserTaskDocument(id);
+    if (loadedTaskIdRef.current !== id || currentDocumentRevisionRef.current !== nextDocument.version.revision) return true;
     setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
-    await refreshVersions(id);
+    await refreshVersions(id, () => loadedTaskIdRef.current === id && currentDocumentRevisionRef.current === nextDocument.version.revision);
     return true;
   }
 
+  async function reconcileLiveDocumentRevision(id: string, fileName: string, targetRevision: string) {
+    const started = performance.now();
+    if (process.env.NODE_ENV !== "production") console.info("client.document.live_reconcile.started", { taskId: id, toolName: "document-mutation", targetRevision, trigger: "tool.completed" });
+    try {
+      const fetchStarted = performance.now();
+      const nextDocument = await loadCurrentTaskDocument(id, fileName);
+      const fetchDurationMs = performance.now() - fetchStarted;
+      const loadedRevision = nextDocument.version.revision;
+      const latestTargetRevision = latestLiveRevisionRef.current;
+      const toolName = liveMutationToolNamesRef.current.get(targetRevision) ?? "document-mutation";
+      if (latestTargetRevision && loadedRevision !== latestTargetRevision) {
+        if (process.env.NODE_ENV !== "production") console.info("client.document.live_reconcile.completed", { taskId: id, toolName, targetRevision, loadedRevision, changed: false, fetchDurationMs, totalDurationMs: performance.now() - started });
+        return;
+      }
+      const changed = shouldReloadDocumentForRevision(currentDocumentRevisionRef.current, loadedRevision);
+      if (changed) {
+        setDocumentLoadAndRevision({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: loadedRevision } });
+        setNotice("修改已完成，正在同步最新文档…");
+      }
+      if (process.env.NODE_ENV !== "production") console.info("client.document.live_reconcile.completed", { taskId: id, toolName, targetRevision, loadedRevision, changed, fetchDurationMs, totalDurationMs: performance.now() - started });
+      void (async () => {
+        try {
+          const inspection = await inspectBrowserTaskDocument(id);
+          if (loadedTaskIdRef.current !== id || currentDocumentRevisionRef.current !== loadedRevision) return;
+          setImageNodes(inspection.images);
+          setParagraphCount(inspection.counts.paragraphs);
+          setTableCellCount(inspection.counts.tableCells);
+          await refreshVersions(id, () => loadedTaskIdRef.current === id && currentDocumentRevisionRef.current === loadedRevision);
+        } catch (error) {
+          if (process.env.NODE_ENV !== "production") console.warn("client.document.live_reconcile.secondary_failed", { taskId: id, targetRevision, error });
+        }
+      })();
+    } catch (error) {
+      if (process.env.NODE_ENV !== "production") console.warn("client.document.live_reconcile.failed", { taskId: id, targetRevision, error });
+      throw error;
+    }
+  }
+
+  const liveDocumentReconcileScheduler = useRef(createLatestDocumentReconcileScheduler(async (targetRevision) => {
+    const context = liveDocumentContextRef.current;
+    if (!context.workspaceReady || !context.taskId) return;
+    await reconcileLiveDocumentRevision(context.taskId, context.fileName, targetRevision);
+  })).current;
+
+  const scheduleLiveDocumentReconcile = (targetRevision: string, toolName = "document-mutation") => {
+    latestLiveRevisionRef.current = targetRevision;
+    liveMutationToolNamesRef.current.set(targetRevision, toolName);
+    return liveDocumentReconcileScheduler.request(targetRevision);
+  };
+
+  const requestLiveDocumentReconcile = (event: AgentEvent) => {
+    const targetRevision = documentMutationRevisionFromEvent(event);
+    if (!targetRevision || event.type !== "tool.completed") return;
+    liveMutationToolNamesRef.current.set(targetRevision, event.name);
+    setNotice("修改已完成，正在同步最新文档…");
+    void scheduleLiveDocumentReconcile(targetRevision, event.name).catch((error) => {
+      if (process.env.NODE_ENV !== "production") console.warn("client.document.live_reconcile.failed", { taskId: taskId, targetRevision, error });
+      setNotice("文档修改已完成，但最新内容同步失败，请刷新后重试");
+    });
+  };
+
   async function recoverAndReconcileRun(runId: string, signal?: AbortSignal, reconcileTaskId = taskId, canReconcileDocument = workspaceReady) {
-    const recovered = await recoverBrowserAgentLoop(runId, (event) => setActiveEvents((items) => mergeTimelineEvents(items, [event])), signal);
+    const recovered = await recoverBrowserAgentLoop(runId, (event) => {
+      setActiveEvents((items) => mergeTimelineEvents(items, [event]));
+      requestLiveDocumentReconcile(event);
+    }, signal);
     applyRuntimeResult(runId, recovered);
     if (recovered.checkpoint.finalText) {
       setMessages((items) => items.some((item) => item.role === "agent" && item.runId === runId && item.text === recovered.checkpoint.finalText)
@@ -372,8 +457,12 @@ export function Workbench() {
       setNotice("连接中断，Agent 仍在服务端运行；已恢复执行记录");
     } else if (recovered.checkpoint.status === "completed") {
       if (canReconcileDocument && reconcileTaskId) {
-        const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
-        await reconcileCurrentDocumentIfChanged(reconcileTaskId, fileName);
+        const targetRevision = latestDocumentMutationRevision(recovered.events);
+        if (targetRevision) await scheduleLiveDocumentReconcile(targetRevision);
+        else {
+          const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
+          await reconcileCurrentDocumentIfChanged(reconcileTaskId, fileName);
+        }
       }
       setNotice("连接恢复，已加载本轮最新文档结果");
     } else if (recovered.checkpoint.status === "failed") {
@@ -482,7 +571,7 @@ export function Workbench() {
       const fileName = documentLoad.document.file.name;
       const result = await saveBrowserManualDocumentEdit({ taskId, expectedRevision: editorState.baseRevision, file: exported.blob, fileName });
       const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
-      setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
+      setDocumentLoadAndRevision({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
       const inspection = await inspectBrowserTaskDocument(taskId);
       setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
       await refreshVersions(taskId);
@@ -492,7 +581,7 @@ export function Workbench() {
     } catch (error) {
       setNotice(error instanceof ManualEditRequestError && error.status === 409 ? "文档已在其他位置更新，当前修改尚未保存" : error instanceof Error ? error.message : "手动编辑保存失败");
     } finally { setManualSaving(false); }
-  }, [documentLoad, editorState, manualSaving, taskId]);
+  }, [documentLoad, editorState, manualSaving, setDocumentLoadAndRevision, taskId]);
 
   const runAgent = async (prompt: string, attachments: readonly AgentImageAttachment[] = [], lifecycle?: { accepted: () => void; failed: () => void }) => {
     if (manualEditing) { setNotice("请先保存或放弃手动修改，再运行 Agent"); return; }
@@ -532,6 +621,7 @@ export function Workbench() {
       if (startsFreshRun) acceptSubmission();
       const result = await runBrowserAgentLoopStream(activeRun.id, prompt, permissionMode, (event) => {
         setActiveEvents((items) => mergeTimelineEvents(items, [event]));
+        requestLiveDocumentReconcile(event);
         if (event.type === "model.delta") setNotice("纸上鸭正在回复");
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
       }, abortController.signal, localMessageId, interactionId, attachments, acceptSubmission);
@@ -554,7 +644,9 @@ export function Workbench() {
         // the turn complete; otherwise the conversation can claim success
         // while the central document still renders the previous bytes.
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
-        await reconcileCurrentDocumentIfChanged(taskId, fileName);
+        const targetRevision = latestDocumentMutationRevision(result.events);
+        if (targetRevision) await scheduleLiveDocumentReconcile(targetRevision);
+        else await reconcileCurrentDocumentIfChanged(taskId, fileName);
       }
       setNotice(result.checkpoint.pendingInteraction?.type === "approval"
         ? "Agent 已完成读取并请求写入确认"
@@ -607,6 +699,7 @@ export function Workbench() {
     try {
       const result = await resumeBrowserAgentLoopStream(run.id, choice, pending.interactionId, pending.callId, (event) => {
         setActiveEvents((items) => mergeTimelineEvents(items, [event]));
+        requestLiveDocumentReconcile(event);
         if (event.type === "tool.started") setNotice(`正在执行：${event.name ?? "工具"}`);
       }, abortController.signal);
       applyRuntimeResult(run.id, result);
@@ -614,8 +707,12 @@ export function Workbench() {
       if (replies.length) setMessages((items) => [...items, ...replies.map((reply) => ({ ...reply, role: "agent" as const, runId: run.id, status: "sent" as const }))]);
       if (result.checkpoint.status === "completed") {
         if (taskId) {
-          const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
-          await reconcileCurrentDocumentIfChanged(taskId, fileName);
+          const targetRevision = latestDocumentMutationRevision(result.events);
+          if (targetRevision) await scheduleLiveDocumentReconcile(targetRevision);
+          else {
+            const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
+            await reconcileCurrentDocumentIfChanged(taskId, fileName);
+          }
         }
         setNotice("Agent 已完成写入并通过版本校验");
       } else if (result.checkpoint.status === "awaiting_user") {
@@ -659,7 +756,7 @@ export function Workbench() {
     const maySeedWorkingDocument = isTemplate || !sourceState.workingDocumentId;
     // Reference examples are persisted but must never replace the document
     // currently rendered in the canvas. Only a template upload changes it.
-    if (maySeedWorkingDocument) setDocumentLoad({ status: "loading", fileName: file.name });
+    if (maySeedWorkingDocument) setDocumentLoadAndRevision({ status: "loading", fileName: file.name });
     setNotice(`正在检查 ${file.name}`);
     try {
       const bytes = await readDocxFile(file);
@@ -691,7 +788,7 @@ export function Workbench() {
       const hadWorkingDocument = Boolean(sourceState.workingDocumentId);
       if (createsWorkingDocument && !hadWorkingDocument) {
         const persistedDocument = await loadCurrentTaskDocument(persisted.taskId, file.name);
-        setDocumentLoad({ status: "ready", document: { file: persistedDocument.file, bytes: persistedDocument.bytes, revision: persistedDocument.version.revision } });
+        setDocumentLoadAndRevision({ status: "ready", document: { file: persistedDocument.file, bytes: persistedDocument.bytes, revision: persistedDocument.version.revision } });
         setVersions([{ id: persisted.versionId ?? "initial", label: isTemplate ? "原始模板" : "完成示例", time: "刚刚", actor: "你", versionNumber: 0, current: true }]);
         setWorkspaceReady(true);
         await refreshVersions(persisted.taskId);
@@ -715,7 +812,7 @@ export function Workbench() {
       void refreshTaskList();
     } catch (error) {
       const message = error instanceof Error ? error.message : "读取文件失败，请重试。";
-      setDocumentLoad({ status: "error", message });
+      setDocumentLoadAndRevision({ status: "error", message });
       setNotice(message);
     }
   };
@@ -743,7 +840,7 @@ export function Workbench() {
         const restored = await restoreBrowserDocumentVersion(taskId, id);
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
         const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
-          setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } }); const inspection = await inspectBrowserTaskDocument(taskId); setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
+          setDocumentLoadAndRevision({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } }); const inspection = await inspectBrowserTaskDocument(taskId); setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
         await refreshVersions(taskId);
         setVersionsOpen(false); setMobilePanel("none"); setNotice(`已创建恢复版本 v${restored.version.version_number}，完整历史已保留`);
       } catch (error) { setNotice(error instanceof Error ? error.message : "恢复版本失败"); }

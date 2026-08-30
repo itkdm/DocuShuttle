@@ -32,8 +32,11 @@ export type AgentEventPayload =
   | { type: "tool.failed"; callId: string; name: string; error: string; durationMs?: number }
   | { type: "approval.required"; interactionId: string; callId: string; name: string; input: unknown }
   | { type: "approval.resolved"; interactionId: string; callId: string; name: string; decision: "approved" | "rejected" }
-  | { type: "client_tool.required"; interactionId: string; callId: string; name: string; target: "visible" }
-  | { type: "client_tool.resolved"; interactionId: string; callId: string; name: string; assetId: string; mimeType: "image/png"; sha256: string; pageNumber?: number; width: number; height: number; revision: string }
+  | { type: "client_tool.required"; interactionId: string; callId: string; name: "capture_document_view"; target: "visible" }
+  | { type: "client_tool.required"; interactionId: string; callId: string; name: "scroll_document_view"; kind: "relative"; direction: "up" | "down"; amount: "small" | "viewport" }
+  | { type: "client_tool.required"; interactionId: string; callId: string; name: "scroll_document_view"; kind: "edge"; target: "top" | "bottom" }
+  | ({ type: "client_tool.resolved"; interactionId: string; callId: string; name: "capture_document_view" } & { assetId: string; mimeType: "image/png"; sha256: string; pageNumber?: number; width: number; height: number; revision: string })
+  | ({ type: "client_tool.resolved"; interactionId: string; callId: string; name: "scroll_document_view" } & { revision: string; beforeScrollTop: number; scrollTop: number; maxScrollTop: number; viewportHeight: number; moved: boolean; atTop: boolean; atBottom: boolean })
   | { type: "turn.completed"; text: string }
   | { type: "turn.failed"; error: string }
   | { type: "turn.cancelled"; text: string };
@@ -70,6 +73,7 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
   const isString = (name: string) => typeof event[name] === "string";
   const isNumber = (name: string) => typeof event[name] === "number" && Number.isFinite(event[name]);
   const hasUnknownValue = (name: string) => hasField(name);
+  const hasOnlyFields = (fields: readonly string[]) => Object.keys(event).every((key) => ["eventId", "runId", "timestamp", "type", "sequence", ...fields].includes(key));
 
   switch (event.type) {
     case "turn.started":
@@ -97,14 +101,23 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
     case "approval.resolved":
       return isString("interactionId") && isString("callId") && isString("name") && (event.decision === "approved" || event.decision === "rejected");
     case "client_tool.required":
-      return isString("interactionId") && isString("callId") && isString("name")
-        && event.target === "visible"
-        && !hasField("pageNumber");
+      if (!isString("interactionId") || !isString("callId") || !isString("name")) return false;
+      if (event.name === "capture_document_view") return hasOnlyFields(["interactionId", "callId", "name", "target"]) && event.target === "visible";
+      if (event.name === "scroll_document_view") {
+        return event.kind === "relative"
+          ? hasOnlyFields(["interactionId", "callId", "name", "kind", "direction", "amount"]) && (event.direction === "up" || event.direction === "down") && (event.amount === "small" || event.amount === "viewport")
+          : hasOnlyFields(["interactionId", "callId", "name", "kind", "target"]) && event.kind === "edge" && (event.target === "top" || event.target === "bottom");
+      }
+      return false;
     case "client_tool.resolved":
-      return isString("interactionId") && isString("callId") && isString("name")
-        && isString("assetId") && event.mimeType === "image/png" && isString("sha256")
-        && isNumber("width") && isNumber("height") && isString("revision")
+      if (!isString("interactionId") || !isString("callId") || !isString("name")) return false;
+      if (event.name === "capture_document_view") return hasOnlyFields(["interactionId", "callId", "name", "assetId", "mimeType", "sha256", "pageNumber", "width", "height", "revision"]) && isString("assetId") && event.mimeType === "image/png" && isString("sha256")
+        && isNumber("width") && (event.width as number) > 0 && isNumber("height") && (event.height as number) > 0 && isString("revision")
         && (!hasField("pageNumber") || (isNumber("pageNumber") && Number.isInteger(event.pageNumber as number) && (event.pageNumber as number) > 0));
+      if (event.name === "scroll_document_view") return hasOnlyFields(["interactionId", "callId", "name", "revision", "beforeScrollTop", "scrollTop", "maxScrollTop", "viewportHeight", "moved", "atTop", "atBottom"]) && isString("revision") && isNumber("beforeScrollTop") && (event.beforeScrollTop as number) >= 0 && isNumber("scrollTop") && (event.scrollTop as number) >= 0
+        && isNumber("maxScrollTop") && (event.maxScrollTop as number) >= 0 && isNumber("viewportHeight") && (event.viewportHeight as number) > 0
+        && typeof event.moved === "boolean" && typeof event.atTop === "boolean" && typeof event.atBottom === "boolean";
+      return false;
     case "turn.completed":
       return isString("text");
     case "turn.failed":

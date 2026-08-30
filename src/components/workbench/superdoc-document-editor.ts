@@ -2,7 +2,7 @@ import { toBlob } from "html-to-image";
 import { defineSuperDocExtension, type SuperDoc, type SuperDocMutationEvent } from "superdoc";
 import "superdoc/style.css";
 
-import type { DocumentEditorPort, DocumentEditorState, DocumentSurfacePort, DocumentSurfaceState, DocumentVisibleCapture, ExportedDocument } from "@/modules/documents";
+import type { DocumentEditorPort, DocumentEditorState, DocumentScrollCommand, DocumentScrollResult, DocumentSurfacePort, DocumentSurfaceState, DocumentVisibleCapture, ExportedDocument } from "@/modules/documents";
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" as const;
 const MAX_CAPTURE_BYTES = 10 * 1024 * 1024;
@@ -112,5 +112,11 @@ export class SuperDocDocumentSurface implements DocumentSurfacePort {
     if (!blob || blob.type !== "image/png" || blob.size === 0) throw new Error("DOCUMENT_VIEW_CAPTURE_FAILED");
     if (blob.size > MAX_CAPTURE_BYTES) throw new Error("DOCUMENT_VIEW_CAPTURE_TOO_LARGE");
     return { blob, mimeType: "image/png", width, height };
+  }
+
+  async scrollViewport(command: DocumentScrollCommand, targetScrollTop?: number): Promise<DocumentScrollResult> {
+    void command;
+    void targetScrollTop;
+    throw new Error("DOCUMENT_VIEW_NOT_AVAILABLE_IN_EDITOR");
   }
 }

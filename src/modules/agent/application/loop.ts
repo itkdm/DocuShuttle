@@ -2,7 +2,7 @@ import { z } from "zod";
 import { compactAgentMessages, DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY, type AgentContextCompactionPolicy } from "./context-compaction";
 import { createAgentEvent, shouldPersistAgentEvent, type AgentEvent, type AgentEventPayload } from "./events";
 import type { AgentConversationContextPort } from "./ports";
-import type { AgentClientToolResult, AgentInteractionResolution, AgentRuntimePendingInteraction } from "../domain/model";
+import type { AgentClientToolResult, AgentDocumentCaptureResult, AgentDocumentScrollResult, AgentInteractionResolution, AgentRuntimePendingInteraction } from "../domain/model";
 import type { AgentImageAttachment } from "./message-parts";
 import { describeAgentImages } from "./message-parts";
 
@@ -656,13 +656,16 @@ export class AgentLoopRunner {
             expectedRevision,
           };
           checkpoint.status = "awaiting_client";
-          const requiredEvent = emit({
-            type: "client_tool.required",
-            interactionId,
-            callId: call.id,
-            name: call.name,
-            target: "visible",
-          }, false);
+          const requiredEvent = emit(call.name === "capture_document_view"
+            ? { type: "client_tool.required", interactionId, callId: call.id, name: "capture_document_view", target: "visible" }
+            : call.name === "scroll_document_view"
+              ? (() => {
+                const clientInput = input as { kind: "relative" | "edge"; direction?: "up" | "down"; amount?: "small" | "viewport"; target?: "top" | "bottom" };
+                return clientInput.kind === "relative"
+                  ? { type: "client_tool.required" as const, interactionId, callId: call.id, name: "scroll_document_view" as const, kind: "relative" as const, direction: clientInput.direction!, amount: clientInput.amount! }
+                  : { type: "client_tool.required" as const, interactionId, callId: call.id, name: "scroll_document_view" as const, kind: "edge" as const, target: clientInput.target! };
+              })()
+              : (() => { throw new Error("CLIENT_TOOL_INTERACTION_MISMATCH"); })(), false);
           await saveCheckpoint();
           onEvent?.(requiredEvent);
           return { checkpoint, events };
@@ -879,7 +882,11 @@ export class AgentLoopRunner {
     checkpoint.status = "running";
     checkpoint.messages.push({ role: "tool", content: serializeToolOutput(actual.result), toolCallId: actual.callId, toolName: actual.toolName });
     const events: AgentEvent[] = [];
-    const resolvedEvent = { ...createAgentEvent(runId, { type: "client_tool.resolved", interactionId: actual.interactionId, callId: actual.callId, name: actual.toolName, ...actual.result }), eventId: clientToolResolvedEventId(actual.interactionId, actual.callId) };
+    const resolvedEvent = actual.toolName === "capture_document_view"
+      ? { ...createAgentEvent(runId, { type: "client_tool.resolved", interactionId: actual.interactionId, callId: actual.callId, name: "capture_document_view", ...(actual.result as AgentDocumentCaptureResult) }), eventId: clientToolResolvedEventId(actual.interactionId, actual.callId) }
+      : actual.toolName === "scroll_document_view"
+        ? { ...createAgentEvent(runId, { type: "client_tool.resolved", interactionId: actual.interactionId, callId: actual.callId, name: "scroll_document_view", ...(actual.result as AgentDocumentScrollResult) }), eventId: clientToolResolvedEventId(actual.interactionId, actual.callId) }
+        : (() => { throw new Error("CLIENT_TOOL_INTERACTION_MISMATCH"); })();
     events.push(resolvedEvent);
     this.observe(runId, resolvedEvent, checkpoint.permissionMode);
     checkpoint.pendingResolution = undefined;

@@ -19,6 +19,7 @@ const toolLabel = (name: string) => ({
   list_document_versions: "查看版本历史",
   restore_document_version: "恢复文档版本",
   export_document: "导出文档",
+  scroll_document_view: "滚动文档",
 }[name] ?? "执行文档操作");
 
 type TextChange = { expectedText: string; replacement: string };

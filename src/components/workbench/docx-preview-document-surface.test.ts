@@ -15,12 +15,13 @@ const viewport = (scrollTop: number) => {
   content.className = "real-document-wrap";
   content.textContent = scrollTop ? "滚动后的文档内容" : "顶部文档内容";
   root.append(content);
+  let currentScrollTop = scrollTop;
   Object.defineProperties(root, {
     clientWidth: { configurable: true, value: 800 },
     clientHeight: { configurable: true, value: 600 },
     scrollWidth: { configurable: true, value: 800 },
     scrollHeight: { configurable: true, value: 5000 },
-    scrollTop: { configurable: true, value: scrollTop },
+    scrollTop: { configurable: true, get: () => currentScrollTop, set: (value: number) => { currentScrollTop = value; } },
     scrollLeft: { configurable: true, value: 0 },
   });
   document.body.append(root);
@@ -51,5 +52,11 @@ describe("DocxPreviewDocumentSurface visible capture", () => {
     const clonedViewport = calls[0]?.[0];
     expect((clonedViewport.querySelector(".real-document-wrap") as HTMLElement | null)?.style.transform).toBe("translate(0px, -320px)");
     expect(clonedViewport.style.height).toBe("600px");
+  });
+
+  it("scrolls the docx-preview canvas through the shared surface port", async () => {
+    const root = viewport(0);
+    const surface = new DocxPreviewDocumentSurface(root, { ready: true, dirty: false, pageCount: 1, renderedRevision: "rev-1" });
+    await expect(surface.scrollViewport({ kind: "relative", direction: "down", amount: "small" })).resolves.toMatchObject({ revision: "rev-1", scrollTop: 210, maxScrollTop: 4_400 });
   });
 });

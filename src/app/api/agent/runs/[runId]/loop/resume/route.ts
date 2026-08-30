@@ -26,7 +26,7 @@ import { SupabaseAgentConversationContext } from "@/modules/agent/infrastructure
 import { OoxmlPreservationKernel } from "@/modules/documents";
 import { createClientDocumentTools } from "@/modules/agent/application/client-tools";
 
-const clientToolResultSchema = z.object({
+const captureClientToolResultSchema = z.object({
   assetId: z.uuid(),
   mimeType: z.literal("image/png"),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
@@ -35,6 +35,17 @@ const clientToolResultSchema = z.object({
   height: z.number().int().positive().max(10_000),
   revision: z.string().min(1).max(200),
 });
+const scrollClientToolResultSchema = z.object({
+  revision: z.string().min(1).max(200),
+  beforeScrollTop: z.number().finite().nonnegative(),
+  scrollTop: z.number().finite().nonnegative(),
+  maxScrollTop: z.number().finite().nonnegative(),
+  viewportHeight: z.number().finite().positive(),
+  moved: z.boolean(),
+  atTop: z.boolean(),
+  atBottom: z.boolean(),
+}).strict();
+const clientToolResultSchema = z.union([captureClientToolResultSchema.strict(), scrollClientToolResultSchema]);
 const schema = z.union([
   z.object({ approval: z.enum(["approved", "rejected"]), interactionId: z.uuid(), callId: z.string().trim().min(1).max(200) }),
   z.object({ interactionId: z.uuid(), callId: z.string().trim().min(1).max(200), result: clientToolResultSchema }),

@@ -1,8 +1,9 @@
 import { type SuperDoc } from "superdoc";
 import "superdoc/style.css";
 
-import type { DocumentSurfacePort, DocumentSurfaceState, DocumentVisibleCapture } from "@/modules/documents";
+import type { DocumentScrollCommand, DocumentScrollResult, DocumentSurfacePort, DocumentSurfaceState, DocumentVisibleCapture } from "@/modules/documents";
 import { captureDocumentViewport } from "./capture-document-viewport";
+import { scrollDocumentViewport } from "./scroll-document-viewport";
 
 export type SuperDocViewerCallbacks = { onReady: () => void; onError: (message: string) => void };
 
@@ -37,6 +38,11 @@ export class SuperDocDocumentViewer implements DocumentSurfacePort {
   async captureVisible(): Promise<DocumentVisibleCapture> {
     if (!this.state.ready) throw new Error("DOCUMENT_VIEW_NOT_READY");
     return captureDocumentViewport(this.stage);
+  }
+
+  async scrollViewport(command: DocumentScrollCommand, targetScrollTop?: number): Promise<DocumentScrollResult> {
+    if (!this.state.ready) throw new Error("DOCUMENT_VIEW_NOT_READY");
+    return scrollDocumentViewport(this.stage, command, this.revision, targetScrollTop);
   }
 
   destroy() { this.instance?.destroy(); this.instance = undefined; this.state = { ...this.state, ready: false, dirty: false }; }

@@ -12,7 +12,7 @@ import { TaskList } from "./task-list";
 import { formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
-import { cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, recoverBrowserAgentLoop, restoreBrowserDocumentVersion, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, resumeBrowserClientTool, uploadBrowserDocumentPreview, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, recoverBrowserAgentLoop, restoreBrowserDocumentVersion, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, resumeBrowserClientTool, type BrowserImageNode } from "@/modules/agent/browser-runtime";
 import { useConversationStore } from "./conversation-store";
 import { listBrowserTasks, loadBrowserTaskWorkspace, type TaskPage } from "@/modules/tasks/browser-tasks";
 import type { TaskSummary } from "@/modules/tasks/domain";
@@ -29,6 +29,7 @@ import { shouldPreserveSubmittedUserReply } from "./user-input-recovery";
 import type { AgentImageAttachment } from "@/modules/agent/application/message-parts";
 import { ManualEditRequestError, saveBrowserManualDocumentEdit } from "@/modules/documents/browser/manual-edit";
 import type { DocumentEditorPort, DocumentEditorState, DocumentSurfacePort } from "@/modules/documents";
+import { createDocumentClientToolDispatcher } from "./document-client-tool-dispatcher";
 
 const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
@@ -36,12 +37,6 @@ const initialVersions: VersionItem[] = [
 ];
 const isDocumentMutationTool = (name?: string) => name === "apply_text_change" || name === "apply_text_changes" || name === "replace_document_image";
 const messageImages = (parts: readonly { type?: string; assetId?: unknown; mimeType?: unknown }[]): AgentImageAttachment[] => parts.filter((part): part is { type: "image"; assetId: string; mimeType: AgentImageAttachment["mimeType"] } => part.type === "image" && typeof part.assetId === "string" && ["image/png", "image/jpeg", "image/webp"].includes(String(part.mimeType))).map((part) => ({ assetId: part.assetId, mimeType: part.mimeType }));
-type ClientToolInput = { target: "visible" };
-const isClientToolInput = (value: unknown): value is ClientToolInput => {
-  if (!value || typeof value !== "object") return false;
-  const input = value as Record<string, unknown>;
-  return input.target === "visible" && Object.keys(input).length === 1;
-};
 export function Workbench() {
   const pathname = usePathname();
   const router = useRouter();
@@ -75,6 +70,7 @@ export function Workbench() {
   const [editorState, setEditorState] = useState<DocumentEditorState>({ ready: false, dirty: false, baseRevision: "" });
   const [manualSaving, setManualSaving] = useState(false);
   const clientToolSubmissionRef = useRef<string | undefined>(undefined);
+  const clientToolDispatcherRef = useRef(createDocumentClientToolDispatcher());
   const [surfaceReadyVersion, setSurfaceReadyVersion] = useState(0);
   const handleSurfaceReady = useCallback(() => setSurfaceReadyVersion((version) => version + 1), []);
   const [imageNodes, setImageNodes] = useState<BrowserImageNode[]>([]);
@@ -382,24 +378,23 @@ export function Workbench() {
   useEffect(() => {
     const pending = loopResult?.checkpoint.pendingInteraction;
     if (!pending || pending.type !== "client_tool" || !run || !taskId || run.taskId !== taskId || !workspaceReady) {
-      if (process.env.NODE_ENV !== "production" && pending?.type === "client_tool") console.debug("agent.client_tool.capture.skipped", { hasRun: Boolean(run), taskId, runTaskId: run?.taskId, workspaceReady, surfaceReadyVersion });
+      if (process.env.NODE_ENV !== "production" && pending?.type === "client_tool") console.debug("agent.client_tool.skipped", { hasRun: Boolean(run), taskId, runTaskId: run?.taskId, workspaceReady, surfaceReadyVersion });
       return;
     }
     const key = `${run.id}:${pending.interactionId}:${pending.callId}`;
     if (clientToolSubmissionRef.current === key) return;
-    const input = isClientToolInput(pending.input) ? pending.input : undefined;
     const surface = surfaceRef.current;
-    if (!input || !surface) {
-      if (process.env.NODE_ENV !== "production") console.warn("agent.client_tool.capture.unavailable", { input: Boolean(input), surface: Boolean(surface), surfaceReadyVersion });
+    if (!surface) {
+      if (process.env.NODE_ENV !== "production") console.warn("agent.client_tool.unavailable", { surface: Boolean(surface), surfaceReadyVersion });
       return;
     }
     const state = surface.getState();
-    if (!state.ready || state.dirty || !state.renderedRevision) {
-      if (process.env.NODE_ENV !== "production") console.warn("agent.client_tool.capture.not_ready", { state, surfaceReadyVersion });
-      setNotice(state.dirty ? "文档有未保存变化，暂时无法捕获视觉结果" : "文档尚未准备好，请稍后重试");
+    if (!state.ready || state.dirty || state.renderedRevision !== pending.expectedRevision) {
+      if (process.env.NODE_ENV !== "production") console.warn("agent.client_tool.not_synchronized", { state, expectedRevision: pending.expectedRevision, surfaceReadyVersion });
+      setNotice(state.dirty ? "文档有未保存变化，暂时无法执行文档浏览" : "文档尚未与当前执行同步，请稍后重试");
       return;
     }
-    if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.capture.start", { target: input.target, surfaceReadyVersion });
+    if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.start", { toolName: pending.toolName, surfaceReadyVersion });
     clientToolSubmissionRef.current = key;
     const currentTaskId = taskId;
     const currentRunId = run.id;
@@ -409,25 +404,23 @@ export function Workbench() {
     agentAbortRef.current = abort;
     void (async () => {
       try {
-        const pageCapture = await surface.captureVisible();
-        if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.capture.completed", { width: pageCapture.width, height: pageCapture.height, pageNumber: pageCapture.pageNumber });
-        const asset = await uploadBrowserDocumentPreview(currentTaskId, { runId: currentRunId, interactionId: currentInteractionId, callId: currentCallId }, pageCapture);
-        if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.upload.completed", { assetId: asset.assetId, width: asset.width, height: asset.height });
+        const result = await clientToolDispatcherRef.current.execute(pending, surface, currentTaskId, currentRunId);
+        if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.completed", { toolName: pending.toolName, ...result });
         if (abort.signal.aborted) return;
-        const result = await resumeBrowserClientTool(currentRunId, currentInteractionId, currentCallId, asset);
-        if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.resume.completed", { status: result.checkpoint.status });
-        applyRuntimeResult(currentRunId, result);
-        if (result.checkpoint.status === "completed") {
+        const resultAfterResume = await resumeBrowserClientTool(currentRunId, currentInteractionId, currentCallId, result);
+        if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.resume.completed", { status: resultAfterResume.checkpoint.status });
+        applyRuntimeResult(currentRunId, resultAfterResume);
+        if (resultAfterResume.checkpoint.status === "completed") {
           const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
           const nextDocument = await loadCurrentTaskDocument(currentTaskId, fileName);
           setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
           await refreshVersions(currentTaskId);
           setNotice("Agent 已完成视觉检查");
-        } else if (result.checkpoint.pendingInteraction) {
-          setNotice(result.checkpoint.pendingInteraction.type === "user_input" ? "Agent 正在等待你的回答" : "Agent 正在继续处理");
+        } else if (resultAfterResume.checkpoint.pendingInteraction) {
+          setNotice(resultAfterResume.checkpoint.pendingInteraction.type === "user_input" ? "Agent 正在等待你的回答" : "Agent 正在继续处理");
         }
       } catch (error) {
-        if (process.env.NODE_ENV !== "production") console.error("agent.client_tool.capture.failed", error);
+        if (process.env.NODE_ENV !== "production") console.error("agent.client_tool.failed", { toolName: pending.toolName, error });
         clientToolSubmissionRef.current = undefined;
         if (!abort.signal.aborted) {
           try {

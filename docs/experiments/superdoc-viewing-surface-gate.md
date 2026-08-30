@@ -13,8 +13,8 @@ This is a development-only viewing experiment. The production surface remains
 
 Decision: **LIMITED_GO**. The read-only surface is suitable for continued
 evaluation, but it is not approved as the production default until fidelity,
-manual-editor handoff, and real screenshot-tool coverage are completed against
-the project's representative document fixtures.
+manual-editor handoff, and the remaining representative fixture coverage are
+completed.
 
 ## Implementation evidence
 
@@ -45,13 +45,20 @@ Using the local development server and a real historical `fixture.docx` task:
 
 ## Known limitations / unverified
 
-- A complete live `capture_document_view` Agent run was not repeated in this
-  gate because the selected historical task already had an active pending
-  interaction; the viewport adapter is covered by unit tests, but a fresh
-  tool-call E2E remains unverified.
+- A live Agent screenshot run was completed on Run
+  `f70d24b9-b73e-4fdc-a366-b587348203f4` using the SuperDoc surface. The run
+  produced `capture_document_view`, a preview upload (`201`), same-run resume
+  (`200`), and the follow-up visual inspection before completing with a visual
+  answer. The observed `.paper-stage` viewport was `1026 x 766`; the uploaded
+  PNG response was also `1026 x 766`, with asset ID
+  `56494ae7-c6da-46dc-add7-51ce73d18701` and revision
+  `d01112390af0e1fcc7ef3c61d0da9dd0653d832f2c813669ff42b3dbcda5b0f0`.
+- A second top-versus-scrolled screenshot comparison was not repeated after
+  the live run; the adapter's scroll-offset behavior is covered by the
+  regression test.
 - Representative visual fidelity comparison, unsupported tracked-change/
-  footnote fixtures, viewer-to-editor discard flow, task/revision rapid-switch
-  cleanup, and screenshot asset upload were not claimed as passed here.
+  footnote fixtures, viewer-to-editor discard flow, and task/revision rapid-switch
+  cleanup were not claimed as passed here.
 
 ## References
 

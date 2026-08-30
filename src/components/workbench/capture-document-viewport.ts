@@ -4,7 +4,9 @@ const MAX_CAPTURE_BYTES = 10 * 1024 * 1024;
 const MAX_DIMENSION = 10_000;
 
 export async function captureDocumentViewport(root: HTMLElement) {
-  const viewport = root.matches(".paper-stage") ? root : root.querySelector<HTMLElement>(".paper-stage");
+  const viewport = root.matches(".paper-stage")
+    ? root
+    : root.closest<HTMLElement>(".paper-stage") ?? root.querySelector<HTMLElement>(".paper-stage");
   if (!viewport) throw new Error("DOCUMENT_VIEW_NOT_READY");
   const width = viewport.clientWidth;
   const height = viewport.clientHeight;

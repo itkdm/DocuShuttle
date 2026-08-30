@@ -42,19 +42,31 @@ describe("SuperDocDocumentViewer", () => {
     expect(viewer.getState()).toMatchObject({ ready: true, dirty: false, renderedRevision: "revision-42" });
     expect(viewer.getState().pageCount).toBeUndefined();
     expect(onReady).toHaveBeenCalledOnce();
+
+    const onError = vi.fn();
+    const failingViewer = await SuperDocDocumentViewer.mount(stage, new Blob(["docx"]), "revision-43", { onReady: vi.fn(), onError });
+    await Promise.resolve();
+    (superDocInstances[1]?.onException as (event: { error: Error }) => void)({ error: new Error("render failed") });
+    expect(failingViewer.getState().ready).toBe(false);
+    expect(onError).toHaveBeenCalledWith("SuperDoc 查看器错误：render failed");
   });
 
   it("captures the current viewport and can be destroyed", async () => {
+    const canvas = document.createElement("div");
+    canvas.className = "paper-stage";
     const stage = document.createElement("div");
-    stage.className = "paper-stage";
+    stage.className = "superdoc-viewer-host";
     stage.append(document.createElement("div"));
-    Object.defineProperties(stage, { clientWidth: { value: 640 }, clientHeight: { value: 480 }, scrollTop: { value: 120 }, scrollLeft: { value: 0 } });
-    document.body.append(stage);
+    canvas.append(stage);
+    Object.defineProperties(canvas, { clientWidth: { value: 640 }, clientHeight: { value: 480 }, scrollTop: { value: 120 }, scrollLeft: { value: 0 } });
+    document.body.append(canvas);
 
     const viewer = await SuperDocDocumentViewer.mount(stage, new Blob(["docx"]), "revision-1", { onReady: vi.fn(), onError: vi.fn() });
     await Promise.resolve();
     const capture = await viewer.captureVisible();
     expect(capture).toMatchObject({ width: 640, height: 480, mimeType: "image/png" });
+    const clonedViewport = (toBlob.mock.calls as unknown as Array<[HTMLElement]>)[0]?.[0];
+    expect((clonedViewport.querySelector(".superdoc-viewer-host") as HTMLElement).style.transform).toBe("translate(0px, -120px)");
     viewer.destroy();
     expect(viewer.getState()).toMatchObject({ ready: false, dirty: false, renderedRevision: "revision-1" });
   });

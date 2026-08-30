@@ -42,6 +42,7 @@ export class SuperDocDocumentViewer implements DocumentSurfacePort {
   destroy() { this.instance?.destroy(); this.instance = undefined; this.state = { ...this.state, ready: false, dirty: false }; }
 
   private fail(error: unknown) {
+    this.state = { ...this.state, ready: false, dirty: false };
     this.callbacks.onError(`SuperDoc 查看器错误：${error instanceof Error ? error.message : "未知错误"}`);
   }
 }

@@ -16,6 +16,7 @@ export async function captureDocumentViewport(root: HTMLElement) {
   const height = viewport.clientHeight;
   if (!width || !height || width > MAX_DIMENSION || height > MAX_DIMENSION) throw new Error("DOCUMENT_VIEW_CAPTURE_TOO_LARGE");
   const style = getComputedStyle(viewport);
+  const captureHost = document.createElement("div");
   const clone = document.createElement("div");
   const content = viewport.firstElementChild?.cloneNode(true) as HTMLElement | null;
   if (!content) throw new Error("DOCUMENT_VIEW_CAPTURE_FAILED");
@@ -26,7 +27,16 @@ export async function captureDocumentViewport(root: HTMLElement) {
   });
   if (viewport.scrollTop || viewport.scrollLeft) content.style.transform = `translate(${-viewport.scrollLeft}px, ${-viewport.scrollTop}px)`;
   clone.append(content);
-  document.body.append(clone);
+  Object.assign(captureHost.style, {
+    position: "fixed",
+    left: "-100000px",
+    top: "0",
+    width: `${width}px`,
+    height: `${height}px`,
+    pointerEvents: "none",
+  });
+  captureHost.append(clone);
+  document.body.append(captureHost);
   try {
     await Promise.all([...clone.querySelectorAll("img")].map(async (image) => {
       const source = image.getAttribute("src");
@@ -43,6 +53,6 @@ export async function captureDocumentViewport(root: HTMLElement) {
     if (blob.size > MAX_CAPTURE_BYTES) throw new Error("DOCUMENT_VIEW_CAPTURE_TOO_LARGE");
     return { blob, mimeType: "image/png" as const, width, height };
   } finally {
-    clone.remove();
+    captureHost.remove();
   }
 }

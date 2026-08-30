@@ -1,5 +1,28 @@
 import type { AgentEvent } from "@/modules/agent";
 
+export type DocumentReconcileRequest = {
+  taskId: string;
+  generation: number;
+  targetRevision: string;
+  toolName: string;
+};
+
+export type DocumentProjectionIdentity = Pick<DocumentReconcileRequest, "taskId" | "generation">;
+
+export function isCurrentDocumentProjection(
+  request: DocumentProjectionIdentity,
+  current: DocumentProjectionIdentity | undefined,
+): boolean {
+  return Boolean(current && request.taskId === current.taskId && request.generation === current.generation);
+}
+
+export function shouldApplyDocumentReconcileRequest(
+  request: Pick<DocumentReconcileRequest, "targetRevision">,
+  latestRequestedTarget: string | undefined,
+): boolean {
+  return !latestRequestedTarget || request.targetRevision === latestRequestedTarget;
+}
+
 const DOCUMENT_MUTATION_TOOLS = new Set([
   "apply_text_change",
   "apply_text_changes",
@@ -14,33 +37,37 @@ export function documentMutationRevisionFromEvent(event: AgentEvent): string | u
 }
 
 export function createLatestDocumentReconcileScheduler(
-  reconcile: (targetRevision: string) => Promise<void>,
+  reconcile: (request: DocumentReconcileRequest) => Promise<void>,
 ) {
-  let pendingRevision: string | undefined;
+  let pendingRequest: DocumentReconcileRequest | undefined;
   let active: Promise<void> | undefined;
-  let activeRevision: string | undefined;
+  let activeRequest: DocumentReconcileRequest | undefined;
 
   const drain = async () => {
     let lastError: unknown;
-    while (pendingRevision) {
-      const targetRevision = pendingRevision;
-      pendingRevision = undefined;
-      activeRevision = targetRevision;
+    while (pendingRequest) {
+      const request = pendingRequest;
+      pendingRequest = undefined;
+      activeRequest = request;
       try {
-        await reconcile(targetRevision);
+        await reconcile(request);
         lastError = undefined;
       } catch (error) {
         lastError = error;
       } finally {
-        activeRevision = undefined;
+        activeRequest = undefined;
       }
     }
     if (lastError) throw lastError;
   };
 
   return {
-    request(targetRevision: string) {
-      if (activeRevision !== targetRevision) pendingRevision = targetRevision;
+    request(request: DocumentReconcileRequest) {
+      const sameActiveRequest = activeRequest
+        && activeRequest.taskId === request.taskId
+        && activeRequest.generation === request.generation
+        && activeRequest.targetRevision === request.targetRevision;
+      if (!sameActiveRequest) pendingRequest = request;
       if (!active) active = drain().finally(() => { active = undefined; });
       return active;
     },

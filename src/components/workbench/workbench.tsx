@@ -31,7 +31,7 @@ import type { AgentImageAttachment } from "@/modules/agent/application/message-p
 import { ManualEditRequestError, saveBrowserManualDocumentEdit } from "@/modules/documents/browser/manual-edit";
 import type { DocumentEditorPort, DocumentEditorState, DocumentSurfacePort } from "@/modules/documents";
 import { createDocumentClientToolDispatcher } from "./document-client-tool-dispatcher";
-import { createLatestDocumentReconcileScheduler, documentMutationRevisionFromEvent } from "./live-document-reconcile";
+import { createLatestDocumentReconcileScheduler, documentMutationRevisionFromEvent, isCurrentDocumentProjection, shouldApplyDocumentReconcileRequest, type DocumentProjectionIdentity, type DocumentReconcileRequest } from "./live-document-reconcile";
 
 const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
@@ -45,6 +45,12 @@ export function Workbench() {
   const router = useRouter();
   const routeTaskId = taskIdFromPathname(pathname);
   const loadedTaskIdRef = useRef<string | undefined>(undefined);
+  const documentProjectionIdentityRef = useRef<DocumentProjectionIdentity>({ taskId: routeTaskId ?? "", generation: 0 });
+  const advanceDocumentProjectionIdentity = (nextTaskId?: string) => {
+    const nextIdentity = { taskId: nextTaskId ?? "", generation: documentProjectionIdentityRef.current.generation + 1 };
+    documentProjectionIdentityRef.current = nextIdentity;
+    return nextIdentity;
+  };
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [mobilePanel, setMobilePanel] = useState<"none" | "outline" | "agent" | "versions">("none");
@@ -92,14 +98,14 @@ export function Workbench() {
   const approvalSubmissionGateRef = useRef(createApprovalSubmissionGate());
   const taskListRequestRef = useRef<Promise<TaskPage> | undefined>(undefined);
   const runtimeView = resolveAgentRuntimeView({ run, checkpoint: loopResult?.checkpoint });
-  const liveDocumentContextRef = useRef<{ taskId?: string; fileName: string; workspaceReady: boolean }>({ fileName: "paperduck.docx", workspaceReady: false });
+  const liveDocumentContextRef = useRef<{ taskId?: string; fileName: string; workspaceReady: boolean; identity: DocumentProjectionIdentity }>({ fileName: "paperduck.docx", workspaceReady: false, identity: documentProjectionIdentityRef.current });
   liveDocumentContextRef.current = {
     taskId,
     fileName: documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx",
     workspaceReady,
+    identity: documentProjectionIdentityRef.current,
   };
-  const latestLiveRevisionRef = useRef<string | undefined>(undefined);
-  const liveMutationToolNamesRef = useRef(new Map<string, string>());
+  const latestLiveRequestRef = useRef<DocumentReconcileRequest | undefined>(undefined);
   const hasActiveAgent = ["queued", "running", "awaiting_approval", "awaiting_user", "awaiting_client"].includes(runtimeView.runtimeStatus);
   const confirmDiscardManualEdits = useCallback(() => {
     if (!manualEditing || !editorState.dirty) return true;
@@ -120,6 +126,7 @@ export function Workbench() {
   }, [setActiveEvents, setLoopResult]);
 
   const resetWorkspace = useCallback(() => {
+    advanceDocumentProjectionIdentity();
     editorRef.current?.destroy();
     editorRef.current = undefined;
     setManualEditing(false);
@@ -143,8 +150,7 @@ export function Workbench() {
     setActiveEvents([]);
     setHistoricalEvents([]);
     setNotice("请选择真实 DOCX，或从左侧打开一个历史任务");
-    latestLiveRevisionRef.current = undefined;
-    liveMutationToolNamesRef.current.clear();
+    latestLiveRequestRef.current = undefined;
   }, [setMessages, setLoopResult, setActiveEvents, setHistoricalEvents, setDocumentLoadAndRevision]);
 
   const refreshTaskList = async () => {
@@ -196,6 +202,7 @@ export function Workbench() {
       return;
     }
     if (loadedTaskIdRef.current === routeTaskId) return;
+    const routeIdentity = advanceDocumentProjectionIdentity(routeTaskId);
     const abort = new AbortController();
     setConversationLoading(true);
     historicalTimelineReadyRef.current = false;
@@ -242,8 +249,7 @@ export function Workbench() {
             : []
         )));
         setTaskId(workspace.task.id);
-        latestLiveRevisionRef.current = undefined;
-        liveMutationToolNamesRef.current.clear();
+        latestLiveRequestRef.current = undefined;
         setWorkspaceReady(Boolean(workspace.workingDocumentId));
         setLoopResult(undefined);
         setActiveEvents([]);
@@ -253,7 +259,9 @@ export function Workbench() {
         // commits as soon as its own request settles; a slow document or
         // inspection request cannot hold back semantic conversation history.
         loadedTaskIdRef.current = workspace.task.id;
-        const isCurrentProjection = () => !abort.signal.aborted && loadedTaskIdRef.current === workspace.task.id;
+        const isCurrentProjection = () => !abort.signal.aborted
+          && loadedTaskIdRef.current === workspace.task.id
+          && isCurrentDocumentProjection(routeIdentity, documentProjectionIdentityRef.current);
         if (workspace.workingDocumentId) {
           startProgressiveProjection({ load: () => loadCurrentTaskDocument(workspace.task.id, workspace.fileName), onSuccess: (document) => {
             setDocumentLoadAndRevision({ status: "ready", document: { file: document.file, bytes: document.bytes, revision: document.version.revision } });
@@ -367,30 +375,37 @@ export function Workbench() {
   }
 
   async function reconcileCurrentDocumentIfChanged(id: string, fileName: string) {
+    const identity = documentProjectionIdentityRef.current;
+    if (!isCurrentDocumentProjection({ taskId: id, generation: identity.generation }, identity)) return false;
     const nextDocument = await loadCurrentTaskDocument(id, fileName);
+    if (!isCurrentDocumentProjection({ taskId: id, generation: identity.generation }, documentProjectionIdentityRef.current)) return false;
     const currentRevision = currentDocumentRevisionRef.current;
     if (!shouldReloadDocumentForRevision(currentRevision, nextDocument.version.revision)) return false;
 
     setDocumentLoadAndRevision({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
     const inspection = await inspectBrowserTaskDocument(id);
-    if (loadedTaskIdRef.current !== id || currentDocumentRevisionRef.current !== nextDocument.version.revision) return true;
+    if (!isCurrentDocumentProjection({ taskId: id, generation: identity.generation }, documentProjectionIdentityRef.current)
+      || loadedTaskIdRef.current !== id || currentDocumentRevisionRef.current !== nextDocument.version.revision) return true;
     setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
-    await refreshVersions(id, () => loadedTaskIdRef.current === id && currentDocumentRevisionRef.current === nextDocument.version.revision);
+    await refreshVersions(id, () => isCurrentDocumentProjection({ taskId: id, generation: identity.generation }, documentProjectionIdentityRef.current)
+      && loadedTaskIdRef.current === id && currentDocumentRevisionRef.current === nextDocument.version.revision);
     return true;
   }
 
-  async function reconcileLiveDocumentRevision(id: string, fileName: string, targetRevision: string) {
+  async function reconcileLiveDocumentRevision(request: DocumentReconcileRequest, fileName: string) {
+    const { taskId: id, targetRevision } = request;
     const started = performance.now();
-    if (process.env.NODE_ENV !== "production") console.info("client.document.live_reconcile.started", { taskId: id, toolName: "document-mutation", targetRevision, trigger: "tool.completed" });
+    const isCurrent = () => isCurrentDocumentProjection(request, documentProjectionIdentityRef.current)
+      && loadedTaskIdRef.current === id;
+    if (!isCurrent()) return;
+    if (process.env.NODE_ENV !== "production") console.info("client.document.live_reconcile.started", { taskId: id, toolName: request.toolName, targetRevision, trigger: "tool.completed" });
     try {
       const fetchStarted = performance.now();
       const nextDocument = await loadCurrentTaskDocument(id, fileName);
       const fetchDurationMs = performance.now() - fetchStarted;
       const loadedRevision = nextDocument.version.revision;
-      const latestTargetRevision = latestLiveRevisionRef.current;
-      const toolName = liveMutationToolNamesRef.current.get(targetRevision) ?? "document-mutation";
-      if (latestTargetRevision && loadedRevision !== latestTargetRevision) {
-        if (process.env.NODE_ENV !== "production") console.info("client.document.live_reconcile.completed", { taskId: id, toolName, targetRevision, loadedRevision, changed: false, fetchDurationMs, totalDurationMs: performance.now() - started });
+      if (!isCurrent() || !shouldApplyDocumentReconcileRequest(request, latestLiveRequestRef.current?.targetRevision)) {
+        if (process.env.NODE_ENV !== "production") console.info("client.document.live_reconcile.completed", { taskId: id, toolName: request.toolName, targetRevision, loadedRevision, changed: false, fetchDurationMs, totalDurationMs: performance.now() - started });
         return;
       }
       const changed = shouldReloadDocumentForRevision(currentDocumentRevisionRef.current, loadedRevision);
@@ -398,15 +413,15 @@ export function Workbench() {
         setDocumentLoadAndRevision({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: loadedRevision } });
         setNotice("修改已完成，正在同步最新文档…");
       }
-      if (process.env.NODE_ENV !== "production") console.info("client.document.live_reconcile.completed", { taskId: id, toolName, targetRevision, loadedRevision, changed, fetchDurationMs, totalDurationMs: performance.now() - started });
+      if (process.env.NODE_ENV !== "production") console.info("client.document.live_reconcile.completed", { taskId: id, toolName: request.toolName, targetRevision, loadedRevision, changed, fetchDurationMs, totalDurationMs: performance.now() - started });
       void (async () => {
         try {
           const inspection = await inspectBrowserTaskDocument(id);
-          if (loadedTaskIdRef.current !== id || currentDocumentRevisionRef.current !== loadedRevision) return;
+          if (!isCurrent() || currentDocumentRevisionRef.current !== loadedRevision) return;
           setImageNodes(inspection.images);
           setParagraphCount(inspection.counts.paragraphs);
           setTableCellCount(inspection.counts.tableCells);
-          await refreshVersions(id, () => loadedTaskIdRef.current === id && currentDocumentRevisionRef.current === loadedRevision);
+          await refreshVersions(id, () => isCurrent() && currentDocumentRevisionRef.current === loadedRevision);
         } catch (error) {
           if (process.env.NODE_ENV !== "production") console.warn("client.document.live_reconcile.secondary_failed", { taskId: id, targetRevision, error });
         }
@@ -417,22 +432,28 @@ export function Workbench() {
     }
   }
 
-  const liveDocumentReconcileScheduler = useRef(createLatestDocumentReconcileScheduler(async (targetRevision) => {
+  const liveDocumentReconcileScheduler = useRef(createLatestDocumentReconcileScheduler(async (request) => {
     const context = liveDocumentContextRef.current;
     if (!context.workspaceReady || !context.taskId) return;
-    await reconcileLiveDocumentRevision(context.taskId, context.fileName, targetRevision);
+    await reconcileLiveDocumentRevision(request, context.fileName);
   })).current;
 
   const scheduleLiveDocumentReconcile = (targetRevision: string, toolName = "document-mutation") => {
-    latestLiveRevisionRef.current = targetRevision;
-    liveMutationToolNamesRef.current.set(targetRevision, toolName);
-    return liveDocumentReconcileScheduler.request(targetRevision);
+    const context = liveDocumentContextRef.current;
+    if (!context.workspaceReady || !context.taskId) return Promise.resolve();
+    if (currentDocumentRevisionRef.current === targetRevision) return Promise.resolve();
+    const request: DocumentReconcileRequest = { taskId: context.taskId, generation: context.identity.generation, targetRevision, toolName };
+    latestLiveRequestRef.current = request;
+    return liveDocumentReconcileScheduler.request(request).finally(() => {
+      if (latestLiveRequestRef.current?.taskId === request.taskId
+        && latestLiveRequestRef.current.generation === request.generation
+        && latestLiveRequestRef.current.targetRevision === request.targetRevision) latestLiveRequestRef.current = undefined;
+    });
   };
 
   const requestLiveDocumentReconcile = (event: AgentEvent) => {
     const targetRevision = documentMutationRevisionFromEvent(event);
     if (!targetRevision || event.type !== "tool.completed") return;
-    liveMutationToolNamesRef.current.set(targetRevision, event.name);
     setNotice("修改已完成，正在同步最新文档…");
     void scheduleLiveDocumentReconcile(targetRevision, event.name).catch((error) => {
       if (process.env.NODE_ENV !== "production") console.warn("client.document.live_reconcile.failed", { taskId: taskId, targetRevision, error });
@@ -738,6 +759,7 @@ export function Workbench() {
 
   const startNewTask = () => {
     if (!confirmDiscardManualEdits()) return;
+    advanceDocumentProjectionIdentity();
     resetWorkspace();
     if (pathname !== "/") router.push("/");
   };
@@ -745,6 +767,7 @@ export function Workbench() {
   const openTask = (id: string) => {
     if (id === routeTaskId) return;
     if (!confirmDiscardManualEdits()) return;
+    advanceDocumentProjectionIdentity(id);
     router.push(taskUrl(id));
   };
 
@@ -808,6 +831,9 @@ export function Workbench() {
           : `${file.name} 已加入参考资料；请继续上传模板以开始编辑`);
       }
       loadedTaskIdRef.current = persisted.taskId;
+      if (!documentProjectionIdentityRef.current.taskId || documentProjectionIdentityRef.current.taskId !== persisted.taskId) {
+        advanceDocumentProjectionIdentity(persisted.taskId);
+      }
       if (creatingNewTask) router.replace(taskUrl(persisted.taskId));
       void refreshTaskList();
     } catch (error) {

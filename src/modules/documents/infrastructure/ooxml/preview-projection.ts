@@ -1,4 +1,5 @@
 import type { DocumentDiagnostic } from "../../domain/types";
+import { assertSupportedImage } from "./media";
 import { encodeXmlText } from "./xml";
 import { getContentType, loadPackage } from "./package-model";
 
@@ -54,8 +55,10 @@ function dimensionsFor(objectXml: string, shapeXml: string): Dimensions | undefi
   const objectAttributes = /^<w:object\b[^>]*>/i.exec(objectXml)?.[0];
   const shapeAttributes = /^<v:shape\b[^>]*>/i.exec(shapeXml)?.[0];
   const shapeStyle = shapeAttributes ? /\bstyle\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(shapeAttributes) : undefined;
-  const cx = styleDimension(shapeStyle?.[1] ?? shapeStyle?.[2], "width") ?? fallbackDimension(objectAttributes ? /\bw:dxaOrig\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(objectAttributes)?.[1] : undefined);
-  const cy = styleDimension(shapeStyle?.[1] ?? shapeStyle?.[2], "height") ?? fallbackDimension(objectAttributes ? /\bw:dyaOrig\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(objectAttributes)?.[1] : undefined);
+  const originalWidth = objectAttributes ? /\bw:dxaOrig\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(objectAttributes) : undefined;
+  const originalHeight = objectAttributes ? /\bw:dyaOrig\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(objectAttributes) : undefined;
+  const cx = styleDimension(shapeStyle?.[1] ?? shapeStyle?.[2], "width") ?? fallbackDimension(originalWidth?.[1] ?? originalWidth?.[2]);
+  const cy = styleDimension(shapeStyle?.[1] ?? shapeStyle?.[2], "height") ?? fallbackDimension(originalHeight?.[1] ?? originalHeight?.[2]);
   return cx && cy ? { cx, cy } : undefined;
 }
 
@@ -135,6 +138,13 @@ function transformStory(
     const contentType = getContentType(loaded, mediaEntry)?.toLowerCase();
     if (contentType !== "image/png" && contentType !== "image/jpeg") {
       diagnostics.push(unsupported(entry, "image-type-is-not-supported", imageRelationshipId));
+      result += objectXml;
+      continue;
+    }
+    try {
+      assertSupportedImage(loaded.entries.get(mediaEntry) ?? new Uint8Array(), contentType);
+    } catch {
+      diagnostics.push(unsupported(entry, "image-bytes-invalid", imageRelationshipId));
       result += objectXml;
       continue;
     }

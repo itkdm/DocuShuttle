@@ -10,7 +10,7 @@ import { createDocx, documentRelationships, documentXml, unknownBytes } from "./
 
 const objectXml = `<w:p><w:r><w:object w:dxaOrig="11086" w:dyaOrig="4842"><v:shape style="width:350pt;height:152.5pt"><v:imagedata r:id="rIdImage1"/></v:shape><o:OLEObject r:id="rIdOle" Type="Embed"/></w:object></w:r></w:p>`;
 
-async function createVmlDocx(options: { document?: string; relationships?: string; contentTypes?: string; includeObject?: boolean } = {}): Promise<Uint8Array> {
+async function createVmlDocx(options: { document?: string; relationships?: string; contentTypes?: string; includeObject?: boolean; imageBytes?: Uint8Array } = {}): Promise<Uint8Array> {
   const sourceDocument = options.document ?? documentXml.replace('id="7" name="Picture 1"', 'id="1" name="Picture 1"');
   const document = sourceDocument
     .replace('xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"', 'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"')
@@ -24,6 +24,7 @@ async function createVmlDocx(options: { document?: string; relationships?: strin
     "word/document.xml": document,
     "word/_rels/document.xml.rels": relationships,
     "word/embeddings/oleObject1.bin": unknownBytes,
+    ...(options.imageBytes ? { "word/media/image1.png": options.imageBytes } : {}),
     ...(contentTypes ? { "[Content_Types].xml": contentTypes } : {}),
   });
 }
@@ -90,6 +91,36 @@ describe("read-only VML preview projection", () => {
     const normalResult = await createReadOnlyPreviewProjection(normal);
     expect(normalResult.transformedObjects).toBe(0);
     expect(normalResult.bytes).toEqual(normal);
+  });
+
+  it.each([
+    ["PNG content type with invalid bytes", async () => createVmlDocx({ imageBytes: unknownBytes })],
+    ["JPEG content type with invalid bytes", async () => createVmlDocx({
+      imageBytes: unknownBytes,
+      contentTypes: (await readTextEntry(await createDocx(), "[Content_Types].xml"))
+        .replace("</Types>", '<Override PartName="/word/media/image1.png" ContentType="image/jpeg"/></Types>'),
+    })],
+  ])("fails closed for %s", async (_name, build) => {
+    const input = await build();
+    const projected = await createReadOnlyPreviewProjection(input);
+    const document = await readTextEntry(projected.bytes, "word/document.xml");
+    expect(projected.transformedObjects).toBe(0);
+    expect(projected.bytes).toEqual(input);
+    expect(document).toContain("<w:object");
+    expect(projected.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "VML_PREVIEW_UNSUPPORTED", details: expect.objectContaining({ reason: "image-bytes-invalid" }) }),
+    ]));
+  });
+
+  it("uses single-quoted dxaOrig/dyaOrig values for dimension fallback", async () => {
+    const input = await createVmlDocx({
+      includeObject: false,
+      document: documentXml.replace("</w:body>", '<w:p><w:r><w:object w:dxaOrig=\'11086\' w:dyaOrig=\'4842\'><v:shape style="position:relative"><v:imagedata r:id="rIdImage1"/></v:shape></w:object></w:r></w:p></w:body>'),
+    });
+    const projected = await createReadOnlyPreviewProjection(input);
+    const document = await readTextEntry(projected.bytes, "word/document.xml");
+    expect(projected.transformedObjects).toBe(1);
+    expect(document).toContain('cx="7039610" cy="3074670"');
   });
 
   const exactFixture = path.resolve("2310250478-孔德明-实验1.2.docx");

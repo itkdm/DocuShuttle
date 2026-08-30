@@ -31,7 +31,7 @@ import type { AgentImageAttachment } from "@/modules/agent/application/message-p
 import { ManualEditRequestError, saveBrowserManualDocumentEdit } from "@/modules/documents/browser/manual-edit";
 import type { DocumentEditorPort, DocumentEditorState, DocumentSurfacePort } from "@/modules/documents";
 import { createDocumentClientToolDispatcher } from "./document-client-tool-dispatcher";
-import { createLatestDocumentReconcileScheduler, documentMutationRevisionFromEvent, isCurrentDocumentProjection, shouldApplyDocumentReconcileRequest, type DocumentProjectionIdentity, type DocumentReconcileRequest } from "./live-document-reconcile";
+import { createLatestDocumentReconcileScheduler, documentMutationRevisionFromEvent, isCurrentDocumentProjection, isDocumentProjectionSequenceCurrent, shouldApplyDocumentReconcileRequest, type DocumentProjectionIdentity, type DocumentReconcileRequest } from "./live-document-reconcile";
 
 const initialAssets: UploadAsset[] = [];
 const initialVersions: VersionItem[] = [
@@ -60,7 +60,20 @@ export function Workbench() {
     routeTaskId ? { status: "loading", fileName: "正在打开任务" } : { status: "empty" }
   ));
   const currentDocumentRevisionRef = useRef<string | undefined>(undefined);
+  const documentProjectionSequenceRef = useRef(0);
+  const documentProjectionSnapshotRef = useRef<string | undefined>(undefined);
   const setDocumentLoadAndRevision = useCallback((next: DocumentLoadState) => {
+    const snapshot = next.status === "ready"
+      ? `ready:${next.document.revision}`
+      : next.status === "loading"
+        ? `loading:${next.fileName}`
+        : next.status === "error"
+          ? `error:${next.message}`
+          : "empty";
+    if (documentProjectionSnapshotRef.current !== snapshot) {
+      documentProjectionSequenceRef.current += 1;
+      documentProjectionSnapshotRef.current = snapshot;
+    }
     currentDocumentRevisionRef.current = next.status === "ready" ? next.document.revision : undefined;
     setDocumentLoad(next);
   }, []);
@@ -376,9 +389,13 @@ export function Workbench() {
 
   async function reconcileCurrentDocumentIfChanged(id: string, fileName: string) {
     const identity = documentProjectionIdentityRef.current;
+    const projectionSequenceAtStart = documentProjectionSequenceRef.current;
     if (!isCurrentDocumentProjection({ taskId: id, generation: identity.generation }, identity)) return false;
     const nextDocument = await loadCurrentTaskDocument(id, fileName);
     if (!isCurrentDocumentProjection({ taskId: id, generation: identity.generation }, documentProjectionIdentityRef.current)) return false;
+    if (!isDocumentProjectionSequenceCurrent(projectionSequenceAtStart, documentProjectionSequenceRef.current)
+      && currentDocumentRevisionRef.current === nextDocument.version.revision) return false;
+    if (!isDocumentProjectionSequenceCurrent(projectionSequenceAtStart, documentProjectionSequenceRef.current)) return false;
     const currentRevision = currentDocumentRevisionRef.current;
     if (!shouldReloadDocumentForRevision(currentRevision, nextDocument.version.revision)) return false;
 
@@ -404,7 +421,9 @@ export function Workbench() {
       const nextDocument = await loadCurrentTaskDocument(id, fileName);
       const fetchDurationMs = performance.now() - fetchStarted;
       const loadedRevision = nextDocument.version.revision;
-      if (!isCurrent() || !shouldApplyDocumentReconcileRequest(request, latestLiveRequestRef.current?.targetRevision)) {
+      if (!isCurrent()
+        || !isDocumentProjectionSequenceCurrent(request.projectionSequenceAtStart, documentProjectionSequenceRef.current)
+        || !shouldApplyDocumentReconcileRequest(request, latestLiveRequestRef.current?.targetRevision)) {
         if (process.env.NODE_ENV !== "production") console.info("client.document.live_reconcile.completed", { taskId: id, toolName: request.toolName, targetRevision, loadedRevision, changed: false, fetchDurationMs, totalDurationMs: performance.now() - started });
         return;
       }
@@ -442,7 +461,13 @@ export function Workbench() {
     const context = liveDocumentContextRef.current;
     if (!context.workspaceReady || !context.taskId) return Promise.resolve();
     if (currentDocumentRevisionRef.current === targetRevision) return Promise.resolve();
-    const request: DocumentReconcileRequest = { taskId: context.taskId, generation: context.identity.generation, targetRevision, toolName };
+    const request: DocumentReconcileRequest = {
+      taskId: context.taskId,
+      generation: context.identity.generation,
+      projectionSequenceAtStart: documentProjectionSequenceRef.current,
+      targetRevision,
+      toolName,
+    };
     latestLiveRequestRef.current = request;
     return liveDocumentReconcileScheduler.request(request).finally(() => {
       if (latestLiveRequestRef.current?.taskId === request.taskId

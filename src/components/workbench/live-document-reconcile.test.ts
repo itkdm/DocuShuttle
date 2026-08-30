@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAgentEvent } from "@/modules/agent";
-import { createLatestDocumentReconcileScheduler, documentMutationRevisionFromEvent, isCurrentDocumentProjection, shouldApplyDocumentReconcileRequest, type DocumentReconcileRequest } from "./live-document-reconcile";
+import { shouldReloadDocumentForRevision } from "./document-reconciliation";
+import { createLatestDocumentReconcileScheduler, documentMutationRevisionFromEvent, isCurrentDocumentProjection, isDocumentProjectionSequenceCurrent, shouldApplyDocumentReconcileRequest, type DocumentReconcileRequest } from "./live-document-reconcile";
 
 describe("live document reconcile", () => {
   it("recognizes only completed document mutations with a revision", () => {
@@ -34,7 +35,7 @@ describe("live document reconcile", () => {
       await gates[reconciled.length - 1]?.promise;
     });
     const scheduler = createLatestDocumentReconcileScheduler(reconcile);
-    const request = (targetRevision: string): DocumentReconcileRequest => ({ taskId: "task-a", generation: 1, targetRevision, toolName: "apply_text_change" });
+    const request = (targetRevision: string): DocumentReconcileRequest => ({ taskId: "task-a", generation: 1, projectionSequenceAtStart: 10, targetRevision, toolName: "apply_text_change" });
 
     const first = scheduler.request(request("r11"));
     await Promise.resolve();
@@ -55,7 +56,7 @@ describe("live document reconcile", () => {
       if (attempts === 1) throw new Error("temporary failure");
     });
     const scheduler = createLatestDocumentReconcileScheduler(reconcile);
-    const request = (targetRevision: string): DocumentReconcileRequest => ({ taskId: "task-a", generation: 1, targetRevision, toolName: "apply_text_change" });
+    const request = (targetRevision: string): DocumentReconcileRequest => ({ taskId: "task-a", generation: 1, projectionSequenceAtStart: 10, targetRevision, toolName: "apply_text_change" });
 
     await expect(scheduler.request(request("r11"))).rejects.toThrow("temporary failure");
     await expect(scheduler.request(request("r12"))).resolves.toBeUndefined();
@@ -74,6 +75,15 @@ describe("live document reconcile", () => {
     expect(shouldApplyDocumentReconcileRequest({ targetRevision: "r11" }, "r13")).toBe(false);
   });
 
+  it("discards a same-task response after another projection advances the sequence", () => {
+    expect(isDocumentProjectionSequenceCurrent(10, 11)).toBe(false);
+  });
+
+  it("does not remount when the stale response already matches the displayed revision", () => {
+    expect(isDocumentProjectionSequenceCurrent(10, 11)).toBe(false);
+    expect(shouldReloadDocumentForRevision("r12", "r12")).toBe(false);
+  });
+
   it("coalesces task-scoped requests without projecting the old task into the new one", async () => {
     const gate = deferred<void>();
     const reconciled: DocumentReconcileRequest[] = [];
@@ -82,9 +92,9 @@ describe("live document reconcile", () => {
       await gate.promise;
     });
     const scheduler = createLatestDocumentReconcileScheduler(reconcile);
-    const first = scheduler.request({ taskId: "task-a", generation: 1, targetRevision: "r11", toolName: "apply_text_change" });
+    const first = scheduler.request({ taskId: "task-a", generation: 1, projectionSequenceAtStart: 10, targetRevision: "r11", toolName: "apply_text_change" });
     await Promise.resolve();
-    scheduler.request({ taskId: "task-b", generation: 2, targetRevision: "r22", toolName: "apply_text_change" });
+    scheduler.request({ taskId: "task-b", generation: 2, projectionSequenceAtStart: 20, targetRevision: "r22", toolName: "apply_text_change" });
     gate.resolve();
     await first;
     expect(reconciled.map((item) => `${item.taskId}:${item.targetRevision}`)).toEqual(["task-a:r11", "task-b:r22"]);

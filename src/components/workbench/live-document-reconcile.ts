@@ -3,6 +3,7 @@ import type { AgentEvent } from "@/modules/agent";
 export type DocumentReconcileRequest = {
   taskId: string;
   generation: number;
+  projectionSequenceAtStart: number;
   targetRevision: string;
   toolName: string;
 };
@@ -21,6 +22,13 @@ export function shouldApplyDocumentReconcileRequest(
   latestRequestedTarget: string | undefined,
 ): boolean {
   return !latestRequestedTarget || request.targetRevision === latestRequestedTarget;
+}
+
+export function isDocumentProjectionSequenceCurrent(
+  requestSequence: number,
+  currentSequence: number,
+): boolean {
+  return requestSequence === currentSequence;
 }
 
 const DOCUMENT_MUTATION_TOOLS = new Set([

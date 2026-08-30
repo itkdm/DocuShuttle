@@ -1,7 +1,7 @@
 "use client";
 
 import type { AgentRun } from "./domain/model";
-import type { AgentClientToolResult } from "./domain/model";
+import type { AgentClientToolResult, AgentDocumentCaptureResult } from "./domain/model";
 import type { AgentPermissionMode } from "./application/loop";
 import type { PublicAgentLoopResult } from "./application/public-runtime";
 import { isAgentEvent, isDurableAgentEvent, type AgentEvent, type DurableAgentEvent } from "./application/events";
@@ -285,7 +285,7 @@ export const resumeBrowserAgentLoop = async (runId: string, approval: "approved"
 export const resumeBrowserClientTool = async (runId: string, interactionId: string, callId: string, result: AgentClientToolResult) =>
   json<BrowserAgentLoopResult>(`/api/agent/runs/${runId}/loop/resume`, post({ interactionId, callId, result }));
 
-export const uploadBrowserDocumentPreview = async (taskId: string, identity: { runId: string; interactionId: string; callId: string }, capture: { blob: Blob; width: number; height: number; pageNumber?: number }) => {
+export const uploadBrowserDocumentPreview = async (taskId: string, identity: { runId: string; interactionId: string; callId: string }, capture: { blob: Blob; width: number; height: number; pageNumber?: number }): Promise<AgentDocumentCaptureResult> => {
   const form = new FormData();
   form.set("file", capture.blob, "document-preview.png");
   form.set("width", String(capture.width));

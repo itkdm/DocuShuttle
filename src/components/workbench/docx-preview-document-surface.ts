@@ -1,7 +1,8 @@
 import { toBlob } from "html-to-image";
 
-import type { DocumentPageCapture, DocumentSurfacePort, DocumentSurfaceState, DocumentVisibleCapture } from "@/modules/documents/application/document-surface-port";
+import type { DocumentPageCapture, DocumentScrollCommand, DocumentScrollResult, DocumentSurfacePort, DocumentSurfaceState, DocumentVisibleCapture } from "@/modules/documents/application/document-surface-port";
 import { captureDocumentViewport } from "./capture-document-viewport";
+import { scrollDocumentViewport } from "./scroll-document-viewport";
 
 const MAX_CAPTURE_BYTES = 10 * 1024 * 1024;
 const MAX_DIMENSION = 10_000;
@@ -51,6 +52,12 @@ export class DocxPreviewDocumentSurface implements DocumentSurfacePort {
   async captureVisible(): Promise<DocumentVisibleCapture> {
     if (!this.state.ready || this.state.dirty) throw new Error(this.state.dirty ? "DOCUMENT_VIEW_DIRTY" : "DOCUMENT_VIEW_NOT_READY");
     return captureDocumentViewport(this.root);
+  }
+
+  async scrollViewport(command: DocumentScrollCommand, targetScrollTop?: number): Promise<DocumentScrollResult> {
+    if (!this.state.ready || this.state.dirty) throw new Error(this.state.dirty ? "DOCUMENT_VIEW_DIRTY" : "DOCUMENT_VIEW_NOT_READY");
+    if (!this.state.renderedRevision) throw new Error("DOCUMENT_VIEW_REVISION_UNAVAILABLE");
+    return scrollDocumentViewport(this.root, command, this.state.renderedRevision, targetScrollTop);
   }
 
   private pages(): HTMLElement[] {

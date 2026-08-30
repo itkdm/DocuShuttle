@@ -14,7 +14,7 @@ export type AgentRuntimePendingInteraction =
   | { readonly interactionId: string; readonly type: "user_input"; readonly question: string }
   | { readonly interactionId: string; readonly type: "client_tool"; readonly callId: string; readonly toolName: string; readonly input: unknown; readonly expectedRevision: string };
 
-export type AgentClientToolResult = {
+export type AgentDocumentCaptureResult = {
   readonly assetId: string;
   readonly mimeType: "image/png";
   readonly sha256: string;
@@ -23,6 +23,19 @@ export type AgentClientToolResult = {
   readonly height: number;
   readonly revision: string;
 };
+
+export type AgentDocumentScrollResult = {
+  readonly revision: string;
+  readonly beforeScrollTop: number;
+  readonly scrollTop: number;
+  readonly maxScrollTop: number;
+  readonly viewportHeight: number;
+  readonly moved: boolean;
+  readonly atTop: boolean;
+  readonly atBottom: boolean;
+};
+
+export type AgentClientToolResult = AgentDocumentCaptureResult | AgentDocumentScrollResult;
 
 export type AgentInteractionResolution =
   | { readonly interactionId: string; readonly type: "approval"; readonly callId: string; readonly toolName: string; readonly input: unknown; readonly decision: "approved" | "rejected" }

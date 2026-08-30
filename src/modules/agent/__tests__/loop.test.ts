@@ -149,6 +149,20 @@ describe("AgentLoopRunner", () => {
     expect(JSON.stringify(first)).not.toContain("base64");
     expect(JSON.stringify(first)).not.toContain("bytes");
   });
+  it("emits a safe scroll command and accepts its metadata result", async () => {
+    const store = new MemoryStore();
+    const clientTool: AgentTool = {
+      name: "scroll_document_view", description: "Scroll the visible document viewport", clientExecution: true,
+      inputSchema: z.object({ kind: z.literal("relative"), direction: z.enum(["up", "down"]), amount: z.enum(["small", "viewport"]) }),
+      async execute() { return {}; },
+    };
+    const model = { decide: async () => ({ kind: "tool_calls" as const, calls: [{ id: "scroll-call", name: "scroll_document_view", input: { kind: "relative", direction: "down", amount: "viewport" } }] }) };
+    const result = await new AgentLoopRunner(model, store, [clientTool], 24, 48, 30_000, undefined, 30_000, undefined, undefined, 120_000, async () => "revision-1").run("run-scroll", "继续查看");
+    expect(result.events.find((event) => event.type === "client_tool.required")).toMatchObject({ name: "scroll_document_view", kind: "relative", direction: "down", amount: "viewport" });
+    const pending = result.checkpoint.pendingInteraction;
+    const resumed = await new AgentLoopRunner({ decide: async () => ({ kind: "message" as const, text: "完成", finish: true }) }, store, []).resumeClientTool("run-scroll", pending!.interactionId, "scroll-call", { revision: "revision-1", beforeScrollTop: 0, scrollTop: 800, maxScrollTop: 2_000, viewportHeight: 1_000, moved: true, atTop: false, atBottom: false });
+    expect(resumed.events.find((event) => event.type === "client_tool.resolved")).toMatchObject({ name: "scroll_document_view", scrollTop: 800, atBottom: false });
+  });
   it("accepts an image-only fresh user turn and exposes only safe image identity to the model", async () => {
     let modelInput = "";
     const image = { assetId: "asset-image-1", mimeType: "image/png" as const };

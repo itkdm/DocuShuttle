@@ -58,7 +58,8 @@ describe("SuperDocDocumentViewer", () => {
     stage.className = "superdoc-viewer-host";
     stage.append(document.createElement("div"));
     canvas.append(stage);
-    Object.defineProperties(canvas, { clientWidth: { value: 640 }, clientHeight: { value: 480 }, scrollTop: { value: 120 }, scrollLeft: { value: 0 } });
+    let currentScrollTop = 120;
+    Object.defineProperties(canvas, { clientWidth: { value: 640 }, clientHeight: { value: 480 }, scrollHeight: { value: 1_000 }, scrollTop: { configurable: true, get: () => currentScrollTop, set: (value: number) => { currentScrollTop = value; } }, scrollLeft: { value: 0 } });
     document.body.append(canvas);
 
     const viewer = await SuperDocDocumentViewer.mount(stage, new Blob(["docx"]), "revision-1", { onReady: vi.fn(), onError: vi.fn() });
@@ -67,6 +68,7 @@ describe("SuperDocDocumentViewer", () => {
     expect(capture).toMatchObject({ width: 640, height: 480, mimeType: "image/png" });
     const clonedViewport = (toBlob.mock.calls as unknown as Array<[HTMLElement]>)[0]?.[0];
     expect((clonedViewport.querySelector(".superdoc-viewer-host") as HTMLElement).style.transform).toBe("translate(0px, -120px)");
+    await expect(viewer.scrollViewport({ kind: "edge", target: "bottom" })).resolves.toMatchObject({ revision: "revision-1", scrollTop: 520, maxScrollTop: 520, atBottom: true });
     viewer.destroy();
     expect(viewer.getState()).toMatchObject({ ready: false, dirty: false, renderedRevision: "revision-1" });
   });

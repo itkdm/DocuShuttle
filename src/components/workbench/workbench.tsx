@@ -13,6 +13,7 @@ import { formatFileSize, readDocxFile } from "./docx-file";
 import { persistSourceFile } from "@/modules/uploads/browser-source-upload";
 import { emptySourceRegistrationState, isWorkingDocumentUpload, reduceSourceRegistration, type SourceRegistrationState } from "@/modules/uploads/source-role-semantics";
 import { cancelBrowserAgentRun, createBrowserAgentRun, createBrowserDocumentExport, inspectBrowserTaskDocument, loadBrowserAgentLoop, loadBrowserAgentRun, loadBrowserAgentTaskTimeline, loadBrowserConversationMessages, loadBrowserDocumentVersions, loadCurrentTaskDocument, recoverBrowserAgentLoop, restoreBrowserDocumentVersion, runBrowserAgentLoopStream, resumeBrowserAgentLoopStream, resumeBrowserClientTool, type BrowserImageNode } from "@/modules/agent/browser-runtime";
+import { shouldReloadDocumentForRevision } from "./document-reconciliation";
 import { useConversationStore } from "./conversation-store";
 import { listBrowserTasks, loadBrowserTaskWorkspace, type TaskPage } from "@/modules/tasks/browser-tasks";
 import type { TaskSummary } from "@/modules/tasks/domain";
@@ -345,6 +346,18 @@ export function Workbench() {
     })));
   }
 
+  async function reconcileCurrentDocumentIfChanged(id: string, fileName: string) {
+    const nextDocument = await loadCurrentTaskDocument(id, fileName);
+    const currentRevision = documentLoad.status === "ready" ? documentLoad.document.revision : undefined;
+    if (!shouldReloadDocumentForRevision(currentRevision, nextDocument.version.revision)) return false;
+
+    setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
+    const inspection = await inspectBrowserTaskDocument(id);
+    setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
+    await refreshVersions(id);
+    return true;
+  }
+
   async function recoverAndReconcileRun(runId: string, signal?: AbortSignal, reconcileTaskId = taskId, canReconcileDocument = workspaceReady) {
     const recovered = await recoverBrowserAgentLoop(runId, (event) => setActiveEvents((items) => mergeTimelineEvents(items, [event])), signal);
     applyRuntimeResult(runId, recovered);
@@ -360,11 +373,7 @@ export function Workbench() {
     } else if (recovered.checkpoint.status === "completed") {
       if (canReconcileDocument && reconcileTaskId) {
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
-        const nextDocument = await loadCurrentTaskDocument(reconcileTaskId, fileName);
-        setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
-        const inspection = await inspectBrowserTaskDocument(reconcileTaskId);
-        setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
-        await refreshVersions(reconcileTaskId);
+        await reconcileCurrentDocumentIfChanged(reconcileTaskId, fileName);
       }
       setNotice("连接恢复，已加载本轮最新文档结果");
     } else if (recovered.checkpoint.status === "failed") {
@@ -412,9 +421,7 @@ export function Workbench() {
         applyRuntimeResult(currentRunId, resultAfterResume);
         if (resultAfterResume.checkpoint.status === "completed") {
           const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
-          const nextDocument = await loadCurrentTaskDocument(currentTaskId, fileName);
-          setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
-          await refreshVersions(currentTaskId);
+          await reconcileCurrentDocumentIfChanged(currentTaskId, fileName);
           setNotice("Agent 已完成视觉检查");
         } else if (resultAfterResume.checkpoint.pendingInteraction) {
           setNotice(resultAfterResume.checkpoint.pendingInteraction.type === "user_input" ? "Agent 正在等待你的回答" : "Agent 正在继续处理");
@@ -548,11 +555,7 @@ export function Workbench() {
         // the turn complete; otherwise the conversation can claim success
         // while the central document still renders the previous bytes.
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
-        const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
-        setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
-        const inspection = await inspectBrowserTaskDocument(taskId);
-        setImageNodes(inspection.images); setParagraphCount(inspection.counts.paragraphs); setTableCellCount(inspection.counts.tableCells);
-        await refreshVersions(taskId);
+        await reconcileCurrentDocumentIfChanged(taskId, fileName);
       }
       setNotice(result.checkpoint.pendingInteraction?.type === "approval"
         ? "Agent 已完成读取并请求写入确认"
@@ -613,9 +616,7 @@ export function Workbench() {
       if (result.checkpoint.status === "completed") {
         if (taskId) {
           const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
-          const nextDocument = await loadCurrentTaskDocument(taskId, fileName);
-          setDocumentLoad({ status: "ready", document: { file: nextDocument.file, bytes: nextDocument.bytes, revision: nextDocument.version.revision } });
-          await refreshVersions(taskId);
+          await reconcileCurrentDocumentIfChanged(taskId, fileName);
         }
         setNotice("Agent 已完成写入并通过版本校验");
       } else if (result.checkpoint.status === "awaiting_user") {

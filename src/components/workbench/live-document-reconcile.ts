@@ -79,5 +79,8 @@ export function createLatestDocumentReconcileScheduler(
       if (!active) active = drain().finally(() => { active = undefined; });
       return active;
     },
+    waitForIdle() {
+      return active ?? Promise.resolve();
+    },
   };
 }

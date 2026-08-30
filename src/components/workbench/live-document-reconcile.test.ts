@@ -99,6 +99,33 @@ describe("live document reconcile", () => {
     await first;
     expect(reconciled.map((item) => `${item.taskId}:${item.targetRevision}`)).toEqual(["task-a:r11", "task-b:r22"]);
   });
+
+  it("waits for an active live reconcile without starting another one", async () => {
+    const gate = deferred<void>();
+    const reconcile = vi.fn(async () => { await gate.promise; });
+    const scheduler = createLatestDocumentReconcileScheduler(reconcile);
+    const request: DocumentReconcileRequest = { taskId: "task-a", generation: 1, projectionSequenceAtStart: 10, targetRevision: "r11", toolName: "apply_text_change" };
+    const active = scheduler.request(request);
+    const idle = scheduler.waitForIdle();
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    let settled = false;
+    void idle.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    gate.resolve();
+    await expect(idle).resolves.toBeUndefined();
+    await active;
+    expect(reconcile).toHaveBeenCalledTimes(1);
+  });
+
+  it("waitForIdle exposes a live failure without starting work", async () => {
+    const reconcile = vi.fn(async () => { throw new Error("live failure"); });
+    const scheduler = createLatestDocumentReconcileScheduler(reconcile);
+    const request: DocumentReconcileRequest = { taskId: "task-a", generation: 1, projectionSequenceAtStart: 10, targetRevision: "r11", toolName: "apply_text_change" };
+    void scheduler.request(request).catch(() => undefined);
+    await expect(scheduler.waitForIdle()).rejects.toThrow("live failure");
+    expect(reconcile).toHaveBeenCalledTimes(1);
+  });
 });
 
 function deferred<T>() {

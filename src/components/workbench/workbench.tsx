@@ -38,7 +38,6 @@ const initialVersions: VersionItem[] = [
   { id: "pending", label: "等待导入文档", time: "当前", actor: "纸上鸭", versionNumber: 0, current: true },
 ];
 const isDocumentMutationTool = (name?: string) => name === "apply_text_change" || name === "apply_text_changes" || name === "replace_document_image";
-const latestDocumentMutationRevision = (events: readonly AgentEvent[]) => events.reduce<string | undefined>((revision, event) => documentMutationRevisionFromEvent(event) ?? revision, undefined);
 const messageImages = (parts: readonly { type?: string; assetId?: unknown; mimeType?: unknown }[]): AgentImageAttachment[] => parts.filter((part): part is { type: "image"; assetId: string; mimeType: AgentImageAttachment["mimeType"] } => part.type === "image" && typeof part.assetId === "string" && ["image/png", "image/jpeg", "image/webp"].includes(String(part.mimeType))).map((part) => ({ assetId: part.assetId, mimeType: part.mimeType }));
 export function Workbench() {
   const pathname = usePathname();
@@ -476,6 +475,11 @@ export function Workbench() {
     });
   };
 
+  async function reconcileAuthoritativeDocumentAfterRun(id: string, fileName: string) {
+    await liveDocumentReconcileScheduler.waitForIdle().catch(() => undefined);
+    await reconcileCurrentDocumentIfChanged(id, fileName);
+  }
+
   const requestLiveDocumentReconcile = (event: AgentEvent) => {
     const targetRevision = documentMutationRevisionFromEvent(event);
     if (!targetRevision || event.type !== "tool.completed") return;
@@ -503,12 +507,8 @@ export function Workbench() {
       setNotice("连接中断，Agent 仍在服务端运行；已恢复执行记录");
     } else if (recovered.checkpoint.status === "completed") {
       if (canReconcileDocument && reconcileTaskId) {
-        const targetRevision = latestDocumentMutationRevision(recovered.events);
-        if (targetRevision) await scheduleLiveDocumentReconcile(targetRevision);
-        else {
-          const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
-          await reconcileCurrentDocumentIfChanged(reconcileTaskId, fileName);
-        }
+        const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
+        await reconcileAuthoritativeDocumentAfterRun(reconcileTaskId, fileName);
       }
       setNotice("连接恢复，已加载本轮最新文档结果");
     } else if (recovered.checkpoint.status === "failed") {
@@ -555,8 +555,6 @@ export function Workbench() {
         if (process.env.NODE_ENV !== "production") console.info("agent.client_tool.resume.completed", { status: resultAfterResume.checkpoint.status });
         applyRuntimeResult(currentRunId, resultAfterResume);
         if (resultAfterResume.checkpoint.status === "completed") {
-          const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
-          await reconcileCurrentDocumentIfChanged(currentTaskId, fileName);
           setNotice("Agent 已完成视觉检查");
         } else if (resultAfterResume.checkpoint.pendingInteraction) {
           setNotice(resultAfterResume.checkpoint.pendingInteraction.type === "user_input" ? "Agent 正在等待你的回答" : "Agent 正在继续处理");
@@ -690,9 +688,7 @@ export function Workbench() {
         // the turn complete; otherwise the conversation can claim success
         // while the central document still renders the previous bytes.
         const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
-        const targetRevision = latestDocumentMutationRevision(result.events);
-        if (targetRevision) await scheduleLiveDocumentReconcile(targetRevision);
-        else await reconcileCurrentDocumentIfChanged(taskId, fileName);
+        await reconcileAuthoritativeDocumentAfterRun(taskId, fileName);
       }
       setNotice(result.checkpoint.pendingInteraction?.type === "approval"
         ? "Agent 已完成读取并请求写入确认"
@@ -752,13 +748,10 @@ export function Workbench() {
       const replies = result.events.flatMap((event) => event.type === "assistant.message" && event.text ? [{ id: `event:${event.eventId}`, text: event.text, createdAt: event.timestamp }] : []);
       if (replies.length) setMessages((items) => [...items, ...replies.map((reply) => ({ ...reply, role: "agent" as const, runId: run.id, status: "sent" as const }))]);
       if (result.checkpoint.status === "completed") {
-        if (taskId) {
-          const targetRevision = latestDocumentMutationRevision(result.events);
-          if (targetRevision) await scheduleLiveDocumentReconcile(targetRevision);
-          else {
-            const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
-            await reconcileCurrentDocumentIfChanged(taskId, fileName);
-          }
+        const wrote = result.events.some((event) => event.type === "tool.completed" && isDocumentMutationTool(event.name));
+        if (wrote && taskId) {
+          const fileName = documentLoad.status === "ready" ? documentLoad.document.file.name : "paperduck.docx";
+          await reconcileAuthoritativeDocumentAfterRun(taskId, fileName);
         }
         setNotice("Agent 已完成写入并通过版本校验");
       } else if (result.checkpoint.status === "awaiting_user") {

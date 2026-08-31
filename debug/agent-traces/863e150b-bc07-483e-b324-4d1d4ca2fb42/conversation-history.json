@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "durableConversationHistory": [
+    {
+      "id": "6ccaf093-d3f6-41eb-b940-e5c0bbfdae9c",
+      "role": "user",
+      "parts": [
+        {
+          "text": "你好，后续每次都要叫我老板",
+          "type": "text"
+        }
+      ],
+      "run_id": "b22ceda1-62e9-4de8-8004-8a90f9f4cff1",
+      "created_at": "2026-08-31T06:53:01.748148+00:00"
+    },
+    {
+      "id": "940ea2ed-25c7-4dba-ab35-ad1510f40be4",
+      "role": "assistant",
+      "parts": [
+        {
+          "text": "好的，老板。请问有什么我可以帮您的吗？",
+          "type": "text"
+        }
+      ],
+      "run_id": "b22ceda1-62e9-4de8-8004-8a90f9f4cff1",
+      "created_at": "2026-08-31T06:53:08.13552+00:00"
+    },
+    {
+      "id": "39aa54c9-0c36-40b9-a30d-799f453bde6d",
+      "role": "user",
+      "parts": [
+        {
+          "text": "查看我打开的这个文档",
+          "type": "text"
+        }
+      ],
+      "run_id": "ce0e5660-28d1-4ea1-b79b-12c9e9287ad5",
+      "created_at": "2026-08-31T06:53:15.977333+00:00"
+    },
+    {
+      "id": "957f49ef-7458-4ecc-a278-fa3b0d465d36",
+      "role": "user",
+      "parts": [
+        {
+          "text": "帮我把班级修改为6班，实验日期修改为26年9月1日",
+          "type": "text"
+        }
+      ],
+      "run_id": "f998383a-32ae-43e4-b348-5ec53b0c94a8",
+      "created_at": "2026-08-31T06:54:52.6455+00:00"
+    },
+    {
+      "id": "be4d530d-358c-496a-8306-2e7c654a8ba6",
+      "role": "assistant",
+      "parts": [
+        {
+          "text": "老板，修改已完成！\n\n已成功将：\n- **班级**从\"8\"修改为\"6班\"\n- **实验日期**从\"2025.05.12\"修改为\"26年9月1日\"\n\n文档已生成新版本（revision: `6a3540e366463665f81a3271c4d82d789f8d6256b9f29dbde27def58e06b9a7e`），共修改了2处内容，风险等级为低。",
+          "type": "text"
+        }
+      ],
+      "run_id": "f998383a-32ae-43e4-b348-5ec53b0c94a8",
+      "created_at": "2026-08-31T06:56:14.697493+00:00"
+    },
+    {
+      "id": "e279bb3f-79e9-450f-852e-1a3c6aa5b874",
+      "role": "user",
+      "parts": [
+        {
+          "text": "根据整个文档内容，把最后的实验结果分析总结部分重新给我写一份，至少1000字",
+          "type": "text"
+        }
+      ],
+      "run_id": "863e150b-bc07-483e-b324-4d1d4ca2fb42",
+      "created_at": "2026-08-31T06:56:50.41112+00:00"
+    }
+  ],
+  "runtimeLoadedHistory": {
+    "conversationId": "c0de7702-750e-4712-a0b7-0cc6d3b33fe5",
+    "messages": [
+      {
+        "role": "user",
+        "content": "你好，后续每次都要叫我老板"
+      },
+      {
+        "role": "assistant",
+        "content": "好的，老板。请问有什么我可以帮您的吗？"
+      },
+      {
+        "role": "user",
+        "content": "查看我打开的这个文档"
+      },
+      {
+        "role": "user",
+        "content": "帮我把班级修改为6班，实验日期修改为26年9月1日"
+      },
+      {
+        "role": "assistant",
+        "content": "老板，修改已完成！\n\n已成功将：\n- **班级**从\"8\"修改为\"6班\"\n- **实验日期**从\"2025.05.12\"修改为\"26年9月1日\"\n\n文档已生成新版本（revision: `6a3540e366463665f81a3271c4d82d789f8d6256b9f29dbde27def58e06b9a7e`），共修改了2处内容，风险等级为低。"
+      }
+    ],
+    "loadedCount": 5,
+    "truncated": false,
+    "limit": 200
+  },
+  "freshRunSeed": {
+    "policy": {
+      "maxCharacters": 48000,
+      "maxMessages": 56,
+      "keepRecentUnits": 16,
+      "maxUserSummaryCharacters": 600
+    },
+    "compacted": false,
+    "originalMessageCount": 5,
+    "originalCharacters": 244,
+    "retainedMessageCount": 5,
+    "retainedCharacters": 244,
+    "messages": [
+      "[Circular]",
+      "[Circular]",
+      "[Circular]",
+      "[Circular]",
+      "[Circular]"
+    ]
+  }
+}

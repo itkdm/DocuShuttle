@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "durableConversationHistory": [
+    {
+      "id": "d2c6ed85-de20-45ef-a387-6bdc7830dfd5",
+      "role": "user",
+      "parts": [
+        {
+          "text": "了解一下这个文档并把姓名修改为：张三",
+          "type": "text"
+        }
+      ],
+      "run_id": "212dc8fe-ae35-4131-ab8b-8e6007dfa1c2",
+      "created_at": "2026-08-31T07:06:00.944402+00:00"
+    }
+  ],
+  "runtimeLoadedHistory": {
+    "conversationId": "6ce53c5f-90bd-4631-a110-df18a0fb4fef",
+    "messages": [],
+    "loadedCount": 0,
+    "truncated": false,
+    "limit": 200
+  },
+  "freshRunSeed": {
+    "policy": {
+      "maxCharacters": 48000,
+      "maxMessages": 56,
+      "keepRecentUnits": 16,
+      "maxUserSummaryCharacters": 600
+    },
+    "compacted": false,
+    "originalMessageCount": 0,
+    "originalCharacters": 0,
+    "retainedMessageCount": 0,
+    "retainedCharacters": 0,
+    "messages": []
+  }
+}

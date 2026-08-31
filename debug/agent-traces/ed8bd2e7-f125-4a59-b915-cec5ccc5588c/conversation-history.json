@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "durableConversationHistory": [
+    {
+      "id": "d2c6ed85-de20-45ef-a387-6bdc7830dfd5",
+      "role": "user",
+      "parts": [
+        {
+          "text": "了解一下这个文档并把姓名修改为：张三",
+          "type": "text"
+        }
+      ],
+      "run_id": "212dc8fe-ae35-4131-ab8b-8e6007dfa1c2",
+      "created_at": "2026-08-31T07:06:00.944402+00:00"
+    },
+    {
+      "id": "d8da9c53-2c1f-4329-bd3b-c698af8cf1f5",
+      "role": "assistant",
+      "parts": [
+        {
+          "text": "修改已成功完成。文档中的姓名已从\"孔德明\"修改为\"张三\"。\n\n**操作总结：**\n- 目标节点：`node_9da397bed66317e3baeea36f7fd74a2c`\n- 原文本：\"姓名：孔德明\"\n- 新文本：\"姓名：张三\"\n- 风险等级：low\n- 新版本revision：`a82f09cc3f7d2a7f2ea1166de20c0b5d5251278bbac6da73f5cf73725662c10a`\n\n修改已创建一个新的不可变文档版本，所有验证均已通过。",
+          "type": "text"
+        }
+      ],
+      "run_id": "212dc8fe-ae35-4131-ab8b-8e6007dfa1c2",
+      "created_at": "2026-08-31T07:09:16.992484+00:00"
+    },
+    {
+      "id": "f6e7e24a-7d5f-4e83-8e73-a1674c9266c7",
+      "role": "user",
+      "parts": [
+        {
+          "text": "把文档最后的总结那部分重新修改一下，随便修改",
+          "type": "text"
+        }
+      ],
+      "run_id": "ed8bd2e7-f125-4a59-b915-cec5ccc5588c",
+      "created_at": "2026-08-31T07:10:19.076016+00:00"
+    }
+  ],
+  "runtimeLoadedHistory": {
+    "conversationId": "6ce53c5f-90bd-4631-a110-df18a0fb4fef",
+    "messages": [
+      {
+        "role": "user",
+        "content": "了解一下这个文档并把姓名修改为：张三"
+      },
+      {
+        "role": "assistant",
+        "content": "修改已成功完成。文档中的姓名已从\"孔德明\"修改为\"张三\"。\n\n**操作总结：**\n- 目标节点：`node_9da397bed66317e3baeea36f7fd74a2c`\n- 原文本：\"姓名：孔德明\"\n- 新文本：\"姓名：张三\"\n- 风险等级：low\n- 新版本revision：`a82f09cc3f7d2a7f2ea1166de20c0b5d5251278bbac6da73f5cf73725662c10a`\n\n修改已创建一个新的不可变文档版本，所有验证均已通过。"
+      }
+    ],
+    "loadedCount": 2,
+    "truncated": false,
+    "limit": 200
+  },
+  "freshRunSeed": {
+    "policy": {
+      "maxCharacters": 48000,
+      "maxMessages": 56,
+      "keepRecentUnits": 16,
+      "maxUserSummaryCharacters": 600
+    },
+    "compacted": false,
+    "originalMessageCount": 2,
+    "originalCharacters": 254,
+    "retainedMessageCount": 2,
+    "retainedCharacters": 254,
+    "messages": [
+      "[Circular]",
+      "[Circular]"
+    ]
+  }
+}

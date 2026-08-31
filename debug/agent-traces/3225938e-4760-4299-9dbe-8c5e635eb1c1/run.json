@@ -1,0 +1,212 @@
+{
+  "runId": "3225938e-4760-4299-9dbe-8c5e635eb1c1",
+  "taskId": "9d08e406-4ff5-4d78-95af-ad0da0b5b9b1",
+  "conversationId": "3e0ee9fb-f363-4768-84ac-7c7867ef8142",
+  "startedAt": "2026-08-31T08:37:22.008Z",
+  "provider": "qwen",
+  "model": "deepseek-v4-flash",
+  "reasoningMode": "disabled",
+  "maxOutputTokens": 16384,
+  "maxIterations": 24,
+  "maxToolCalls": 48,
+  "modelIdleTimeoutMs": 30000,
+  "modelMaxDurationMs": 120000,
+  "contextCompactionPolicy": {
+    "maxCharacters": 48000,
+    "maxMessages": 56,
+    "keepRecentUnits": 16,
+    "maxUserSummaryCharacters": 600
+  },
+  "tools": [
+    {
+      "name": "inspect_document",
+      "description": "Read the current Word document structure, counts, diagnostics and revision without modifying it.",
+      "requiresApproval": {
+        "omitted": true,
+        "type": "undefined"
+      },
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    },
+    {
+      "name": "list_document_regions",
+      "description": "List one bounded page (maximum 80) of stable document nodes and short text previews. limit MUST be an integer from 1 to 80. Use offset for pagination; never request limit greater than 80 or the entire document unless necessary.",
+      "requiresApproval": {
+        "omitted": true,
+        "type": "undefined"
+      },
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    },
+    {
+      "name": "read_document_region",
+      "description": "Read the current text for one stable paragraph or table-cell node.",
+      "requiresApproval": {
+        "omitted": true,
+        "type": "undefined"
+      },
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    },
+    {
+      "name": "inspect_node_capabilities",
+      "description": "Read the supported, guarded or unsupported operations for one semantic document node without modifying it.",
+      "requiresApproval": {
+        "omitted": true,
+        "type": "undefined"
+      },
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    },
+    {
+      "name": "plan_text_change",
+      "description": "Dry-run one exact text replacement and return the targets, changed parts, risk and validation diagnostics. This never writes the document and does not require approval.",
+      "requiresApproval": {
+        "omitted": true,
+        "type": "undefined"
+      },
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    },
+    {
+      "name": "apply_text_change",
+      "description": "Apply one exact text replacement to a paragraph or table cell after the user approves it. Creates one immutable derived document version.",
+      "requiresApproval": true,
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    },
+    {
+      "name": "apply_text_changes",
+      "description": "Atomically apply two to thirty exact text replacements to known paragraph or table-cell nodes. Validates every target first, then creates one immutable derived version. Use this for a bounded multi-location edit.",
+      "requiresApproval": true,
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    },
+    {
+      "name": "list_source_documents",
+      "description": "List the task's uploaded source documents and their roles (template, example, or auxiliary). This never changes the Working Document.",
+      "requiresApproval": {
+        "omitted": true,
+        "type": "undefined"
+      },
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    },
+    {
+      "name": "read_source_document",
+      "description": "Read one uploaded source document's structure and text for comparison. The source role is included so template, example and auxiliary material stay distinct; this never modifies a document.",
+      "requiresApproval": {
+        "omitted": true,
+        "type": "undefined"
+      },
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    },
+    {
+      "name": "inspect_image",
+      "description": "Read and analyze one selected document image when the task depends on its visual content. Returns structured visual facts, never image bytes or URLs.",
+      "requiresApproval": {
+        "omitted": true,
+        "type": "undefined"
+      },
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    },
+    {
+      "name": "generate_image",
+      "description": "Generate a private image asset. Use references for similar or edit requests; this never modifies the Word document.",
+      "requiresApproval": {
+        "omitted": true,
+        "type": "undefined"
+      },
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    },
+    {
+      "name": "replace_document_image",
+      "description": "Replace one existing Word image with a generated private asset. This creates a new immutable document version and requires approval.",
+      "requiresApproval": true,
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    },
+    {
+      "name": "capture_document_view",
+      "description": "只捕获当前 Working Document 的可视区域，并返回一个 screenshot asset；它本身不执行视觉理解。如果需要判断排版、图片、表格、重叠、对齐等视觉内容，截图成功后继续调用 inspect_image，source=asset，assetId 使用截图结果。普通文本内容应优先使用文档读取工具。",
+      "requiresApproval": {
+        "omitted": true,
+        "type": "undefined"
+      },
+      "clientExecution": true
+    },
+    {
+      "name": "scroll_document_view",
+      "description": "只移动当前 Working Document 的浏览视口，不读取文档、不截图、不执行 Vision、不修改 DOCX、不产生 Document Version。滚动后如需观察新区域，请继续调用 capture_document_view，再调用 inspect_image。到达 atBottom=true 或 atTop=true 时不要继续向该方向滚动。视觉浏览长文档时应按 capture_document_view → inspect_image → scroll_document_view → capture_document_view → inspect_image 的顺序进行。",
+      "requiresApproval": {
+        "omitted": true,
+        "type": "undefined"
+      },
+      "clientExecution": true
+    },
+    {
+      "name": "list_document_versions",
+      "description": "List immutable versions of the current Word document, including the active version, origin, revision and creation time. Read-only.",
+      "requiresApproval": {
+        "omitted": true,
+        "type": "undefined"
+      },
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    },
+    {
+      "name": "export_document",
+      "description": "Export the current immutable document version and return a short-lived download URL. This does not modify document content.",
+      "requiresApproval": {
+        "omitted": true,
+        "type": "undefined"
+      },
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    },
+    {
+      "name": "restore_document_version",
+      "description": "Restore a selected immutable document version by creating a new restore version. The source version is never overwritten and this action requires user approval.",
+      "requiresApproval": true,
+      "clientExecution": {
+        "omitted": true,
+        "type": "undefined"
+      }
+    }
+  ],
+  "schemaVersion": 1,
+  "currentStatus": "running",
+  "permissionMode": "default",
+  "lastCheckpointAt": "2026-08-31T08:37:36.185Z"
+}

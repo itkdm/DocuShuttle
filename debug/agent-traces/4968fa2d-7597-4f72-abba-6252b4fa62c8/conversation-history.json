@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "durableConversationHistory": [
+    {
+      "id": "d6da5df1-07af-40cf-8a32-e31311c7b51e",
+      "role": "user",
+      "parts": [
+        {
+          "text": "把文档最后的总结那部分重新修改一下，随便修改",
+          "type": "text"
+        }
+      ],
+      "run_id": "4968fa2d-7597-4f72-abba-6252b4fa62c8",
+      "created_at": "2026-08-31T08:26:39.197025+00:00"
+    }
+  ],
+  "runtimeLoadedHistory": {
+    "conversationId": "11116609-5e8b-479c-9dc0-410499d38bdd",
+    "messages": [],
+    "loadedCount": 0,
+    "truncated": false,
+    "limit": 200
+  },
+  "freshRunSeed": {
+    "policy": {
+      "maxCharacters": 48000,
+      "maxMessages": 56,
+      "keepRecentUnits": 16,
+      "maxUserSummaryCharacters": 600
+    },
+    "compacted": false,
+    "originalMessageCount": 0,
+    "originalCharacters": 0,
+    "retainedMessageCount": 0,
+    "retainedCharacters": 0,
+    "messages": []
+  }
+}

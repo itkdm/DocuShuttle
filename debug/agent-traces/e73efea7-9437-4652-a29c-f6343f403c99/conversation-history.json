@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "durableConversationHistory": [
+    {
+      "id": "82738be7-ee78-4dc6-8ca0-04c2cd26fe79",
+      "role": "user",
+      "parts": [
+        {
+          "text": "根据整个文档内容，把最后的实验结果分析总结部分重新给我写一份，至少1000字",
+          "type": "text"
+        }
+      ],
+      "run_id": "e73efea7-9437-4652-a29c-f6343f403c99",
+      "created_at": "2026-08-31T08:40:51.483573+00:00"
+    }
+  ],
+  "runtimeLoadedHistory": {
+    "conversationId": "1235dec7-7fbe-4134-9308-441a806f4341",
+    "messages": [],
+    "loadedCount": 0,
+    "truncated": false,
+    "limit": 200
+  },
+  "freshRunSeed": {
+    "policy": {
+      "maxCharacters": 48000,
+      "maxMessages": 56,
+      "keepRecentUnits": 16,
+      "maxUserSummaryCharacters": 600
+    },
+    "compacted": false,
+    "originalMessageCount": 0,
+    "originalCharacters": 0,
+    "retainedMessageCount": 0,
+    "retainedCharacters": 0,
+    "messages": []
+  }
+}

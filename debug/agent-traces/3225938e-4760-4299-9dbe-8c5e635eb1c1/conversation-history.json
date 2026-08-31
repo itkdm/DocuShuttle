@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "durableConversationHistory": [
+    {
+      "id": "d9afd7b1-c1e2-4a20-b42e-390cd3a50d99",
+      "role": "user",
+      "parts": [
+        {
+          "text": "查看文档最后的“实验结果的分析与总结”部分，把这部分现有内容告诉我，不要修改文档",
+          "type": "text"
+        }
+      ],
+      "run_id": "3225938e-4760-4299-9dbe-8c5e635eb1c1",
+      "created_at": "2026-08-31T08:37:21.176962+00:00"
+    }
+  ],
+  "runtimeLoadedHistory": {
+    "conversationId": "3e0ee9fb-f363-4768-84ac-7c7867ef8142",
+    "messages": [],
+    "loadedCount": 0,
+    "truncated": false,
+    "limit": 200
+  },
+  "freshRunSeed": {
+    "policy": {
+      "maxCharacters": 48000,
+      "maxMessages": 56,
+      "keepRecentUnits": 16,
+      "maxUserSummaryCharacters": 600
+    },
+    "compacted": false,
+    "originalMessageCount": 0,
+    "originalCharacters": 0,
+    "retainedMessageCount": 0,
+    "retainedCharacters": 0,
+    "messages": []
+  }
+}

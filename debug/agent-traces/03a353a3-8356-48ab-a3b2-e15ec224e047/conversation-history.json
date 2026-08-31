@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "durableConversationHistory": [
+    {
+      "id": "b06b20da-7bef-4b58-9d52-e3d8ec16f443",
+      "role": "user",
+      "parts": [
+        {
+          "text": "帮我把班级修改为6班，实验日期修改为26年9月1日",
+          "type": "text"
+        }
+      ],
+      "run_id": "03a353a3-8356-48ab-a3b2-e15ec224e047",
+      "created_at": "2026-08-31T08:19:12.986974+00:00"
+    }
+  ],
+  "runtimeLoadedHistory": {
+    "conversationId": "038b134e-cb50-4e21-b751-63755d41bbef",
+    "messages": [],
+    "loadedCount": 0,
+    "truncated": false,
+    "limit": 200
+  },
+  "freshRunSeed": {
+    "policy": {
+      "maxCharacters": 48000,
+      "maxMessages": 56,
+      "keepRecentUnits": 16,
+      "maxUserSummaryCharacters": 600
+    },
+    "compacted": false,
+    "originalMessageCount": 0,
+    "originalCharacters": 0,
+    "retainedMessageCount": 0,
+    "retainedCharacters": 0,
+    "messages": []
+  }
+}

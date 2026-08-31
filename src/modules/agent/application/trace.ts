@@ -1,6 +1,7 @@
 export type AgentTraceSegmentKind = "loop" | "approval_resume" | "user_input_resume" | "client_tool_resume" | "recover";
 
 export type AgentExecutionTracePort = {
+  snapshot?(value: unknown): unknown;
   beginRun(input: Record<string, unknown>): void;
   finishRun(input: Record<string, unknown>): void;
   updateRun(input: Record<string, unknown>): void;
@@ -9,5 +10,6 @@ export type AgentExecutionTracePort = {
   endSegment(segmentId: string, input?: Record<string, unknown>): void;
   record(input: { type: string; segmentId?: string; iteration?: number; callId?: string; payload?: unknown }): void;
   writeIteration(iteration: number, value: Record<string, unknown>): void;
+  findCallOriginIteration?(callId: string): Promise<number | null>;
   flush(): Promise<void>;
 };

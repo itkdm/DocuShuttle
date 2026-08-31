@@ -36,4 +36,21 @@ describe("SupabaseAgentConversationContext", () => {
     expect(context.loadedCount).toBe(CONVERSATION_CONTEXT_MESSAGE_LIMIT);
     expect(messageQuery.limit).toHaveBeenCalledWith(CONVERSATION_CONTEXT_MESSAGE_LIMIT + 1);
   });
+
+  it("writes full durable history oldest to newest without reversing it", async () => {
+    const runQuery = { select: vi.fn(), eq: vi.fn(), single: vi.fn() };
+    runQuery.select.mockReturnValue(runQuery); runQuery.eq.mockReturnValue(runQuery);
+    runQuery.single.mockResolvedValue({ data: { state: { conversationId: "conversation-full" } }, error: null });
+    const messageQuery = { select: vi.fn(), eq: vi.fn(), in: vi.fn(), order: vi.fn(), range: vi.fn() };
+    messageQuery.select.mockReturnValue(messageQuery); messageQuery.eq.mockReturnValue(messageQuery); messageQuery.in.mockReturnValue(messageQuery); messageQuery.order.mockReturnValue(messageQuery);
+    messageQuery.range.mockResolvedValue({ data: [
+      { id: "m-1", role: "user", parts: [], run_id: "r1", created_at: "2026-08-28T10:00:00Z" },
+      { id: "m-2", role: "assistant", parts: [], run_id: "r1", created_at: "2026-08-28T10:01:00Z" },
+      { id: "m-3", role: "user", parts: [], run_id: "r2", created_at: "2026-08-28T10:02:00Z" },
+    ], error: null });
+    const from = vi.fn().mockReturnValueOnce(runQuery).mockReturnValueOnce(messageQuery);
+    const history = await new SupabaseAgentConversationContext({ from } as unknown as SupabaseClient).loadFullHistory("run-current");
+    expect(history.map((message) => message.id)).toEqual(["m-1", "m-2", "m-3"]);
+    expect(messageQuery.order).toHaveBeenNthCalledWith(1, "created_at", { ascending: true });
+  });
 });

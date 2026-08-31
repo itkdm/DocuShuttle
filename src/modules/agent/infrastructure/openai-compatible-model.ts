@@ -78,7 +78,7 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
     const complete = (decision: AgentModelDecision, usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }, metadata: Record<string, unknown> = {}) => {
       const reasoning = decision.reasoning;
       logger.info("agent.model.completed", { ...timer.metadata, durationMs: timer.elapsed(), firstTokenMs, outcome: "success", ...(usage ?? {}), ...metadata, finishReason: metadata.finishReason, maxOutputTokens, toolCallNames: decision.kind === "tool_calls" ? decision.calls.map((call) => call.name) : [], reasoningPresent: Boolean(reasoning), reasoningCharacters: reasoning?.length ?? 0 });
-      input.trace?.record("model.completed", { decision, usage, durationMs: timer.elapsed(), firstTokenMs, ...metadata, reasoningPresent: Boolean(reasoning), reasoningCharacters: reasoning?.length ?? 0 });
+      input.trace?.record("model.provider.completed", { decision, usage, durationMs: timer.elapsed(), firstTokenMs, ...metadata, reasoningPresent: Boolean(reasoning), reasoningCharacters: reasoning?.length ?? 0 });
       return decision;
     };
     // ask_user is a control-plane tool: the model may explicitly suspend the
@@ -141,6 +141,7 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
       // as AGENT_LOOP_FAILED.
       for (let attempt = 0; attempt < 2; attempt += 1) {
         let streamedText = "";
+        const attemptStartedAt = Date.now();
         input.trace?.record("model.attempt.started", { attempt: attempt + 1, startedAt: new Date().toISOString() });
         try {
           const response = streamText(request);
@@ -181,7 +182,7 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
           return complete({ kind: "message", text: streamedText || "我暂时没有足够信息继续，请补充一下目标。", reasoning }, usage, { finishReason, ...metrics() });
         } catch (error) {
           lastError = error;
-          input.trace?.record("model.attempt.failed", { attempt: attempt + 1, failure: error, durationMs: timer.elapsed() });
+          input.trace?.record("model.attempt.failed", { attempt: attempt + 1, failure: error, durationMs: Date.now() - attemptStartedAt, totalModelElapsedMs: timer.elapsed() });
           if (attempt === 0 && streamedText.length === 0 && !input.signal?.aborted) {
             logger.warn("agent.model.retry", { ...timer.metadata, attempt: attempt + 1, reason: "empty_stream_failure", error });
             await new Promise<void>((resolve) => setTimeout(resolve, 150));

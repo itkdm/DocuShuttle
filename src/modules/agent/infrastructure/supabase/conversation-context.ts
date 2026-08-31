@@ -58,6 +58,7 @@ export class SupabaseAgentConversationContext implements AgentConversationContex
     let conversationId = this.bootstrap?.conversationId;
     if (!conversationId) {
       const run = await this.client.from("agent_runs").select("state").eq("id", runId).single();
+      if (run.error) throw new Error(`Unable to load durable conversation history: ${run.error.message}`);
       conversationId = (run.data?.state as { conversationId?: string } | null)?.conversationId;
     }
     if (!conversationId) return [];
@@ -72,6 +73,6 @@ export class SupabaseAgentConversationContext implements AgentConversationContex
       if (page.length < 500) break;
       offset += page.length;
     }
-    return rows.reverse();
+    return rows;
   }
 }

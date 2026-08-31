@@ -33,7 +33,9 @@ describe("Agent Execution Trace V1", () => {
     const segmentId = trace.beginSegment({ kind: "loop", segmentId: "segment-1" });
     trace.record({ type: "iteration.started", segmentId, iteration: 1, payload: { message: "事实" } });
     trace.writeConversationHistory({ durableConversationHistory: [{ id: "m-1", role: "user", parts: [{ type: "text", text: "历史" }] }], runtimeLoadedHistory: { messages: [], loadedCount: 0, truncated: false, limit: 200 } });
-    trace.writeIteration(1, { iteration: 1, checkpointBeforeCompaction: { messages: [{ role: "user", content: "事实" }] } });
+    const checkpoint = { messages: [{ role: "user", content: "事实" }] };
+    trace.writeIteration(1, { iteration: 1, checkpointBeforeCompaction: checkpoint });
+    checkpoint.messages.push({ role: "assistant", content: "后来追加" });
     await trace.flush();
     const run = JSON.parse(await readFile(join(root, "run-1", "run.json"), "utf8")) as Record<string, unknown>;
     const history = JSON.parse(await readFile(join(root, "run-1", "conversation-history.json"), "utf8")) as Record<string, unknown>;
@@ -41,7 +43,21 @@ describe("Agent Execution Trace V1", () => {
     expect(run.schemaVersion).toBe(1);
     expect(history.schemaVersion).toBe(1);
     expect(iteration.schemaVersion).toBe(1);
+    expect((iteration.checkpointBeforeCompaction as { messages: unknown[] }).messages).toHaveLength(1);
     expect((await readFile(join(root, "run-1", "trace.ndjson"), "utf8")).split("\n").filter(Boolean)).toHaveLength(2);
+  });
+
+  it("keeps run identity/configuration from the first write", async () => {
+    const root = await mkdtemp(join(tmpdir(), "paperduck-agent-trace-run-"));
+    const trace = new FileAgentExecutionTrace({ rootDir: root, runId: "run-identity" });
+    trace.beginRun({ runId: "run-identity", startedAt: "first", provider: "qwen", model: "model-a", maxIterations: 24 });
+    trace.updateRun({ startedAt: "second", provider: "unknown", model: undefined, finishedAt: "finished", finalStatus: "completed" });
+    await trace.flush();
+    const run = JSON.parse(await readFile(join(root, "run-identity", "run.json"), "utf8")) as Record<string, unknown>;
+    expect(run.startedAt).toBe("first");
+    expect(run.provider).toBe("qwen");
+    expect(run.model).toBe("model-a");
+    expect(run.finishedAt).toBe("finished");
   });
 
   it("fails open when a trace write rejects", async () => {

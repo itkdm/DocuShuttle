@@ -36,3 +36,11 @@ export const serializeAgentTraceValue = (value: unknown): unknown => {
   };
   return visit(value);
 };
+
+/**
+ * Materialize an observation snapshot synchronously, before runtime objects
+ * can be mutated by the next model/tool step. This intentionally uses the
+ * trace serializer rather than JSON cloning so redaction and special values
+ * retain the same safe representation.
+ */
+export const snapshotAgentTraceValue = (value: unknown): unknown => serializeAgentTraceValue(value);

@@ -332,7 +332,11 @@ export class AgentLoopRunner {
     const existingReceipt = await this.store.loadEffectReceipt?.(runId, idempotencyKey);
     let output: unknown;
     let failed: string | undefined;
-    if (existingReceipt) output = existingReceipt.output;
+    let executionSource: string = "actual_execute";
+    if (existingReceipt) {
+      output = existingReceipt.output;
+      executionSource = "effect_receipt_recovery";
+    }
     else {
       try {
         output = await this.withLeaseHeartbeat(runId, () => tool.execute(input, { runId, callId: call.id, idempotencyKey, attempt: checkpoint.toolCallCount, signal }));
@@ -341,15 +345,21 @@ export class AgentLoopRunner {
       } catch (error) {
         if (signal?.aborted) await this.throwForTransportInterruption(runId, signal);
         const reconciledReceipt = await this.reconcileEffectReceiptAfterToolError(runId, idempotencyKey);
-        if (reconciledReceipt) output = reconciledReceipt.output;
-        else failed = error instanceof Error ? error.message : "Tool execution failed";
+        if (reconciledReceipt) {
+          output = reconciledReceipt.output;
+          executionSource = "effect_receipt_recovery_after_error";
+        } else {
+          failed = error instanceof Error ? error.message : "Tool execution failed";
+          executionSource = "error";
+        }
       }
     }
-    checkpoint.messages.push({ role: "tool", content: failed ? JSON.stringify({ error: failed }) : serializeToolOutput(output), toolCallId: call.id, toolName: call.name });
-    recordToolResolution(this.trace, { iteration: checkpoint.iterations, callId: call.id, toolName: call.name, executionLocation: "server", executionSource: existingReceipt ? "effect_receipt_recovery" : failed ? "error" : "actual_execute", rawOutput: output, modelFacingContent: failed ? { error: failed } : serializeToolOutput(output), eventFacingOutput: failed ? { error: failed } : projectToolOutputForEvent(call.name, output), error: failed });
     const event = failed
       ? createAgentEvent(runId, { type: "tool.failed", callId: call.id, name: call.name, error: failed })
       : createAgentEvent(runId, { type: "tool.completed", callId: call.id, name: call.name, output: projectToolOutputForEvent(call.name, output) });
+    const modelFacingContent = failed ? JSON.stringify({ error: failed }) : serializeToolOutput(output);
+    checkpoint.messages.push({ role: "tool", content: modelFacingContent, toolCallId: call.id, toolName: call.name });
+    recordToolResolution(this.trace, { iteration: checkpoint.iterations, callId: call.id, toolName: call.name, executionLocation: "server", executionSource, modelProposedInput: call.input, validatedInput: input, rawOutput: output, modelFacingContent, eventFacingOutput: event.type === "tool.completed" ? event.output : event, error: failed });
     checkpoint.status = "running";
     await this.store.save(runId, checkpoint);
     try { await this.store.appendEvents?.(runId, [event]); } catch { this.onEngineeringEvent?.({ event: "agent.event.persist_failed", metadata: { runId, eventId: event.eventId, eventType: event.type } }); }
@@ -708,8 +718,11 @@ export class AgentLoopRunner {
         });
         const tool = this.tools.find((candidate) => candidate.name === call.name);
         if (!tool) {
-          checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: `Unknown agent tool: ${call.name}` }), toolCallId: call.id, toolName: call.name });
-          emit({ type: "tool.failed", callId: call.id, name: call.name, error: `Unknown agent tool: ${call.name}` });
+          const message = `Unknown agent tool: ${call.name}`;
+          const modelFacingContent = JSON.stringify({ error: message });
+          checkpoint.messages.push({ role: "tool", content: modelFacingContent, toolCallId: call.id, toolName: call.name });
+          const failedEvent = emit({ type: "tool.failed", callId: call.id, name: call.name, error: message });
+          recordToolResolution(this.trace, { segmentId, iteration: checkpoint.iterations, callId: call.id, toolName: call.name, executionLocation: "server", executionSource: "unknown_tool", modelProposedInput: call.input, modelFacingContent, eventFacingOutput: failedEvent, error: message });
           await saveCheckpoint();
           continue;
         }
@@ -720,8 +733,10 @@ export class AgentLoopRunner {
           const validation = formatToolInputValidationError(error);
           const message = validation ? JSON.stringify(validation) : error instanceof Error ? error.message : "Tool input validation failed";
           this.trace?.record({ type: "tool.validation.failed", segmentId, iteration: checkpoint.iterations, callId: call.id, payload: { toolName: call.name, modelProposedInput: call.input, validation: validation ?? { success: false, issues: [message] } } });
-          checkpoint.messages.push({ role: "tool", content: message, toolCallId: call.id, toolName: call.name });
-          emit({ type: "tool.failed", callId: call.id, name: call.name, error: validation ? JSON.stringify(validation) : message });
+          const modelFacingContent = message;
+          checkpoint.messages.push({ role: "tool", content: modelFacingContent, toolCallId: call.id, toolName: call.name });
+          const failedEvent = emit({ type: "tool.failed", callId: call.id, name: call.name, error: validation ? JSON.stringify(validation) : message });
+          recordToolResolution(this.trace, { segmentId, iteration: checkpoint.iterations, callId: call.id, toolName: call.name, executionLocation: "server", executionSource: "validation_failure", modelProposedInput: call.input, modelFacingContent, eventFacingOutput: failedEvent, error: message });
           await saveCheckpoint();
           continue;
         }
@@ -739,8 +754,11 @@ export class AgentLoopRunner {
         if (tool.clientExecution) {
           const expectedRevision = await this.currentDocumentRevision?.();
           if (!expectedRevision) {
-            checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: "DOCUMENT_REVISION_UNAVAILABLE" }), toolCallId: call.id, toolName: call.name });
-            emit({ type: "tool.failed", callId: call.id, name: call.name, error: "DOCUMENT_REVISION_UNAVAILABLE" });
+            const message = "DOCUMENT_REVISION_UNAVAILABLE";
+            const modelFacingContent = JSON.stringify({ error: message });
+            checkpoint.messages.push({ role: "tool", content: modelFacingContent, toolCallId: call.id, toolName: call.name });
+            const failedEvent = emit({ type: "tool.failed", callId: call.id, name: call.name, error: message });
+            recordToolResolution(this.trace, { segmentId, iteration: checkpoint.iterations, callId: call.id, toolName: call.name, executionLocation: "browser", executionSource: "precondition_failure", modelProposedInput: call.input, validatedInput: input, modelFacingContent, eventFacingEvent: failedEvent, error: message });
             await saveCheckpoint();
             continue;
           }
@@ -773,9 +791,10 @@ export class AgentLoopRunner {
         const idempotencyKey = `${runId}:${call.id}`;
         const existingReceipt = await this.store.loadEffectReceipt?.(runId, idempotencyKey);
         if (existingReceipt) {
-          checkpoint.messages.push({ role: "tool", content: serializeToolOutput(existingReceipt.output), toolCallId: call.id, toolName: call.name });
+          const modelFacingContent = serializeToolOutput(existingReceipt.output);
+          checkpoint.messages.push({ role: "tool", content: modelFacingContent, toolCallId: call.id, toolName: call.name });
           const replayedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: projectToolOutputForEvent(call.name, existingReceipt.output) }, false);
-          recordToolResolution(this.trace, { segmentId, iteration: checkpoint.iterations, callId: call.id, toolName: call.name, executionLocation: "server", executionSource: "effect_receipt_recovery", rawOutput: existingReceipt.output, modelFacingContent: serializeToolOutput(existingReceipt.output), eventFacingOutput: projectToolOutputForEvent(call.name, existingReceipt.output) });
+          recordToolResolution(this.trace, { segmentId, iteration: checkpoint.iterations, callId: call.id, toolName: call.name, executionLocation: "server", executionSource: "effect_receipt_recovery", modelProposedInput: call.input, validatedInput: input, rawOutput: existingReceipt.output, modelFacingContent, eventFacingOutput: replayedEvent.type === "tool.completed" ? replayedEvent.output : replayedEvent });
           await saveCheckpoint();
           onEvent?.(replayedEvent);
           continue;
@@ -793,9 +812,10 @@ export class AgentLoopRunner {
           const receipt = this.store.saveEffectReceipt
             ? await this.store.saveEffectReceipt(runId, { idempotencyKey, callId: call.id, toolName: call.name, output, completedAt: new Date().toISOString() })
             : { idempotencyKey, callId: call.id, toolName: call.name, output, completedAt: new Date().toISOString() };
-          checkpoint.messages.push({ role: "tool", content: serializeToolOutput(receipt.output), toolCallId: call.id, toolName: call.name });
+          const modelFacingContent = serializeToolOutput(receipt.output);
+          checkpoint.messages.push({ role: "tool", content: modelFacingContent, toolCallId: call.id, toolName: call.name });
           const toolCompletedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: projectToolOutputForEvent(call.name, { ...((receipt.output && typeof receipt.output === "object") ? receipt.output : { value: receipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
-          recordToolResolution(this.trace, { segmentId, iteration: checkpoint.iterations, callId: call.id, toolName: call.name, executionLocation: "server", executionSource: "actual_execute", validatedInput: input, rawOutput: receipt.output, modelFacingContent: serializeToolOutput(receipt.output), eventFacingOutput: projectToolOutputForEvent(call.name, receipt.output), durationMs: Date.now() - toolStartedAt });
+          recordToolResolution(this.trace, { segmentId, iteration: checkpoint.iterations, callId: call.id, toolName: call.name, executionLocation: "server", executionSource: "actual_execute", modelProposedInput: call.input, validatedInput: input, rawOutput: receipt.output, modelFacingContent, eventFacingOutput: toolCompletedEvent.type === "tool.completed" ? toolCompletedEvent.output : toolCompletedEvent, durationMs: Date.now() - toolStartedAt });
           await saveCheckpoint();
           onEvent?.(toolCompletedEvent);
         } catch (error) {
@@ -807,15 +827,18 @@ export class AgentLoopRunner {
           }
           const reconciledReceipt = await this.reconcileEffectReceiptAfterToolError(runId, idempotencyKey);
           if (reconciledReceipt) {
-            checkpoint.messages.push({ role: "tool", content: serializeToolOutput(reconciledReceipt.output), toolCallId: call.id, toolName: call.name });
+            const modelFacingContent = serializeToolOutput(reconciledReceipt.output);
+            checkpoint.messages.push({ role: "tool", content: modelFacingContent, toolCallId: call.id, toolName: call.name });
             const completedEvent = emit({ type: "tool.completed", callId: call.id, name: call.name, output: projectToolOutputForEvent(call.name, { ...((reconciledReceipt.output && typeof reconciledReceipt.output === "object") ? reconciledReceipt.output : { value: reconciledReceipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
+            recordToolResolution(this.trace, { segmentId, iteration: checkpoint.iterations, callId: call.id, toolName: call.name, executionLocation: "server", executionSource: "effect_receipt_recovery_after_error", modelProposedInput: call.input, validatedInput: input, rawOutput: reconciledReceipt.output, modelFacingContent, eventFacingOutput: completedEvent.type === "tool.completed" ? completedEvent.output : completedEvent, durationMs: Date.now() - toolStartedAt });
             await saveCheckpoint();
             onEvent?.(completedEvent);
           } else {
             const message = error instanceof Error ? error.message : "Tool execution failed";
-            checkpoint.messages.push({ role: "tool", content: JSON.stringify({ error: message }), toolCallId: call.id, toolName: call.name });
+            const modelFacingContent = JSON.stringify({ error: message });
+            checkpoint.messages.push({ role: "tool", content: modelFacingContent, toolCallId: call.id, toolName: call.name });
             const toolFailedEvent = emit({ type: "tool.failed", callId: call.id, name: call.name, error: message, durationMs: Date.now() - toolStartedAt }, false);
-            recordToolResolution(this.trace, { segmentId, iteration: checkpoint.iterations, callId: call.id, toolName: call.name, executionLocation: "server", executionSource: "error", modelFacingContent: { error: message }, error: message, durationMs: Date.now() - toolStartedAt });
+            recordToolResolution(this.trace, { segmentId, iteration: checkpoint.iterations, callId: call.id, toolName: call.name, executionLocation: "server", executionSource: "error", modelProposedInput: call.input, validatedInput: input, modelFacingContent, eventFacingOutput: toolFailedEvent, error: message, durationMs: Date.now() - toolStartedAt });
             await saveCheckpoint();
             onEvent?.(toolFailedEvent);
           }
@@ -920,9 +943,10 @@ export class AgentLoopRunner {
       const idempotencyKey = `${runId}:${resolved.callId}`;
       const existingReceipt = await this.store.loadEffectReceipt?.(runId, idempotencyKey);
       if (existingReceipt) {
-        checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval: resolved.decision, output: existingReceipt.output }), toolCallId: resolved.callId, toolName: resolved.toolName });
+        const modelFacingContent = serializeToolOutput({ approval: resolved.decision, output: existingReceipt.output });
+        checkpoint.messages.push({ role: "tool", content: modelFacingContent, toolCallId: resolved.callId, toolName: resolved.toolName });
         const replayedEvent = emit({ type: "tool.completed", callId: resolved.callId, name: resolved.toolName, output: projectToolOutputForEvent(resolved.toolName, existingReceipt.output) }, false);
-        recordToolResolution(this.trace, { segmentId: resumeSegmentId, iteration: originIteration ?? undefined, callId: resolved.callId, toolName: resolved.toolName, executionLocation: "server", executionSource: "effect_receipt_recovery", rawOutput: existingReceipt.output, modelFacingContent: serializeToolOutput({ approval: resolved.decision, output: existingReceipt.output }), eventFacingOutput: projectToolOutputForEvent(resolved.toolName, existingReceipt.output) });
+        recordToolResolution(this.trace, { segmentId: resumeSegmentId, iteration: originIteration ?? undefined, callId: resolved.callId, toolName: resolved.toolName, executionLocation: "server", executionSource: "effect_receipt_recovery", rawOutput: existingReceipt.output, modelFacingContent, eventFacingOutput: replayedEvent.type === "tool.completed" ? replayedEvent.output : replayedEvent });
         checkpoint.pendingResolution = undefined;
         await saveCheckpoint();
         onEvent?.(replayedEvent);
@@ -939,9 +963,10 @@ export class AgentLoopRunner {
         const receipt = this.store.saveEffectReceipt
           ? await this.store.saveEffectReceipt(runId, { idempotencyKey, callId: resolved.callId, toolName: resolved.toolName, output, completedAt: new Date().toISOString() })
           : { idempotencyKey, callId: resolved.callId, toolName: resolved.toolName, output, completedAt: new Date().toISOString() };
-        checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval: resolved.decision, output: receipt.output }), toolCallId: resolved.callId, toolName: resolved.toolName });
+        const modelFacingContent = serializeToolOutput({ approval: resolved.decision, output: receipt.output });
+        checkpoint.messages.push({ role: "tool", content: modelFacingContent, toolCallId: resolved.callId, toolName: resolved.toolName });
         const completedEvent = emit({ type: "tool.completed", callId: resolved.callId, name: resolved.toolName, output: projectToolOutputForEvent(resolved.toolName, { ...((receipt.output && typeof receipt.output === "object") ? receipt.output : { value: receipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
-        recordToolResolution(this.trace, { segmentId: resumeSegmentId, iteration: originIteration ?? undefined, callId: resolved.callId, toolName: resolved.toolName, executionLocation: "server", executionSource: "actual_execute", validatedInput: input, rawOutput: receipt.output, modelFacingContent: serializeToolOutput({ approval: resolved.decision, output: receipt.output }), eventFacingOutput: projectToolOutputForEvent(resolved.toolName, receipt.output), durationMs: Date.now() - toolStartedAt });
+        recordToolResolution(this.trace, { segmentId: resumeSegmentId, iteration: originIteration ?? undefined, callId: resolved.callId, toolName: resolved.toolName, executionLocation: "server", executionSource: "actual_execute", validatedInput: input, rawOutput: receipt.output, modelFacingContent, eventFacingOutput: completedEvent.type === "tool.completed" ? completedEvent.output : completedEvent, durationMs: Date.now() - toolStartedAt });
         checkpoint.pendingResolution = undefined;
         await saveCheckpoint();
         onEvent?.(completedEvent);
@@ -954,17 +979,19 @@ export class AgentLoopRunner {
         }
         const reconciledReceipt = await this.reconcileEffectReceiptAfterToolError(runId, idempotencyKey);
         if (reconciledReceipt) {
-          checkpoint.messages.push({ role: "tool", content: serializeToolOutput({ approval: resolved.decision, output: reconciledReceipt.output }), toolCallId: resolved.callId, toolName: resolved.toolName });
+          const modelFacingContent = serializeToolOutput({ approval: resolved.decision, output: reconciledReceipt.output });
+          checkpoint.messages.push({ role: "tool", content: modelFacingContent, toolCallId: resolved.callId, toolName: resolved.toolName });
           const completedEvent = emit({ type: "tool.completed", callId: resolved.callId, name: resolved.toolName, output: projectToolOutputForEvent(resolved.toolName, { ...((reconciledReceipt.output && typeof reconciledReceipt.output === "object") ? reconciledReceipt.output : { value: reconciledReceipt.output }), durationMs: Date.now() - toolStartedAt }) }, false);
-          recordToolResolution(this.trace, { segmentId: resumeSegmentId, iteration: originIteration ?? undefined, callId: resolved.callId, toolName: resolved.toolName, executionLocation: "server", executionSource: "effect_receipt_recovery_after_error", rawOutput: reconciledReceipt.output, modelFacingContent: serializeToolOutput({ approval: resolved.decision, output: reconciledReceipt.output }), eventFacingOutput: projectToolOutputForEvent(resolved.toolName, reconciledReceipt.output), durationMs: Date.now() - toolStartedAt });
+          recordToolResolution(this.trace, { segmentId: resumeSegmentId, iteration: originIteration ?? undefined, callId: resolved.callId, toolName: resolved.toolName, executionLocation: "server", executionSource: "effect_receipt_recovery_after_error", rawOutput: reconciledReceipt.output, modelFacingContent, eventFacingOutput: completedEvent.type === "tool.completed" ? completedEvent.output : completedEvent, durationMs: Date.now() - toolStartedAt });
           checkpoint.pendingResolution = undefined;
           await saveCheckpoint();
           onEvent?.(completedEvent);
         } else {
           const message = error instanceof Error ? error.message : "Tool execution failed";
-          checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: resolved.decision, error: message }), toolCallId: resolved.callId, toolName: resolved.toolName });
+          const modelFacingContent = JSON.stringify({ approval: resolved.decision, error: message });
+          checkpoint.messages.push({ role: "tool", content: modelFacingContent, toolCallId: resolved.callId, toolName: resolved.toolName });
           const failedEvent = emit({ type: "tool.failed", callId: resolved.callId, name: resolved.toolName, error: message, durationMs: Date.now() - toolStartedAt }, false);
-          recordToolResolution(this.trace, { segmentId: resumeSegmentId, iteration: originIteration ?? undefined, callId: resolved.callId, toolName: resolved.toolName, executionLocation: "server", executionSource: "error", modelFacingContent: { approval: resolved.decision, error: message }, error: message, durationMs: Date.now() - toolStartedAt });
+          recordToolResolution(this.trace, { segmentId: resumeSegmentId, iteration: originIteration ?? undefined, callId: resolved.callId, toolName: resolved.toolName, executionLocation: "server", executionSource: "error", modelFacingContent, eventFacingOutput: failedEvent, error: message, durationMs: Date.now() - toolStartedAt });
           checkpoint.pendingResolution = undefined;
           await saveCheckpoint();
           onEvent?.(failedEvent);
@@ -974,7 +1001,8 @@ export class AgentLoopRunner {
     } else {
       checkpoint.messages.push({ role: "tool", content: JSON.stringify({ approval: "rejected", reason: "The user rejected this action." }), toolCallId: resolved.callId, toolName: resolved.toolName });
       const rejectedEvent = emit({ type: "tool.failed", callId: resolved.callId, name: resolved.toolName, error: "User rejected the tool call." }, false);
-      recordToolResolution(this.trace, { segmentId: resumeSegmentId, iteration: originIteration ?? undefined, callId: resolved.callId, toolName: resolved.toolName, executionLocation: "server", executionSource: "rejected", modelFacingContent: JSON.stringify({ approval: "rejected", reason: "The user rejected this action." }) });
+      const modelFacingContent = JSON.stringify({ approval: "rejected", reason: "The user rejected this action." });
+      recordToolResolution(this.trace, { segmentId: resumeSegmentId, iteration: originIteration ?? undefined, callId: resolved.callId, toolName: resolved.toolName, executionLocation: "server", executionSource: "rejected", modelFacingContent, eventFacingOutput: rejectedEvent });
       checkpoint.pendingResolution = undefined;
       await saveCheckpoint();
       onEvent?.(rejectedEvent);
@@ -1017,7 +1045,8 @@ export class AgentLoopRunner {
     const originIteration = this.trace?.findCallOriginIteration ? await this.trace.findCallOriginIteration(callId) : null;
     checkpoint.pendingInteraction = undefined;
     checkpoint.status = "running";
-    checkpoint.messages.push({ role: "tool", content: serializeToolOutput(actual.result), toolCallId: actual.callId, toolName: actual.toolName });
+    const modelFacingContent = serializeToolOutput(actual.result);
+    checkpoint.messages.push({ role: "tool", content: modelFacingContent, toolCallId: actual.callId, toolName: actual.toolName });
     const events: AgentEvent[] = [];
     const resolvedEvent = actual.toolName === "capture_document_view"
       ? { ...createAgentEvent(runId, { type: "client_tool.resolved", interactionId: actual.interactionId, callId: actual.callId, name: "capture_document_view", ...(actual.result as AgentDocumentCaptureResult) }), eventId: clientToolResolvedEventId(actual.interactionId, actual.callId) }
@@ -1025,7 +1054,7 @@ export class AgentLoopRunner {
         ? { ...createAgentEvent(runId, { type: "client_tool.resolved", interactionId: actual.interactionId, callId: actual.callId, name: "scroll_document_view", ...(actual.result as AgentDocumentScrollResult) }), eventId: clientToolResolvedEventId(actual.interactionId, actual.callId) }
         : (() => { throw new Error("CLIENT_TOOL_INTERACTION_MISMATCH"); })();
     events.push(resolvedEvent);
-    recordToolResolution(this.trace, { segmentId: resumeSegmentId, iteration: originIteration ?? undefined, callId: actual.callId, toolName: actual.toolName, executionLocation: "browser", executionSource: "client_tool_result", rawOutput: actual.result, modelFacingContent: serializeToolOutput(actual.result), eventFacingOutput: resolvedEvent, });
+    recordToolResolution(this.trace, { segmentId: resumeSegmentId, iteration: originIteration ?? undefined, callId: actual.callId, toolName: actual.toolName, executionLocation: "browser", executionSource: "client_tool_result", rawOutput: actual.result, modelFacingContent, eventFacingEvent: resolvedEvent });
     this.observe(runId, resolvedEvent, checkpoint.permissionMode);
     checkpoint.pendingResolution = undefined;
     await this.store.save(runId, checkpoint);

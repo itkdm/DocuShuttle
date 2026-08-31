@@ -86,7 +86,16 @@ export class FileAgentExecutionTrace implements AgentExecutionTracePort {
     const snapshot = snapshotAgentTraceValue(value) as Record<string, unknown>;
     this.enqueue(async () => {
       await mkdir(this.iterationDir, { recursive: true });
-      await this.atomicJson(join(this.iterationDir, `${String(iteration).padStart(3, "0")}.json`), { schemaVersion: 1, ...snapshot });
+      const path = join(this.iterationDir, `${String(iteration).padStart(3, "0")}.json`);
+      let existing: Record<string, unknown> = {};
+      try { existing = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>; } catch { /* first materialization */ }
+      const existingResolutions = Array.isArray(existing.toolResolutions) ? existing.toolResolutions as Array<Record<string, unknown>> : [];
+      const incomingResolutions = Array.isArray(snapshot.toolResolutions) ? snapshot.toolResolutions as Array<Record<string, unknown>> : [];
+      const resolutions = [...existingResolutions];
+      for (const resolution of incomingResolutions) {
+        if (!resolutions.some((item) => item.callId === resolution.callId && item.executionSource === resolution.executionSource)) resolutions.push(resolution);
+      }
+      await this.atomicJson(path, { schemaVersion: 1, ...existing, ...snapshot, toolResolutions: resolutions });
     });
   }
 
@@ -96,11 +105,11 @@ export class FileAgentExecutionTrace implements AgentExecutionTracePort {
       await mkdir(this.iterationDir, { recursive: true });
       const path = join(this.iterationDir, `${String(iteration).padStart(3, "0")}.json`);
       let existing: Record<string, unknown> = {};
-      try { existing = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>; } catch { return; }
+      try { existing = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>; } catch { /* partial materialization */ }
       const resolutions = Array.isArray(existing.toolResolutions) ? existing.toolResolutions as Array<Record<string, unknown>> : [];
       const duplicate = resolutions.some((item) => item.callId === snapshot.callId && item.executionSource === snapshot.executionSource);
       if (!duplicate) resolutions.push(snapshot);
-      await this.atomicJson(path, { ...existing, toolResolutions: resolutions });
+      await this.atomicJson(path, { schemaVersion: 1, ...existing, toolResolutions: resolutions });
     });
   }
 

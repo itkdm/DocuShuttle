@@ -60,6 +60,33 @@ describe("Agent Execution Trace V1", () => {
     expect(run.finishedAt).toBe("finished");
   });
 
+  it("materializes a resolution appended before the iteration snapshot", async () => {
+    const root = await mkdtemp(join(tmpdir(), "paperduck-agent-trace-resolution-"));
+    const trace = new FileAgentExecutionTrace({ rootDir: root, runId: "run-resolution" });
+    trace.appendIterationToolResolution(1, { callId: "call-1", executionSource: "actual_execute", modelFacingContent: "result" });
+    await trace.flush();
+    trace.writeIteration(1, { iteration: 1, toolResolutions: [], model: { calls: [{ id: "call-1" }] } });
+    await trace.flush();
+    const iteration = JSON.parse(await readFile(join(root, "run-resolution", "iterations", "001.json"), "utf8")) as { toolResolutions: Array<Record<string, unknown>> };
+    expect(iteration.toolResolutions).toHaveLength(1);
+    expect(iteration.toolResolutions[0]).toMatchObject({ callId: "call-1", executionSource: "actual_execute" });
+  });
+
+  it("merges and deduplicates resolutions across materialization order", async () => {
+    const root = await mkdtemp(join(tmpdir(), "paperduck-agent-trace-resolution-merge-"));
+    const trace = new FileAgentExecutionTrace({ rootDir: root, runId: "run-resolution-merge" });
+    trace.writeIteration(2, { iteration: 2, toolResolutions: [{ callId: "call-1", executionSource: "actual_execute", value: "first" }] });
+    await trace.flush();
+    trace.appendIterationToolResolution(2, { callId: "call-1", executionSource: "actual_execute", value: "duplicate" });
+    trace.appendIterationToolResolution(2, { callId: "call-2", executionSource: "effect_receipt_recovery_after_error", value: "second" });
+    await trace.flush();
+    trace.writeIteration(2, { iteration: 2, toolResolutions: [] });
+    await trace.flush();
+    const iteration = JSON.parse(await readFile(join(root, "run-resolution-merge", "iterations", "002.json"), "utf8")) as { toolResolutions: Array<Record<string, unknown>> };
+    expect(iteration.toolResolutions).toHaveLength(2);
+    expect(iteration.toolResolutions.map((item) => item.callId)).toEqual(["call-1", "call-2"]);
+  });
+
   it("fails open when a trace write rejects", async () => {
     const warn = vi.fn();
     const trace = new FileAgentExecutionTrace({ rootDir: "Z:\\unavailable-paperduck-trace", runId: "run-1", loggerWarn: warn });

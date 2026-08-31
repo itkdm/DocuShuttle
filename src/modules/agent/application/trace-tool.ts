@@ -17,6 +17,7 @@ export const recordToolResolution = (trace: AgentExecutionTracePort | undefined,
   rawOutput?: unknown;
   modelFacingContent?: unknown;
   eventFacingOutput?: unknown;
+  eventFacingEvent?: unknown;
   durationMs?: number;
   error?: unknown;
 }) => {
@@ -31,6 +32,7 @@ export const recordToolResolution = (trace: AgentExecutionTracePort | undefined,
     rawOutput: input.rawOutput,
     modelFacingContent: input.modelFacingContent,
     eventFacingOutput: input.eventFacingOutput,
+    eventFacingEvent: input.eventFacingEvent,
     durationMs: input.durationMs,
     error: input.error,
   };

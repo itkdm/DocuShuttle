@@ -263,9 +263,18 @@ export class AgentLoopRunner {
 
   private traceSnapshot(value: unknown) { return this.trace?.snapshot?.(value) ?? value; }
 
-  private async closeTraceSegment(segmentId: string | undefined) {
+  private traceRunCheckpoint(checkpoint: AgentLoopCheckpoint) {
+    this.trace?.updateRun({ currentStatus: checkpoint.status, lastCheckpointAt: new Date().toISOString(), conversationId: checkpoint.conversationId, permissionMode: checkpoint.permissionMode });
+  }
+
+  private traceRunFinished(checkpoint: AgentLoopCheckpoint) {
+    if (checkpoint.status !== "completed" && checkpoint.status !== "failed" && checkpoint.status !== "cancelled") return;
+    this.trace?.finishRun({ currentStatus: checkpoint.status, finalStatus: checkpoint.status, finishedAt: new Date().toISOString(), conversationId: checkpoint.conversationId, permissionMode: checkpoint.permissionMode });
+  }
+
+  private async closeTraceSegment(segmentId: string | undefined, error?: unknown) {
     if (!segmentId || !this.trace) return;
-    this.trace.endSegment(segmentId, { finishedAt: new Date().toISOString() });
+    this.trace.endSegment(segmentId, error === undefined ? { finishedAt: new Date().toISOString() } : { outcome: "failed", error, finishedAt: new Date().toISOString() });
     try { await this.trace.flush(); } catch { /* Trace is fail-open. */ }
   }
 
@@ -354,10 +363,14 @@ export class AgentLoopRunner {
   async recover(runId: string, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void): Promise<AgentLoopResult> {
     const recoverSegmentId = this.trace?.beginSegment({ kind: "recover" });
     this.trace?.record({ type: "run.recovery.started", segmentId: recoverSegmentId, payload: { startedAt: new Date().toISOString() } });
+    let recoverSegmentClosed = false;
     try {
     const current = await this.store.load(runId);
     if (!current) throw new Error("RUN_NOT_FOUND");
-    if (current.status !== "running") return { checkpoint: current, events: [] };
+    if (current.status !== "running") {
+      this.traceRunFinished(current);
+      return { checkpoint: current, events: [] };
+    }
     if (this.store.claimRecovery) {
       const claimed = await this.store.claimRecovery(runId);
       if (!claimed) {
@@ -377,17 +390,22 @@ export class AgentLoopRunner {
     }
     if (latest) await this.recoverUnfinishedTool(runId, latest, signal, onEvent);
     return this.runWithPermission(runId, "", current.permissionMode ?? "default", signal, onEvent);
+    } catch (error) {
+      recoverSegmentClosed = true;
+      await this.closeTraceSegment(recoverSegmentId, error);
+      throw error;
     } finally {
-      await this.closeTraceSegment(recoverSegmentId);
+      if (!recoverSegmentClosed) await this.closeTraceSegment(recoverSegmentId);
     }
   }
 
   async runWithPermission(runId: string, userText: string, permissionMode: AgentPermissionMode, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void, clientMessageId?: string, interactionId?: string, userAttachments: readonly AgentImageAttachment[] = []): Promise<AgentLoopResult> {
     const segmentKind: AgentTraceSegmentKind = interactionId ? "user_input_resume" : "loop";
     const segmentId = this.traceSegment(segmentKind);
+    let segmentClosed = false;
     try {
     const current = await this.store.load(runId);
-    this.trace?.updateRun({ runId, conversationId: current?.conversationId, permissionMode, maxIterations: this.maxIterations, maxToolCalls: this.maxToolCalls, modelIdleTimeoutMs: this.modelIdleTimeoutMs, modelMaxDurationMs: this.modelMaxDurationMs, contextCompactionPolicy: this.contextCompactionPolicy });
+    this.trace?.updateRun({ currentStatus: current?.status ?? "running", conversationId: current?.conversationId, permissionMode, maxIterations: this.maxIterations, maxToolCalls: this.maxToolCalls, modelIdleTimeoutMs: this.modelIdleTimeoutMs, modelMaxDurationMs: this.modelMaxDurationMs, contextCompactionPolicy: this.contextCompactionPolicy });
     const isFreshRun = !current;
     let checkpoint: AgentLoopCheckpoint = current ?? {
       messages: [],
@@ -521,7 +539,8 @@ export class AgentLoopRunner {
     const saveCheckpoint = async () => {
       await this.store.save(runId, checkpoint);
       this.trace?.record({ type: "checkpoint.saved", segmentId, iteration: checkpoint.iterations, payload: { status: checkpoint.status, pendingInteraction: checkpoint.pendingInteraction, conversationId: checkpoint.conversationId } });
-      this.trace?.updateRun({ finishedAt: new Date().toISOString(), finalStatus: checkpoint.status, conversationId: checkpoint.conversationId, permissionMode: checkpoint.permissionMode });
+      this.traceRunCheckpoint(checkpoint);
+      this.traceRunFinished(checkpoint);
       void flushDurableEvents();
     };
     const persistDurableEvent = (event: AgentEventPayload) => {
@@ -623,6 +642,7 @@ export class AgentLoopRunner {
         const failureMessage = emit({ type: "assistant.message", text: checkpoint.finalText }, false) as AssistantMessageEvent;
         const failureEvent = emit({ type: "turn.failed", error: checkpoint.finalText }, false);
         await this.store.saveWithAssistantMessage(runId, checkpoint, { messageKey: `assistant:${failureMessage.eventId}`, text: failureMessage.text });
+        this.traceRunFinished(checkpoint);
         await flushDurableEvents();
         onEvent?.(failureMessage); onEvent?.(failureEvent);
         this.trace?.writeIteration(checkpoint.iterations, { iteration: checkpoint.iterations, segmentId, startedAt: new Date(iterationStartedAt).toISOString(), finishedAt: new Date().toISOString(), checkpointBeforeCompaction: beforeCompactionSnapshot, contextTransformation: { policy: this.contextCompactionPolicy, compacted: context.compacted, before: beforeCompactionSnapshot, after: modelInputSnapshot }, providerRequest, model: { decision: "failed", error: safeMessage }, checkpointAfterIteration: checkpoint });
@@ -643,9 +663,10 @@ export class AgentLoopRunner {
           checkpoint.finalText = decision.text;
           const completedEvent = emit({ type: "turn.completed", text: decision.text }, false);
           await this.store.saveWithAssistantMessage(runId, checkpoint, { messageKey: `assistant:${messageEvent.eventId}`, text: messageEvent.text });
+          this.traceRunFinished(checkpoint);
           await flushDurableEvents();
           onEvent?.(messageEvent); onEvent?.(completedEvent);
-          this.trace?.writeIteration(checkpoint.iterations, { iteration: checkpoint.iterations, segmentId, startedAt: new Date(iterationStartedAt).toISOString(), finishedAt: new Date().toISOString(), checkpointBeforeCompaction: beforeCompactionSnapshot, contextTransformation: { policy: this.contextCompactionPolicy, compacted: context.compacted, before: beforeCompactionSnapshot, after: modelInputSnapshot }, providerRequest, model: decision, tools: traceToolCatalog(this.tools), checkpointAfterIteration: checkpoint });
+          this.trace?.writeIteration(checkpoint.iterations, { iteration: checkpoint.iterations, segmentId, startedAt: new Date(iterationStartedAt).toISOString(), finishedAt: new Date().toISOString(), checkpointBeforeCompaction: beforeCompactionSnapshot, contextTransformation: { policy: this.contextCompactionPolicy, compacted: context.compacted, before: beforeCompactionSnapshot, after: modelInputSnapshot }, providerRequest, model: decision, toolCatalog: traceToolCatalog(this.tools), toolResolutions: [], checkpointAfterIteration: checkpoint });
           return { checkpoint, events };
         }
         await persistAssistantMessage(messageEvent);
@@ -658,7 +679,7 @@ export class AgentLoopRunner {
         checkpoint.messages.push({ role: "assistant", content: decision.text, ...(decision.reasoning ? { reasoning: decision.reasoning } : {}) });
         const messageEvent = emit({ type: "assistant.message", text: decision.text }, false) as AssistantMessageEvent;
         await persistAssistantMessage(messageEvent);
-        this.trace?.writeIteration(checkpoint.iterations, { iteration: checkpoint.iterations, segmentId, startedAt: new Date(iterationStartedAt).toISOString(), finishedAt: new Date().toISOString(), checkpointBeforeCompaction: beforeCompactionSnapshot, contextTransformation: { policy: this.contextCompactionPolicy, compacted: context.compacted, before: beforeCompactionSnapshot, after: modelInputSnapshot }, providerRequest, model: decision, tools: traceToolCatalog(this.tools), checkpointAfterIteration: checkpoint });
+        this.trace?.writeIteration(checkpoint.iterations, { iteration: checkpoint.iterations, segmentId, startedAt: new Date(iterationStartedAt).toISOString(), finishedAt: new Date().toISOString(), checkpointBeforeCompaction: beforeCompactionSnapshot, contextTransformation: { policy: this.contextCompactionPolicy, compacted: context.compacted, before: beforeCompactionSnapshot, after: modelInputSnapshot }, providerRequest, model: decision, toolCatalog: traceToolCatalog(this.tools), toolResolutions: [], checkpointAfterIteration: checkpoint });
         return { checkpoint, events };
       }
       if (publicCommentary) persistDurableEvent({ type: "model.commentary", text: publicCommentary });
@@ -670,6 +691,7 @@ export class AgentLoopRunner {
           const failureMessage = emit({ type: "assistant.message", text: checkpoint.finalText }, false) as AssistantMessageEvent;
           const failureEvent = emit({ type: "turn.failed", error: checkpoint.finalText }, false);
           await this.store.saveWithAssistantMessage(runId, checkpoint, { messageKey: `assistant:${failureMessage.eventId}`, text: failureMessage.text });
+          this.traceRunFinished(checkpoint);
           await flushDurableEvents();
           onEvent?.(failureMessage); onEvent?.(failureEvent);
           return { checkpoint, events };
@@ -710,7 +732,7 @@ export class AgentLoopRunner {
           const approvalEvent = emit({ type: "approval.required", interactionId, callId: call.id, name: call.name, input }, false);
           this.trace?.record({ type: "tool.approval.required", segmentId, iteration: checkpoint.iterations, callId: call.id, payload: { interactionId, toolName: call.name, modelProposedInput: call.input, validatedInput: input, executionSource: "approval_pending" } });
           await saveCheckpoint();
-          this.trace?.writeIteration(checkpoint.iterations, { iteration: checkpoint.iterations, segmentId, startedAt: new Date(iterationStartedAt).toISOString(), finishedAt: new Date().toISOString(), checkpointBeforeCompaction: beforeCompactionSnapshot, contextTransformation: { policy: this.contextCompactionPolicy, compacted: context.compacted, before: beforeCompactionSnapshot, after: modelInputSnapshot }, providerRequest, model: decision, tools: traceToolCatalog(this.tools), checkpointAfterIteration: checkpoint });
+          this.trace?.writeIteration(checkpoint.iterations, { iteration: checkpoint.iterations, segmentId, startedAt: new Date(iterationStartedAt).toISOString(), finishedAt: new Date().toISOString(), checkpointBeforeCompaction: beforeCompactionSnapshot, contextTransformation: { policy: this.contextCompactionPolicy, compacted: context.compacted, before: beforeCompactionSnapshot, after: modelInputSnapshot }, providerRequest, model: decision, toolCatalog: traceToolCatalog(this.tools), toolResolutions: [], checkpointAfterIteration: checkpoint });
           onEvent?.(approvalEvent);
           return { checkpoint, events };
         }
@@ -744,7 +766,7 @@ export class AgentLoopRunner {
               : (() => { throw new Error("CLIENT_TOOL_INTERACTION_MISMATCH"); })(), false);
           this.trace?.record({ type: "client_tool.required", segmentId, iteration: checkpoint.iterations, callId: call.id, payload: { toolName: call.name, executionLocation: "browser", executionSource: "client_tool_result", originIteration: checkpoint.iterations, association: "current_iteration" } });
           await saveCheckpoint();
-          this.trace?.writeIteration(checkpoint.iterations, { iteration: checkpoint.iterations, segmentId, startedAt: new Date(iterationStartedAt).toISOString(), finishedAt: new Date().toISOString(), checkpointBeforeCompaction: beforeCompactionSnapshot, contextTransformation: { policy: this.contextCompactionPolicy, compacted: context.compacted, before: beforeCompactionSnapshot, after: modelInputSnapshot }, providerRequest, model: decision, tools: traceToolCatalog(this.tools), checkpointAfterIteration: checkpoint });
+          this.trace?.writeIteration(checkpoint.iterations, { iteration: checkpoint.iterations, segmentId, startedAt: new Date(iterationStartedAt).toISOString(), finishedAt: new Date().toISOString(), checkpointBeforeCompaction: beforeCompactionSnapshot, contextTransformation: { policy: this.contextCompactionPolicy, compacted: context.compacted, before: beforeCompactionSnapshot, after: modelInputSnapshot }, providerRequest, model: decision, toolCatalog: traceToolCatalog(this.tools), toolResolutions: [], checkpointAfterIteration: checkpoint });
           onEvent?.(requiredEvent);
           return { checkpoint, events };
         }
@@ -805,18 +827,26 @@ export class AgentLoopRunner {
       // Supabase. Empty tool batches still need a save so the model boundary
       // and all structural activity is flushed before the next model boundary.
       if (decision.calls.length === 0) await saveCheckpoint();
-      this.trace?.writeIteration(checkpoint.iterations, { iteration: checkpoint.iterations, segmentId, startedAt: new Date(iterationStartedAt).toISOString(), finishedAt: new Date().toISOString(), checkpointBeforeCompaction: beforeCompactionSnapshot, contextTransformation: { policy: this.contextCompactionPolicy, compacted: context.compacted, before: beforeCompactionSnapshot, after: modelInputSnapshot }, providerRequest, model: decision, tools: traceToolCatalog(this.tools), checkpointAfterIteration: checkpoint });
+      this.trace?.writeIteration(checkpoint.iterations, { iteration: checkpoint.iterations, segmentId, startedAt: new Date(iterationStartedAt).toISOString(), finishedAt: new Date().toISOString(), checkpointBeforeCompaction: beforeCompactionSnapshot, contextTransformation: { policy: this.contextCompactionPolicy, compacted: context.compacted, before: beforeCompactionSnapshot, after: modelInputSnapshot }, providerRequest, model: decision, toolCatalog: traceToolCatalog(this.tools), toolResolutions: [], checkpointAfterIteration: checkpoint });
     }
     checkpoint.status = "failed";
     checkpoint.finalText = "本轮操作未能在安全步数内完成。已保留已完成的读取结果，未提交未确认的写入；请缩小范围后重试。";
     const terminalMessage = emit({ type: "assistant.message", text: checkpoint.finalText }, false) as AssistantMessageEvent;
     const terminalFailure = emit({ type: "turn.failed", error: checkpoint.finalText }, false);
     await this.store.saveWithAssistantMessage(runId, checkpoint, { messageKey: `assistant:${terminalMessage.eventId}`, text: terminalMessage.text });
+    this.traceRunFinished(checkpoint);
     await flushDurableEvents();
     onEvent?.(terminalMessage); onEvent?.(terminalFailure);
     return { checkpoint, events };
+    } catch (error) {
+      segmentClosed = true;
+      await this.closeTraceSegment(segmentId, error);
+      throw error;
     } finally {
-      await this.closeTraceSegment(segmentId);
+      if (!segmentClosed) {
+        segmentClosed = true;
+        await this.closeTraceSegment(segmentId);
+      }
     }
   }
 
@@ -824,6 +854,8 @@ export class AgentLoopRunner {
     const resumeSegmentId = this.trace?.beginSegment({ kind: "approval_resume" });
     const originIteration = this.trace?.findCallOriginIteration ? await this.trace.findCallOriginIteration(callId) : null;
     this.trace?.record({ type: "tool.approval.resolved", segmentId: resumeSegmentId, callId, payload: { interactionId, decision: approval, originIteration, association: originIteration === null ? "legacy_or_unknown" : "trace_index" } });
+    let resumeSegmentClosed = false;
+    try {
     const current = await this.store.load(runId);
     if (current?.status === "cancelled") throw new Error("RUN_CANCELLED");
     const pending = current?.pendingInteraction?.type === "approval" ? current.pendingInteraction : undefined;
@@ -948,13 +980,20 @@ export class AgentLoopRunner {
       onEvent?.(rejectedEvent);
     }
     await this.closeTraceSegment(resumeSegmentId);
+    resumeSegmentClosed = true;
     const continuation = await this.runWithPermission(runId, "", checkpoint.permissionMode ?? "default", signal, onEvent);
     return { checkpoint: continuation.checkpoint, events: [...events, ...continuation.events] };
+    } catch (error) {
+      if (!resumeSegmentClosed) await this.closeTraceSegment(resumeSegmentId, error);
+      throw error;
+    }
   }
 
   async resumeClientTool(runId: string, interactionId: string, callId: string, result: AgentClientToolResult, signal?: AbortSignal, onEvent?: (event: AgentEvent) => void): Promise<AgentLoopResult> {
     const resumeSegmentId = this.trace?.beginSegment({ kind: "client_tool_resume" });
     this.trace?.record({ type: "client_tool.resolved", segmentId: resumeSegmentId, callId, payload: { interactionId, result } });
+    let clientSegmentClosed = false;
+    try {
     const current = await this.store.load(runId);
     if (current?.status === "cancelled") throw new Error("RUN_CANCELLED");
     const pending = current?.pendingInteraction?.type === "client_tool" ? current.pendingInteraction : undefined;
@@ -997,7 +1036,12 @@ export class AgentLoopRunner {
     }
     onEvent?.(resolvedEvent);
     await this.closeTraceSegment(resumeSegmentId);
+    clientSegmentClosed = true;
     const continuation = await this.runWithPermission(runId, "", checkpoint.permissionMode ?? "default", signal, onEvent);
     return { checkpoint: continuation.checkpoint, events: [...events, ...continuation.events] };
+    } catch (error) {
+      if (!clientSegmentClosed) await this.closeTraceSegment(resumeSegmentId, error);
+      throw error;
+    }
   }
 }

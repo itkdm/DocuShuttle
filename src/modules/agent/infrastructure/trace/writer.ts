@@ -71,7 +71,8 @@ export class FileAgentExecutionTrace implements AgentExecutionTracePort {
   }
 
   endSegment(segmentId: string, input: Record<string, unknown> = {}) {
-    this.record({ type: "run.segment.completed", segmentId, payload: { ...input, finishedAt: new Date().toISOString() } });
+    const failed = input.outcome === "failed";
+    this.record({ type: failed ? "run.segment.failed" : "run.segment.completed", segmentId, payload: { ...input, finishedAt: new Date().toISOString() } });
   }
 
   record(input: { type: string; segmentId?: string; iteration?: number; callId?: string; payload?: unknown }) {
@@ -86,6 +87,20 @@ export class FileAgentExecutionTrace implements AgentExecutionTracePort {
     this.enqueue(async () => {
       await mkdir(this.iterationDir, { recursive: true });
       await this.atomicJson(join(this.iterationDir, `${String(iteration).padStart(3, "0")}.json`), { schemaVersion: 1, ...snapshot });
+    });
+  }
+
+  appendIterationToolResolution(iteration: number, resolution: Record<string, unknown>) {
+    const snapshot = snapshotAgentTraceValue(resolution) as Record<string, unknown>;
+    this.enqueue(async () => {
+      await mkdir(this.iterationDir, { recursive: true });
+      const path = join(this.iterationDir, `${String(iteration).padStart(3, "0")}.json`);
+      let existing: Record<string, unknown> = {};
+      try { existing = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>; } catch { return; }
+      const resolutions = Array.isArray(existing.toolResolutions) ? existing.toolResolutions as Array<Record<string, unknown>> : [];
+      const duplicate = resolutions.some((item) => item.callId === snapshot.callId && item.executionSource === snapshot.executionSource);
+      if (!duplicate) resolutions.push(snapshot);
+      await this.atomicJson(path, { ...existing, toolResolutions: resolutions });
     });
   }
 

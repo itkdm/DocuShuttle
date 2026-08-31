@@ -20,22 +20,30 @@ export const recordToolResolution = (trace: AgentExecutionTracePort | undefined,
   durationMs?: number;
   error?: unknown;
 }) => {
+  const resolution = {
+    callId: input.callId,
+    toolName: input.toolName,
+    executionLocation: input.executionLocation,
+    executionSource: input.executionSource,
+    originIteration: input.iteration ?? null,
+    modelProposedInput: input.modelProposedInput,
+    validatedInput: input.validatedInput,
+    rawOutput: input.rawOutput,
+    modelFacingContent: input.modelFacingContent,
+    eventFacingOutput: input.eventFacingOutput,
+    durationMs: input.durationMs,
+    error: input.error,
+  };
+  if (input.iteration !== undefined) trace?.appendIterationToolResolution?.(input.iteration, resolution);
   trace?.record({
     type: input.error === undefined ? "tool.completed" : "tool.failed",
     segmentId: input.segmentId,
     iteration: input.iteration,
     callId: input.callId,
     payload: {
-      toolName: input.toolName,
+      ...resolution,
       executionLocation: input.executionLocation,
       executionSource: input.executionSource,
-      modelProposedInput: input.modelProposedInput,
-      validatedInput: input.validatedInput,
-      rawOutput: input.rawOutput,
-      modelFacingOutput: input.modelFacingContent,
-      eventFacingOutput: input.eventFacingOutput,
-      durationMs: input.durationMs,
-      error: input.error,
     },
   });
 };

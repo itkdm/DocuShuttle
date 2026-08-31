@@ -10,6 +10,7 @@ export type AgentExecutionTracePort = {
   endSegment(segmentId: string, input?: Record<string, unknown>): void;
   record(input: { type: string; segmentId?: string; iteration?: number; callId?: string; payload?: unknown }): void;
   writeIteration(iteration: number, value: Record<string, unknown>): void;
+  appendIterationToolResolution?(iteration: number, resolution: Record<string, unknown>): void;
   findCallOriginIteration?(callId: string): Promise<number | null>;
   flush(): Promise<void>;
 };

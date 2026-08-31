@@ -62,6 +62,7 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
     signal?: AbortSignal;
     onTextDelta?: (text: string) => void;
     onStreamActivity?: () => void;
+    trace?: { record(type: string, payload: unknown): void };
   }): Promise<AgentModelDecision> {
     const inputCharacterCount = input.messages.reduce((total, message) => total + message.content.length, 0);
     const provider = this.options.provider ?? "openai-compatible";
@@ -77,6 +78,7 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
     const complete = (decision: AgentModelDecision, usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }, metadata: Record<string, unknown> = {}) => {
       const reasoning = decision.reasoning;
       logger.info("agent.model.completed", { ...timer.metadata, durationMs: timer.elapsed(), firstTokenMs, outcome: "success", ...(usage ?? {}), ...metadata, finishReason: metadata.finishReason, maxOutputTokens, toolCallNames: decision.kind === "tool_calls" ? decision.calls.map((call) => call.name) : [], reasoningPresent: Boolean(reasoning), reasoningCharacters: reasoning?.length ?? 0 });
+      input.trace?.record("model.completed", { decision, usage, durationMs: timer.elapsed(), firstTokenMs, ...metadata, reasoningPresent: Boolean(reasoning), reasoningCharacters: reasoning?.length ?? 0 });
       return decision;
     };
     // ask_user is a control-plane tool: the model may explicitly suspend the
@@ -91,31 +93,26 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
         inputSchema: z.object({ text: z.string().min(1).max(2000) }),
       },
     ];
+    const providerMessages = input.messages.map((message) => message.role === "tool"
+      ? ({ role: "tool", content: [{ type: "tool-result", toolCallId: message.toolCallId ?? "unknown", toolName: message.toolName ?? "unknown", output: { type: "json", value: parseToolResult(message.content) } }] })
+      : message.role === "assistant" && message.toolCalls
+        ? ({ role: "assistant", content: [...(message.reasoning ? [{ type: "reasoning", text: message.reasoning }] : []), ...(message.content ? [{ type: "text", text: message.content }] : []), ...message.toolCalls.map((call) => ({ type: "tool-call", toolCallId: call.id, toolName: call.name, input: call.input }))] })
+        : message.role === "assistant" && message.reasoning
+          ? ({ role: "assistant", content: [{ type: "reasoning", text: message.reasoning }, ...(message.content ? [{ type: "text", text: message.content }] : [])] })
+          : ({ role: message.role, content: message.content }));
+    const converter = (z as typeof z & { toJSONSchema?: (schema: z.ZodTypeAny) => unknown }).toJSONSchema;
+    const toolCatalog = providerTools.map((candidate) => {
+      let inputSchema: unknown = { type: "object" };
+      try { if (converter) inputSchema = converter(candidate.inputSchema); } catch { inputSchema = { omitted: true, reason: "schema_conversion_failed" }; }
+      return { name: candidate.name, description: candidate.description, requiresApproval: "requiresApproval" in candidate ? candidate.requiresApproval : false, clientExecution: "clientExecution" in candidate ? candidate.clientExecution : false, inputSchema };
+    });
+    const providerOptions = provider === "deepseek" ? { deepseek: { thinking: { type: reasoningMode } } } : undefined;
+    const traceProviderOptions = provider === "qwen" ? { qwen: { enable_thinking: false } } : providerOptions;
+    input.trace?.record("model.request", { provider, model: this.options.model, reasoningMode, maxOutputTokens, system: this.options.system ?? PAPERDUCK_AGENT_SYSTEM, messages: providerMessages, tools: toolCatalog, providerOptions: traceProviderOptions });
     const request = {
       model: this.provider,
       system: this.options.system ?? PAPERDUCK_AGENT_SYSTEM,
-      messages: input.messages.map((message) => message.role === "tool"
-        ? ({
-            role: "tool",
-            content: [{
-              type: "tool-result",
-              toolCallId: message.toolCallId ?? "unknown",
-              toolName: message.toolName ?? "unknown",
-              output: { type: "json", value: parseToolResult(message.content) },
-            }],
-          })
-        : message.role === "assistant" && message.toolCalls
-          ? ({
-              role: "assistant",
-              content: [
-                ...(message.reasoning ? [{ type: "reasoning", text: message.reasoning }] : []),
-                ...(message.content ? [{ type: "text", text: message.content }] : []),
-                ...message.toolCalls.map((call) => ({ type: "tool-call", toolCallId: call.id, toolName: call.name, input: call.input })),
-              ],
-            })
-        : message.role === "assistant" && message.reasoning
-          ? ({ role: "assistant", content: [{ type: "reasoning", text: message.reasoning }, ...(message.content ? [{ type: "text", text: message.content }] : [])] })
-        : ({ role: message.role, content: message.content })),
+      messages: providerMessages,
       tools: Object.fromEntries(providerTools.map((candidate) => [candidate.name, tool({
         description: candidate.description,
         inputSchema: candidate.inputSchema,
@@ -123,7 +120,7 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
       stopWhen: () => true,
       maxOutputTokens,
       abortSignal: input.signal,
-      ...(provider === "deepseek" ? { providerOptions: { deepseek: { thinking: { type: reasoningMode } } } } : {}),
+      ...(providerOptions ? { providerOptions } : {}),
     } as Parameters<typeof streamText>[0];
     if (onTextDelta) {
       let lastError: unknown;
@@ -144,6 +141,7 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
       // as AGENT_LOOP_FAILED.
       for (let attempt = 0; attempt < 2; attempt += 1) {
         let streamedText = "";
+        input.trace?.record("model.attempt.started", { attempt: attempt + 1, startedAt: new Date().toISOString() });
         try {
           const response = streamText(request);
           for await (const part of response.fullStream) {
@@ -183,6 +181,7 @@ export class OpenAICompatibleAgentModel implements AgentModelPort {
           return complete({ kind: "message", text: streamedText || "我暂时没有足够信息继续，请补充一下目标。", reasoning }, usage, { finishReason, ...metrics() });
         } catch (error) {
           lastError = error;
+          input.trace?.record("model.attempt.failed", { attempt: attempt + 1, failure: error, durationMs: timer.elapsed() });
           if (attempt === 0 && streamedText.length === 0 && !input.signal?.aborted) {
             logger.warn("agent.model.retry", { ...timer.metadata, attempt: attempt + 1, reason: "empty_stream_failure", error });
             await new Promise<void>((resolve) => setTimeout(resolve, 150));

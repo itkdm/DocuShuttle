@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { requireSupabaseIdentity } from "@/infrastructure/supabase/server";
 import { AgentLoopRunner, type AgentPermissionMode } from "@/modules/agent/application/loop";
+import { DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY } from "@/modules/agent/application/context-compaction";
 import { projectAgentLoopCheckpointForClient, projectAgentLoopResultForClient } from "@/modules/agent/application/public-runtime";
 import { isDurableAgentEvent } from "@/modules/agent/application/events";
 import { createDocumentTools } from "@/modules/agent/application/document-tools";
@@ -28,6 +29,7 @@ import { logger, withLogContext } from "@/infrastructure/observability";
 import { agentImageAttachmentSchema, type AgentImageAttachment } from "@/modules/agent/application/message-parts";
 import { SupabaseImageAssetStore } from "@/modules/uploads/supabase-image-asset-store";
 import { createClientDocumentTools } from "@/modules/agent/application/client-tools";
+import { createFileAgentExecutionTrace } from "@/modules/agent/infrastructure/trace/writer";
 
 const schema = z.object({
   message: z.string().max(8_000),
@@ -71,7 +73,9 @@ async function createRunner(runId: string) {
     if (version.error) throw new Error(version.error.message);
     return version.data?.sha256 as string | undefined;
   };
-  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client, bootstrap.context), 120_000, currentDocumentRevision);
+  const trace = createFileAgentExecutionTrace(runId);
+  trace?.beginRun({ runId, taskId, conversationId: bootstrap.context?.conversationId, startedAt: new Date().toISOString(), provider: process.env.PAPERDUCK_MODEL_PROVIDER ?? "deepseek", model: process.env.DEEPSEEK_MODEL ?? process.env.PAPERDUCK_MODEL ?? "", reasoningMode: process.env.PAPERDUCK_REASONING_MODE ?? "disabled", maxOutputTokens: Number(process.env.PAPERDUCK_MODEL_MAX_OUTPUT_TOKENS ?? 16384), maxIterations: 24, maxToolCalls: 48, modelIdleTimeoutMs: 30_000, modelMaxDurationMs: 120_000, contextCompactionPolicy: DEFAULT_AGENT_CONTEXT_COMPACTION_POLICY, tools: tools.map((tool) => ({ name: tool.name, description: tool.description, requiresApproval: tool.requiresApproval, clientExecution: tool.clientExecution })) });
+  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client, bootstrap.context), 120_000, currentDocumentRevision, trace);
 }
 
 async function validateUploadedImages(runId: string, attachments: readonly AgentImageAttachment[]) {

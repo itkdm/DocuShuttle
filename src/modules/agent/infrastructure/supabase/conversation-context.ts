@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import type { AgentConversationContext, AgentConversationContextPort } from "../../application/ports";
+import type { AgentConversationContext, AgentConversationContextPort, AgentDurableConversationMessage } from "../../application/ports";
 import type { AgentLoopMessage } from "../../application/loop";
 import { describeAgentImages, imagePartsFromMessageParts, textFromAgentMessageParts } from "../../application/message-parts";
 
@@ -52,5 +52,26 @@ export class SupabaseAgentConversationContext implements AgentConversationContex
     const selected = rows.slice(0, CONVERSATION_CONTEXT_MESSAGE_LIMIT);
     const messages = selected.map(toSemanticMessage).filter((message): message is AgentLoopMessage => Boolean(message)).reverse();
     return { conversationId, messages, loadedCount: messages.length, truncated, limit: CONVERSATION_CONTEXT_MESSAGE_LIMIT };
+  }
+
+  async loadFullHistory(runId: string): Promise<AgentDurableConversationMessage[]> {
+    let conversationId = this.bootstrap?.conversationId;
+    if (!conversationId) {
+      const run = await this.client.from("agent_runs").select("state").eq("id", runId).single();
+      conversationId = (run.data?.state as { conversationId?: string } | null)?.conversationId;
+    }
+    if (!conversationId) return [];
+    const rows: AgentDurableConversationMessage[] = [];
+    let offset = 0;
+    while (true) {
+      const query = this.client.from("messages").select("id, role, parts, run_id, created_at").eq("conversation_id", conversationId).in("role", ["user", "assistant"]).order("created_at", { ascending: true }).order("id", { ascending: true }).range(offset, offset + 499);
+      const result = await query;
+      if (result.error) throw new Error(`Unable to load durable conversation history: ${result.error.message}`);
+      const page = (result.data ?? []) as AgentDurableConversationMessage[];
+      rows.push(...page);
+      if (page.length < 500) break;
+      offset += page.length;
+    }
+    return rows.reverse();
   }
 }

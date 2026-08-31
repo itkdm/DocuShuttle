@@ -10,9 +10,19 @@ export type AgentConversationContext = {
   limit: number;
 };
 
+export type AgentDurableConversationMessage = {
+  id: string;
+  role: string;
+  parts: unknown;
+  run_id: string | null;
+  created_at: string;
+};
+
 /** Loads only canonical semantic messages for the beginning of a new run. */
 export interface AgentConversationContextPort {
   loadPriorMessages(runId: string): Promise<AgentConversationContext>;
+  /** Optional trace-only read; never used as model input. */
+  loadFullHistory?(runId: string): Promise<AgentDurableConversationMessage[]>;
 }
 
 export interface AgentRunStore {

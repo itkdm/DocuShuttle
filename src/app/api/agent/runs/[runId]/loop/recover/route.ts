@@ -22,6 +22,7 @@ import { SupabaseDocumentVersionAccess } from "@/modules/agent/infrastructure/su
 import { SupabaseSourceDocumentContext } from "@/modules/agent/infrastructure/supabase/source-context";
 import { SupabaseAgentConversationContext } from "@/modules/agent/infrastructure/supabase/conversation-context";
 import { OoxmlPreservationKernel } from "@/modules/documents";
+import { createFileAgentExecutionTrace } from "@/modules/agent/infrastructure/trace/writer";
 
 const frame = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 
@@ -47,7 +48,9 @@ async function createRunner(runId: string) {
     ...createImageReplacementTools(kernel, working, assets, storage, owner, taskId, inspectionSession),
     ...createDocumentVersionTools(new SupabaseDocumentVersionAccess(client, taskId)),
   ];
-  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client));
+  const trace = createFileAgentExecutionTrace(runId);
+  trace?.beginRun({ runId, taskId, startedAt: new Date().toISOString(), provider: process.env.PAPERDUCK_MODEL_PROVIDER ?? "deepseek", model: process.env.DEEPSEEK_MODEL ?? process.env.PAPERDUCK_MODEL ?? "", maxIterations: 24, maxToolCalls: 48 });
+  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client), undefined, undefined, trace);
 }
 
 async function execute(request: Request, runId: string, stream: boolean) {

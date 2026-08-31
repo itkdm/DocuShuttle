@@ -25,6 +25,7 @@ import { SupabaseSourceDocumentContext } from "@/modules/agent/infrastructure/su
 import { SupabaseAgentConversationContext } from "@/modules/agent/infrastructure/supabase/conversation-context";
 import { OoxmlPreservationKernel } from "@/modules/documents";
 import { createClientDocumentTools } from "@/modules/agent/application/client-tools";
+import { createFileAgentExecutionTrace } from "@/modules/agent/infrastructure/trace/writer";
 
 const captureClientToolResultSchema = z.object({
   assetId: z.uuid(),
@@ -84,7 +85,9 @@ async function createRunner(runId: string) {
     if (version.error) throw new Error(version.error.message);
     return version.data?.sha256 as string | undefined;
   };
-  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client), 120_000, currentDocumentRevision);
+  const trace = createFileAgentExecutionTrace(runId);
+  trace?.beginRun({ runId, taskId, startedAt: new Date().toISOString(), provider: process.env.PAPERDUCK_MODEL_PROVIDER ?? "deepseek", model: process.env.DEEPSEEK_MODEL ?? process.env.PAPERDUCK_MODEL ?? "", maxIterations: 24, maxToolCalls: 48 });
+  return new AgentLoopRunner(createOpenAICompatibleAgentModelFromEnvironment(), loopStore, tools, 24, 48, 30_000, undefined, 30_000, ({ event, metadata }) => logger.info(event, metadata), new SupabaseAgentConversationContext(client), 120_000, currentDocumentRevision, trace);
 }
 
 async function runResume(request: Request, runId: string, stream: boolean) {
